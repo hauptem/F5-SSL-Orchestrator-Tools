@@ -9,7 +9,7 @@ This script will remove all SSL Orchestrator configurations and restore the SSLO
 
 The base logic for this script was provided by Kevin Stewart at F5 via his "SSLO Nuclear Delete" October 2020.
 
-[sslo-nuke-delete](https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete)
+[https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete](https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete)
 
 The F5 SSL Orchestrator Clean Slate script provides additional operational safety nets, prompts for credentials instead of hard codes them, provides step by step feedback of script operation, and also performs RPM backup of the main sslo rpm package for reinstallation after the script exits.
 
