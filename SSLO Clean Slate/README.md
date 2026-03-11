@@ -5,18 +5,52 @@
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
 
-This script will remove all SSL Orchestrator configurations and restore the SSLO to a fresh "clean slate" configuration.
+Removes all SSL Orchestrator configurations and restores SSLO to a clean state.
 
-The base logic for this script was provided by Kevin Stewart at F5 via his "SSLO Nuclear Delete" October 2020.
+Based on Kevin Stewart's [sslo-nuke-delete](https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete) script (F5, October 2020).
 
-[https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete](https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete)
+## Requirements
 
-The F5 SSL Orchestrator Clean Slate script:
+- BIG-IP running TMOS 17.x or 21.x
+- SSL Orchestrator 12.0 or higher
 
-- Provides additional operational safety nets
-- Prompts for credentials instead of hard coding them
-- Provides step-by-step feedback of script operation
-- Performs RPM backup of the main SSLO RPM package for reinstallation after the script exits
+## What It Does
+
+1. Backs up the installed SSLO RPM to `/var/tmp/`
+2. Deletes iApp blocks and packages
+3. Removes SSLO application services (two passes)
+4. Unbinds and deletes SSLO iApp blocks (two passes)
+5. Deletes all SSLO tmsh objects
+6. Clears REST storage
+7. Verifies cleanup and reports results
+
+A log file is written to `/var/log/sslo-clean-<timestamp>.log`.
+
+## Usage
+
+```bash
+chmod +x sslo-clean-slate.sh
+./sslo-clean-slate.sh
+```
+
+The script will prompt for admin credentials and require you to type `CONFIRM` before making any changes.
+
+After the script completes, reinstall the SSLO RPM manually via the GUI:
+**iApps > Package Management LX > Import** using the backup from `/var/tmp/`.
+
+## Operational Enhancements
+
+- Prompts for credentials instead of hardcoding them
+- Requires explicit confirmation before executing
+- Pre-flight checks (root, tmsh, restcurl, jq)
+- Backs up the SSLO RPM before deleting anything
+- Step-by-step logging with full log file output
+- Post-run verification of cleanup
+- Credentials are never written to the log file
+
+## Warning
+
+**This script is destructive.** It will permanently delete all SSLO configuration on the device. Do not run on a system with active production SSLO traffic or on a system that you do not have backup configurations for.
 
 ## License
 
