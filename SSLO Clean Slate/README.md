@@ -5,7 +5,7 @@
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
 
-This script will remove all SSL Orchestrator configurations and restore the SSLO to a "clean slate"
+This script will remove all SSL Orchestrator configurations and restore the SSLO to a fresh "clean slate" configuration.
 
 The base logic for this script was provided by Kevin Stewart at F5 via his "SSLO Nuclear Delete" October 2020.
 
