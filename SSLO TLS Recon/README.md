@@ -13,8 +13,6 @@ TLS Recon attaches to an SSLO TCP intercept virtual server and logs destination 
 - Inline detection without impacting traffic flow
 - TLS ClientHello validation to minimize false positives
 - Configurable rate limiting to control log volume
-- Optional datagroup integration to exclude known ports
-- CMP compatible
 
 ## Requirements
 
@@ -48,7 +46,7 @@ set timeout 300
 Create a datagroup to exclude ports you no longer want logged:
 
 ```bash
-tmsh create ltm data-group internal datagroup-tls-recon type integer records add { 443 { } }
+tmsh create ltm data-group internal datagroup-tls-recon type integer records add { 8443 { } }
 ```
 
 ## Output
@@ -59,14 +57,8 @@ TLS-RECON: TLS Spotted on port 9443
 TLS-RECON: TLS Spotted on port 8080
 ```
 
-## Documentation
-
-See [TLS_Recon_v1.0_Documentation.md](TLS_Recon_v1.0_Documentation.md) for detailed deployment instructions and a complete technical walkthrough.
-
 ## License
 
 MIT
 
-## Author
 
-Eric Haupt
