@@ -6,8 +6,9 @@ Useful scripts and tools for F5's SSL Orchestrator product.
 
 | Tool | Description |
 |------|-------------|
-| [TLS Recon](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/SSLO%20TLS%20Recon) | Discover TLS traffic on non-standard ports during SSLO deployments |
 | [Clean Slate](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/SSLO%20Clean%20Slate) | Remove all SSLO configurations and restore to a clean state |
+| [TLS Recon](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/SSLO%20TLS%20Recon) | Discover TLS traffic on non-standard ports during SSLO deployments |
+
 
 ## License
 
