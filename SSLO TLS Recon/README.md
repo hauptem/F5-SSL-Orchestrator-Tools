@@ -17,7 +17,7 @@ TLS Recon attaches to an SSLO TCP intercept virtual server and logs destination 
 ## Requirements
 
 - F5 BIG-IP with SSLO deployed
-- TMOS 14.x or later
+- TMOS 17.1 or later
 - TCP interception topology
 
 ## Quick Start
