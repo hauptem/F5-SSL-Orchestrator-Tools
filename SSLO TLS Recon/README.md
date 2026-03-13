@@ -1,5 +1,10 @@
 # TLS Recon for SSL Orchestrator
 
+![License](https://img.shields.io/badge/license-MIT-green)
+![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
+![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
+![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
+
 A lightweight F5 BIG-IP iRule for discovering TLS traffic on non-standard ports during SSL Orchestrator deployments.
 
 ## Overview
