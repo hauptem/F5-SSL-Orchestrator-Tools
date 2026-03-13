@@ -18,12 +18,11 @@ TLS Recon attaches to an SSLO TCP intercept virtual server and logs destination 
 
 - F5 BIG-IP with SSLO deployed
 - TMOS 17.1 or later
-- TCP interception topology
 
 ## Quick Start
 
 1. Create the iRule on your BIG-IP
-2. Attach to your SSLO TCP intercept virtual server
+2  Deployment:   Attach to SSLO TCP intercept virtual server - Example: sslo_<topology>_tcp.app/sslo_<topology>_tcp-in-t-4
 3. Monitor `/var/log/ltm` for `TLS-RECON` entries
 4. Use discovered ports to refine SSLO interception rules
 
