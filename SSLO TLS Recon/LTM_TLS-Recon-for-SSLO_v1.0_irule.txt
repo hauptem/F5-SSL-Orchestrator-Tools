@@ -1,9 +1,7 @@
 # LTM_TLS-Recon-for-SSLO_v1.0_irule
 #
-# Revision: 1.0
-# Date: March 2026
-# Author: Eric Haupt
-# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
+# Revision:     1.0 - March 2026
+# Created by:   Eric Haupt
 #
 # Purpose:      Identifies TLS traffic that may need to be added to SSLO intercept rules.
 #               Validates TLS ClientHello structure to minimize false positives.
@@ -25,7 +23,7 @@
 #               Byte 5:    Handshake type (must be 0x01 = ClientHello)
 #
 # Logging:      local0.info
-#               Format: TLS-RECON: TLS Spotted on port <port>
+#               Format: TLS-RECON: TLS spotted on port: 6667 from client: 10.25.42.1
 #
 when CLIENT_DATA priority 1 {
     # Rate limit interval in seconds - modify this value as needed
@@ -50,7 +48,7 @@ when CLIENT_DATA priority 1 {
                 # Rate limit: only log once per port per configured interval
                 if { [table lookup -subtable "table_tls_recon" $destination_port] eq "" } {
                     table set -subtable "table_tls_recon" $destination_port 1 $timeout
-                    log local0.info "TLS-RECON: TLS Spotted on port $destination_port"
+                    log local0.info "TLS-RECON: TLS spotted on port: $destination_port from client: [IP::client_addr]"
                 }
             }
         }
