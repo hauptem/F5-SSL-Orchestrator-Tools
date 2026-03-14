@@ -59,12 +59,6 @@ TLS-RECON: TLS spotted on port: 55551 from client: 10.10.20.88
 
 ---
 
-## TLS Recon Tester
-
-A companion utility for validating TLS Recon by generating TCP and TLS handshakes against multiple ports. 
-
-**[View Interactive Demo](https://htmlpreview.github.io/?https://github.com/hauptem/F5-SSL-Orchestrator-Tools/blob/main/TLS-Recon/TLS-Recon-Demo.html)**
-
 ### Bash Version
 
 **Requirements:** bash 4.0+, netcat (nc), openssl
