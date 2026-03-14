@@ -15,12 +15,6 @@ SSL Orchestrator (SSLO) does not natively identify TLS traffic on arbitrary port
 
 TLS Recon attaches to an SSLO TCP intercept virtual server and logs destination ports where valid TLS ClientHello messages are detected. It provides actionable intelligence for building SSLO interception rules.
 
-## Features
-
-- Inline detection without impacting traffic flow
-- TLS ClientHello validation to minimize false positives
-- Configurable rate limiting to control log volume
-
 ## Requirements
 
 - F5 BIG-IP with SSLO deployed
@@ -67,17 +61,9 @@ TLS-RECON: TLS spotted on port: 55551 from client: 10.10.20.88
 
 ## TLS Recon Tester
 
-A companion utility for validating SSLO configurations by generating TCP and TLS handshakes against multiple ports. Use it to verify that your SSLO topology is correctly intercepting traffic on discovered ports.
+A companion utility for validating TLS Recon by generating TCP and TLS handshakes against multiple ports. 
 
 **[View Interactive Demo](https://htmlpreview.github.io/?https://github.com/hauptem/F5-SSL-Orchestrator-Tools/blob/main/TLS-Recon/TLS-Recon-Demo.html)**
-
-### Features
-
-- TCP connectivity testing with parallel execution
-- TLS handshake initiation with configurable SNI
-- Interactive or batch port input
-- Remembers previous target, SNI, and port list between test runs
-- Available for both Bash and PowerShell environments
 
 ### Bash Version
 
@@ -85,11 +71,6 @@ A companion utility for validating SSLO configurations by generating TCP and TLS
 ```bash
 chmod +x tls-recon-tester.sh
 ./tls-recon-tester.sh
-```
-
-**Note for Windows/Cygwin users:** If you encounter line ending errors, run:
-```bash
-dos2unix tls-recon-tester.sh
 ```
 
 ### PowerShell Version
@@ -111,8 +92,6 @@ powershell -ExecutionPolicy Bypass -File .\\tls-recon-tester.ps1
 3. Select test type: TCP only, TLS only, or Both
 4. Enter ports interactively or as a batch list
 5. Review results and optionally run another test
-
-The tester remembers your previous inputs, making it easy to repeat tests with different configurations.
 
 ---
 
