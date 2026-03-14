@@ -69,7 +69,7 @@ TLS-RECON: TLS spotted on port: 55551 from client: 10.10.20.88
 
 A companion utility for validating SSLO configurations by generating TCP and TLS handshakes against multiple ports. Use it to verify that your SSLO topology is correctly intercepting traffic on discovered ports.
 
-**[View Interactive Demo](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/blob/main/SSLO%20TLS%20Recon/TLS-Recon-Demo.html)**
+**[View Interactive Demo](https://htmlpreview.github.io/?https://github.com/hauptem/F5-SSL-Orchestrator-Tools/blob/main/TLS-Recon/TLS-Recon-Demo.html)**
 
 ### Features
 
