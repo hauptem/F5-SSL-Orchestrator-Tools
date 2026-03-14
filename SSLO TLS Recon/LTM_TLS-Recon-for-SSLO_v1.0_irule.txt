@@ -5,24 +5,24 @@
 # Author: Eric Haupt
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
-# Purpose: Identifies TLS traffic and logs ports that may need to be added to SSLO intercept rules.
-#          Validates TLS ClientHello structure to minimize false positives.
+# Purpose:      Identifies TLS traffic that may need to be added to SSLO intercept rules.
+#               Validates TLS ClientHello structure to minimize false positives.
 #
 # Deployment:   Attach to SSLO TCP intercept virtual server(s).
 #               Example: sslo_<topology>_tcp.app/sslo_<topology>_tcp-in-t-4
 #
 # Datagroup:    datagroup-tls-recon
 #               Type: integer
-#               Add ports to this datagroup as they are onboarded to SSLO to disable logging.
+#               Add ports to this datagroup to disable logging them.
 #
-# Rate Limit:   Logs each port once per interval defined by the timeout variable.
+# Rate Limit:   Logs each port once per interval defined by timeout variable.
 #               Uses session table "table_tls_recon" with configurable lifetime.
 #               Table entries auto-expire after the configured interval.
 #
-# TLS ClientHello Validation:
-#   Byte 0:     Record type (must be 0x16 = Handshake)
-#   Bytes 1-2:  Record version (must be 0x0300-0x0304 = SSL3/TLS)
-#   Byte 5:     Handshake type (must be 0x01 = ClientHello)
+# Validation:   TLS ClientHello Discovery
+#               Byte 0:    Record type (must be 0x16 = Handshake)
+#               Bytes 1-2: Record version (must be 0x0300-0x0304 = SSL3/TLS)
+#               Byte 5:    Handshake type (must be 0x01 = ClientHello)
 #
 # Logging:      local0.info
 #               Format: TLS-RECON: TLS Spotted on port <port>
