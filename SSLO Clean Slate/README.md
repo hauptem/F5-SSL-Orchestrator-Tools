@@ -4,6 +4,8 @@
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
+![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
 
 Removes all SSL Orchestrator configurations and restores SSLO to a clean state.
 
