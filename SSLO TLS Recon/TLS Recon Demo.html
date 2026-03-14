@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TLS Recon Tester - Terminal Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #1a1a2e;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .terminal-container {
+            width: 100%;
+            max-width: 900px;
+            background: #0d0d0d;
+            border-radius: 12px;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+
+        .terminal-header {
+            background: linear-gradient(180deg, #3d3d3d 0%, #2d2d2d 100%);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .terminal-btn {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+        }
+
+        .terminal-btn.close { background: #ff5f57; }
+        .terminal-btn.minimize { background: #ffbd2e; }
+        .terminal-btn.maximize { background: #28ca41; }
+
+        .terminal-title {
+            flex: 1;
+            text-align: center;
+            color: #999;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .terminal-body {
+            padding: 20px;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #e0e0e0;
+            height: 700px;
+            overflow-y: auto;
+        }
+
+        .terminal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .terminal-body::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+
+        .terminal-body::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 4px;
+        }
+
+        .cyan { color: #00d4d4; }
+        .green { color: #00ff00; }
+        .red { color: #ff4444; }
+        .yellow { color: #ffff00; }
+        .white { color: #ffffff; font-weight: bold; }
+        .dim { color: #888; }
+
+        .line {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .prompt {
+            color: #00ff00;
+        }
+
+        .input {
+            color: #ffffff;
+        }
+
+        .separator {
+            color: #00d4d4;
+        }
+
+        .section-header {
+            color: #00d4d4;
+            display: block;
+            margin: 10px 0;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 8px;
+            height: 16px;
+            background: #00ff00;
+            animation: blink 1s step-end infinite;
+            vertical-align: middle;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        .replay-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #00d4d4;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .replay-btn:hover {
+            background: #00ffff;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="terminal-container">
+        <div class="terminal-header">
+            <div class="terminal-btn close"></div>
+            <div class="terminal-btn minimize"></div>
+            <div class="terminal-btn maximize"></div>
+            <div class="terminal-title">tls-recon-tester.sh — bash — 120×40</div>
+        </div>
+        <div class="terminal-body" id="terminal"></div>
+    </div>
+
+    <button class="replay-btn" onclick="replay()">↻ Replay Demo</button>
+
+    <script>
+        const terminal = document.getElementById('terminal');
+        let currentLine = 0;
+        let timeouts = [];
+
+        const lines = [
+            // Banner
+            { text: '', delay: 100 },
+            { text: '<span class="cyan">============================================</span>', delay: 50 },
+            { text: '<span class="cyan">         TLS Recon Tester v1.0</span>', delay: 50 },
+            { text: '<span class="cyan">         F5 SSLO Validation Tool</span>', delay: 50 },
+            { text: '<span class="cyan">============================================</span>', delay: 50 },
+            { text: '', delay: 100 },
+            
+            // First run - Target prompt
+            { text: 'Enter target IP or hostname: <span class="input">172.16.200.62</span>', delay: 800 },
+            { text: 'Enter SNI hostname: <span class="input">test.lab.local</span>', delay: 600 },
+            { text: '', delay: 100 },
+            
+            // Test type menu
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '<span class="cyan">              TEST TYPE</span>', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 50 },
+            { text: '<span class="white">  [1] TCP  - TCP handshake only</span>', delay: 50 },
+            { text: '<span class="white">  [2] TLS  - TLS handshake only</span>', delay: 50 },
+            { text: '<span class="white">  [3] Both - TCP and TLS handshakes</span>', delay: 50 },
+            { text: '', delay: 100 },
+            { text: 'Select test type [1/2/3]: <span class="input">1</span>', delay: 500 },
+            { text: '', delay: 100 },
+            
+            // Port input menu
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '<span class="cyan">           PORT INPUT METHOD</span>', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 50 },
+            { text: '<span class="white">  [1] Interactive - enter ports one at a time</span>', delay: 50 },
+            { text: '<span class="white">  [2] Batch       - enter comma or space separated list</span>', delay: 50 },
+            { text: '', delay: 100 },
+            { text: 'Select method [1/2]: <span class="input">2</span>', delay: 500 },
+            { text: '', delay: 100 },
+            { text: '<span class="white">Enter ports (comma or space separated):</span>', delay: 100 },
+            { text: '&gt; <span class="input">1345 2443 3456 4667 5666 6767 7889 9101 10235 11988 12555 13971 14656 15787 16333 21001 25441 29111 30101 35488 45654 55551 65101</span>', delay: 800 },
+            { text: '<span class="green">[OK]</span> Validated 23 ports', delay: 200 },
+            { text: '', delay: 100 },
+            
+            // Configuration
+            { text: '<span class="white">[INFO]</span> Configuration:', delay: 100 },
+            { text: '<span class="white">  Target:    172.16.200.62</span>', delay: 50 },
+            { text: '<span class="white">  SNI:       test.lab.local</span>', delay: 50 },
+            { text: '<span class="white">  Test Type: tcp</span>', delay: 50 },
+            { text: '<span class="white">  Ports:     1345 2443 3456 4667 5666 6767 7889 9101 10235 11988 12555 13971 14656 15787 16333 21001 25441 29111 30101 35488 45654 55551 65101</span>', delay: 50 },
+            { text: '', delay: 100 },
+            { text: 'Proceed with tests? (y/n): <span class="input">y</span>', delay: 400 },
+            { text: '', delay: 200 },
+            
+            // TCP Test Results
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '<span class="cyan">              TCP HANDSHAKE TEST</span>', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 300 },
+            { text: '<span class="green">[OPEN]</span> TCP port 1345', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 2443', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 3456', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 4667', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 5666', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 6767', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 7889', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 9101', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 10235', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 11988', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 12555', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 13971', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 14656', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 15787', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 16333', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 21001', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 25441', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 29111', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 30101', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 35488', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 45654', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 55551', delay: 40 },
+            { text: '<span class="green">[OPEN]</span> TCP port 65101', delay: 40 },
+            { text: '', delay: 100 },
+            
+            // Summary
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '<span class="cyan">                 SUMMARY</span>', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 50 },
+            { text: '<span class="white">Target:</span>      <span class="green">172.16.200.62</span>', delay: 50 },
+            { text: '<span class="white">SNI:</span>         <span class="green">test.lab.local</span>', delay: 50 },
+            { text: '<span class="white">Ports:</span>       <span class="green">23</span> ports tested', delay: 50 },
+            { text: '<span class="white">Test Type:</span>   <span class="green">TCP only</span>', delay: 50 },
+            { text: '<span class="white">Timeout:</span>     <span class="green">2s</span>', delay: 50 },
+            { text: '<span class="white">Timestamp:</span>   <span class="green">2026-03-14 17:45:23 EDT</span>', delay: 50 },
+            { text: '', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 200 },
+            { text: 'Run another test? (y/n): <span class="input">y</span>', delay: 600 },
+            
+            // Second run - Banner again
+            { text: '', delay: 300 },
+            { text: '<span class="cyan">============================================</span>', delay: 50 },
+            { text: '<span class="cyan">         TLS Recon Tester v1.0</span>', delay: 50 },
+            { text: '<span class="cyan">         F5 SSLO Validation Tool</span>', delay: 50 },
+            { text: '<span class="cyan">============================================</span>', delay: 50 },
+            { text: '', delay: 100 },
+            
+            // Second run - with defaults
+            { text: 'Enter target IP or hostname [172.16.200.62]: <span class="input"></span>', delay: 400 },
+            { text: 'Enter SNI hostname [test.lab.local]: <span class="input"></span>', delay: 400 },
+            { text: '', delay: 100 },
+            
+            // Test type menu - TLS
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '<span class="cyan">              TEST TYPE</span>', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 50 },
+            { text: '<span class="white">  [1] TCP  - TCP handshake only</span>', delay: 50 },
+            { text: '<span class="white">  [2] TLS  - TLS handshake only</span>', delay: 50 },
+            { text: '<span class="white">  [3] Both - TCP and TLS handshakes</span>', delay: 50 },
+            { text: '', delay: 100 },
+            { text: 'Select test type [1/2/3]: <span class="input">2</span>', delay: 500 },
+            { text: '', delay: 100 },
+            
+            // Port input menu with reuse
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '<span class="cyan">           PORT INPUT METHOD</span>', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 50 },
+            { text: '<span class="white">  [1] Interactive - enter ports one at a time</span>', delay: 50 },
+            { text: '<span class="white">  [2] Batch       - enter comma or space separated list</span>', delay: 50 },
+            { text: '<span class="white">  [3] Reuse       - use previous port list (23 ports)</span>', delay: 50 },
+            { text: '', delay: 100 },
+            { text: 'Select method [1/2/3]: <span class="input">3</span>', delay: 500 },
+            { text: '<span class="green">[OK]</span> Using previous port list', delay: 200 },
+            { text: '', delay: 100 },
+            
+            // Configuration
+            { text: '<span class="white">[INFO]</span> Configuration:', delay: 100 },
+            { text: '<span class="white">  Target:    172.16.200.62</span>', delay: 50 },
+            { text: '<span class="white">  SNI:       test.lab.local</span>', delay: 50 },
+            { text: '<span class="white">  Test Type: tls</span>', delay: 50 },
+            { text: '<span class="white">  Ports:     1345 2443 3456 4667 5666 6767 7889 9101 10235 11988 12555 13971 14656 15787 16333 21001 25441 29111 30101 35488 45654 55551 65101</span>', delay: 50 },
+            { text: '', delay: 100 },
+            { text: 'Proceed with tests? (y/n): <span class="input">y</span>', delay: 400 },
+            { text: '', delay: 200 },
+            
+            // TLS Test Results
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '<span class="cyan">              TLS HANDSHAKE TEST</span>', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 300 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 1345', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 2443', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 3456', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 4667', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 5666', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 6767', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 7889', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 9101', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 10235', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 11988', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 12555', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 13971', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 14656', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 15787', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 16333', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 21001', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 25441', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 29111', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 30101', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 35488', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 45654', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 55551', delay: 40 },
+            { text: '<span class="green">[INIT]</span> TLS handshake initiated on port 65101', delay: 40 },
+            { text: '', delay: 100 },
+            
+            // Summary
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '<span class="cyan">                 SUMMARY</span>', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 50 },
+            { text: '<span class="white">Target:</span>      <span class="green">172.16.200.62</span>', delay: 50 },
+            { text: '<span class="white">SNI:</span>         <span class="green">test.lab.local</span>', delay: 50 },
+            { text: '<span class="white">Ports:</span>       <span class="green">23</span> ports tested', delay: 50 },
+            { text: '<span class="white">Test Type:</span>   <span class="green">TLS only</span>', delay: 50 },
+            { text: '<span class="white">Timeout:</span>     <span class="green">2s</span>', delay: 50 },
+            { text: '<span class="white">Timestamp:</span>   <span class="green">2026-03-14 17:45:47 EDT</span>', delay: 50 },
+            { text: '', delay: 50 },
+            { text: '<span class="cyan">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>', delay: 50 },
+            { text: '', delay: 200 },
+            { text: 'Run another test? (y/n): <span class="input">n</span>', delay: 600 },
+            { text: '<span class="white">[INFO]</span> Goodbye!', delay: 200 },
+            { text: '', delay: 100 },
+            { text: '<span class="white">TLS Recon is part of the SSLO Tools repository</span>', delay: 100 },
+            { text: '<span class="white">https://github.com/hauptem/F5-SSL-Orchestrator-Tools</span>', delay: 100 },
+            { text: '', delay: 100 },
+            { text: '<span class="dim">lab@Windows10-1 ~$</span> <span class="cursor"></span>', delay: 0 }
+        ];
+
+        function addLine(html) {
+            const line = document.createElement('div');
+            line.className = 'line';
+            line.innerHTML = html;
+            terminal.appendChild(line);
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        function runDemo() {
+            if (currentLine >= lines.length) return;
+
+            const lineData = lines[currentLine];
+            addLine(lineData.text);
+            currentLine++;
+
+            if (currentLine < lines.length) {
+                const timeout = setTimeout(runDemo, lineData.delay);
+                timeouts.push(timeout);
+            }
+        }
+
+        function replay() {
+            // Clear all pending timeouts
+            timeouts.forEach(t => clearTimeout(t));
+            timeouts = [];
+            
+            // Reset
+            terminal.innerHTML = '';
+            currentLine = 0;
+            
+            // Start demo
+            setTimeout(runDemo, 500);
+        }
+
+        // Start demo on load
+        window.addEventListener('load', () => {
+            setTimeout(runDemo, 800);
+        });
+    </script>
+</body>
+</html>
