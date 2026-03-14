@@ -7,7 +7,7 @@ Useful scripts and tools for F5's SSL Orchestrator product.
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
 ![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
-![SSLO Version](https://img.shields.io/badge/TMOS-13.x%2B-blue)
+![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
 
 ## Tools
 
