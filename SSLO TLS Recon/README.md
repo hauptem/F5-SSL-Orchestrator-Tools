@@ -30,10 +30,9 @@ TLS Recon attaches to an SSLO TCP intercept virtual server and logs destination 
 ## Quick Start
 
 1. Create the iRule on your BIG-IP
-2  Deployment:   Attach to SSLO TCP intercept virtual server - Example: sslo_<topology>_tcp.app/sslo_<topology>_tcp-in-t-4
+2. Deployment: Attach to SSLO TCP intercept virtual server - Example: sslo_<topology>_tcp.app/sslo_<topology>_tcp-in-t-4
 3. Monitor `/var/log/ltm` for `TLS-RECON` entries
 4. Use discovered ports to refine SSLO interception rules
-
 ```bash
 tail -f /var/log/ltm | grep TLS-RECON
 ```
@@ -43,7 +42,6 @@ tail -f /var/log/ltm | grep TLS-RECON
 **Rate Limiting**
 
 Adjust the `timeout` variable to control how often each port is logged (in seconds):
-
 ```tcl
 set timeout 300
 ```
@@ -51,18 +49,69 @@ set timeout 300
 **Port Exclusions**
 
 Create a datagroup to exclude ports you no longer want logged:
-
 ```bash
 tmsh create ltm data-group internal datagroup-tls-recon type integer records add { 8443 { } }
 ```
 
 ## Output
-
 ```
 TLS-RECON: TLS Spotted on port 8443
 TLS-RECON: TLS Spotted on port 9443
 TLS-RECON: TLS Spotted on port 8080
 ```
+
+---
+
+## TLS Recon Tester
+
+A companion utility for validating SSLO configurations by generating TCP and TLS handshakes against multiple ports. Use it to verify that your SSLO topology is correctly intercepting traffic on discovered ports.
+
+**[View Interactive Demo](TLS_Recon_Demo.html)**
+
+### Features
+
+- TCP connectivity testing with parallel execution
+- TLS handshake initiation with configurable SNI
+- Interactive or batch port input
+- Remembers previous target, SNI, and port list between test runs
+- Available for both Bash and PowerShell environments
+
+### Bash Version
+
+**Requirements:** bash 4.0+, netcat (nc), openssl
+```bash
+chmod +x tls-recon-tester.sh
+./tls-recon-tester.sh
+```
+
+**Note for Windows/Cygwin users:** If you encounter line ending errors, run:
+```bash
+dos2unix tls-recon-tester.sh
+```
+
+### PowerShell Version
+
+**Requirements:** PowerShell 5.1+ or PowerShell Core 7+
+```powershell
+.\\tls-recon-tester.ps1
+```
+
+Or bypass execution policy:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\tls-recon-tester.ps1
+```
+
+### Usage
+
+1. Enter target IP or hostname
+2. Enter SNI hostname for TLS tests
+3. Select test type: TCP only, TLS only, or Both
+4. Enter ports interactively or as a batch list
+5. Review results and optionally run another test
+
+The tester remembers your previous inputs, making it easy to repeat tests with different configurations.
+
+---
 
 ## License
 
