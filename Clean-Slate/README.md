@@ -1,4 +1,4 @@
-# F5 SSL Orchestrator Clean Slate
+# Clean Slate for SSL Orchestrator
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
