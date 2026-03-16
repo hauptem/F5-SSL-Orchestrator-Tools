@@ -1,0 +1,56 @@
+# DEBUG_TLS-Recon-for-SSLO_v1.0_irule
+#
+# Revision:     1.0 - March 2026
+# Created by:   Eric Haupt
+#
+# Purpose:      Identifies TLS traffic that may need to be added to SSLO intercept rules.
+#               Validates TLS ClientHello structure to minimize false positives.
+#
+# Deployment:   Attach to SSLO TCP intercept virtual server(s).
+#               Example: sslo_<topology>_tcp.app/sslo_<topology>_tcp-in-t-4
+#
+# Datagroup:    datagroup-tls-recon
+#               Type: integer
+#               Add ports to this datagroup to disable logging them.
+#
+# Rate Limit:   Logs each port once per interval defined by timeout variable.
+#               Uses session table "table_tls_recon" with configurable lifetime.
+#               Table entries auto-expire after the configured interval.
+#
+# Validation:   TLS ClientHello Discovery
+#               Byte 0:    Record type (must be 0x16 = Handshake)
+#               Bytes 1-2: Record version (must be 0x0300-0x0304 = SSL3/TLS)
+#               Byte 5:    Handshake type (must be 0x01 = ClientHello)
+#
+# Logging:      local0.info
+#               Format: TLS-RECON: TLS spotted on port 11988 to 172.16.200.62 from 172.16.100.191
+#
+when CLIENT_DATA priority 1 {
+    # Rate limit interval in seconds - modify this value as needed
+    set timeout 60
+    
+    # Ensure minimum payload length for TLS header inspection
+    if { [TCP::payload length] >= 6 } {
+        
+        # Parse: record_type (1 byte), record_version (2 bytes), record_length (2 bytes), handshake_type (1 byte)
+        binary scan [TCP::payload] H2H4H4H2 record_type record_version record_length handshake_type
+        
+        # Validation 1: Record type must be 0x16 (TLS Handshake)
+        # Validation 2: Record version must be 0x0300-0x0304 (SSL3/TLS family)
+        # Validation 3: Handshake type must be 0x01 (ClientHello)
+        if { $record_type eq "16" && [string match "030*" $record_version] && $handshake_type eq "01" } {
+            
+            set destination_port [TCP::local_port]
+            
+            # Log only if this port is not in our inspected ports datagroup
+            if { not [class match $destination_port equals datagroup-tls-recon] } {
+                
+                # Rate limit: only log once per port per configured interval
+                if { [table lookup -subtable "table_tls_recon" $destination_port] eq "" } {
+                    table set -subtable "table_tls_recon" $destination_port 1 $timeout
+                    log local0.info "TLS-RECON: TLS spotted on port $destination_port to [IP::local_addr] from [IP::client_addr]"
+                }
+            }
+        }
+    }
+}
