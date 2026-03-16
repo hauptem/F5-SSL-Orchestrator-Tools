@@ -71,12 +71,12 @@ chmod +x tls-recon-tester.sh
 
 **Requirements:** PowerShell 5.1+ or PowerShell Core 7+
 ```powershell
-.\\tls-recon-tester.ps1
+.\tls-recon-tester.ps1
 ```
 
 Or bypass execution policy:
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\\tls-recon-tester.ps1
+powershell -ExecutionPolicy Bypass -File .\tls-recon-tester.ps1
 ```
 
 ### Usage
