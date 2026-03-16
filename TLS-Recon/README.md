@@ -70,6 +70,7 @@ chmod +x tls-recon-tester.sh
 ### PowerShell Version
 
 **Requirements:** PowerShell 5.1+ or PowerShell Core 7+
+
 Note: if on an older version of PowerShell the "legacy" script was provided. Try to use the non-legacy version first.
 
 ```powershell
