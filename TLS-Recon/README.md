@@ -49,12 +49,12 @@ tmsh create ltm data-group internal datagroup-tls-recon type integer records add
 
 ## Output
 ```
-TLS-RECON: TLS spotted on port: 4353 from client: 192.168.1.100
-TLS-RECON: TLS spotted on port: 7889 from client: 192.168.1.105
-TLS-RECON: TLS spotted on port: 14656 from client: 10.10.20.50
-TLS-RECON: TLS spotted on port: 33712 from client: 172.16.50.23
-TLS-RECON: TLS spotted on port: 45654 from client: 192.168.1.100
-TLS-RECON: TLS spotted on port: 55551 from client: 10.10.20.88
+TLS-RECON: TLS spotted on port 4353 to 10.61.54.2 from 192.168.1.100
+TLS-RECON: TLS spotted on port 7889 to 172.16.1.3 from 192.168.1.105
+TLS-RECON: TLS spotted on port 14656 to 10.20.20.50 from 10.10.20.50
+TLS-RECON: TLS spotted on port 33712 to 192.168.55.33 from 172.16.50.23
+TLS-RECON: TLS spotted on port 45654 to 10.4.254.48 from 192.168.1.100
+TLS-RECON: TLS spotted on port 55551 to 172.16.45.28 from 10.10.20.88
 ```
 
 ---
