@@ -86,14 +86,6 @@ Or bypass execution policy:
 powershell -ExecutionPolicy Bypass -File .\tls-recon-tester.ps1
 ```
 
-### Usage
-
-1. Enter target IP or hostname
-2. Enter SNI hostname for TLS tests
-3. Select test type: TCP only, TLS only, or Both
-4. Enter ports interactively or as a batch list
-5. Review results and optionally run another test
-
 ---
 
 ## License
