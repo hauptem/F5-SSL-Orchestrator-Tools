@@ -25,7 +25,7 @@
 # Logging:      local0.info
 #               Format: TLS-RECON: TLS spotted on port 11988 to 172.16.200.62 from 172.16.100.191
 #
-when CLIENT_DATA priority 1 {
+when CLIENT_DATA priority 100 {
     # Rate limit interval in seconds - modify this value as needed
     set timeout 60
     
