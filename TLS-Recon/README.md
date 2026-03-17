@@ -13,7 +13,7 @@ A lightweight F5 BIG-IP iRule for discovering TLS traffic on non-standard ports 
 
 SSL Orchestrator (SSLO) does not natively identify TLS traffic on arbitrary ports. When deploying SSLO with an all-port TCP interception topology, organizations need visibility into which ports are carrying TLS traffic that may be candidates for decryption and inspection.
 
-TLS Recon attaches to an SSLO TCP intercept virtual server and logs destination ports where valid TLS ClientHello messages are detected. It provides actionable intelligence for building SSLO interception rules.
+TLS Recon is an iRule that attaches to an SSLO TCP intercept virtual server and logs destination ports where valid TLS ClientHello messages are detected in the TCP payload. 
 
 ## Requirements
 
