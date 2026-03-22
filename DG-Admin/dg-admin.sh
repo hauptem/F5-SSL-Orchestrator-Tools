@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# F5 BIG-IP Datagroup Administrator Script - DG-Admin
+# DG-Admin LTM Datagroup Manager Script
 # =============================================================================
 # Version:  1.0
 # Created by: Eric Haupt
