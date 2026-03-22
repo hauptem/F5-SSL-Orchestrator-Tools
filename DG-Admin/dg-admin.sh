@@ -874,14 +874,16 @@ import_external_datagroup_file() {
     fi
     
     # Create the sys file data-group
-    if tmsh create sys file data-group "/${partition}/${file_name}" \
+    local import_result
+    import_result=$(tmsh create sys file data-group "/${partition}/${file_name}" \
         separator "${EXTERNAL_SEPARATOR}" \
         source-path "file:${source_path}" \
-        type "${ext_type}" 2>/dev/null; then
-        return 0
-    else
+        type "${ext_type}" 2>&1)
+    if [ $? -ne 0 ]; then
+        log_error "Import failed: ${import_result}"
         return 1
     fi
+    return 0
 }
 
 # Create new external datagroup
@@ -911,18 +913,14 @@ create_external_datagroup() {
         return 1
     fi
     
-    # Convert type names (address -> ip for external)
-    local ext_type="${dg_type}"
-    if [ "${dg_type}" == "address" ]; then
-        ext_type="ip"
-    fi
-    
     # Create the external datagroup referencing the file
+    # Note: type is inherited from sys file data-group, not specified here
     log_step "Creating external datagroup..."
-    if ! tmsh create ltm data-group external "/${partition}/${dg_name}" \
-        external-file-name "${file_name}" \
-        type "${ext_type}" 2>/dev/null; then
-        log_error "Failed to create external datagroup"
+    local create_result
+    create_result=$(tmsh create ltm data-group external "/${partition}/${dg_name}" \
+        external-file-name "${file_name}" 2>&1)
+    if [ $? -ne 0 ]; then
+        log_error "Failed to create external datagroup: ${create_result}"
         # Clean up the sys file
         tmsh delete sys file data-group "/${partition}/${file_name}" 2>/dev/null
         rm -f "${temp_file}" 2>/dev/null
