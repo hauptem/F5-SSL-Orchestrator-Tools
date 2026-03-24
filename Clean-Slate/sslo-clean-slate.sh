@@ -24,6 +24,8 @@
 #
 # OUTPUT:
 #   A log file is written to /var/log/sslo-clean-<timestamp>.log
+#
+# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 # =============================================================================
 
 set -euo pipefail
