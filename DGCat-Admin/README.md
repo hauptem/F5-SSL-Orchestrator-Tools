@@ -7,6 +7,16 @@
 
 A menu-driven administration tool for managing LTM datagroups and URL categories on F5 BIG-IP systems.
 
+## Why This Tool?
+
+SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories for traffic classification. While you can add sites directly to SSLO policies, this approach has limitations:
+
+- SSLO uses iAppLX to generate APM policies under the hood
+- Each host added directly becomes an expression in the policy
+- Large lists degrade policy performance
+
+**The recommended approach:** Use external datagroups or URL categories for large lists. They're optimized for fast lookups and keep policies clean. This tool makes managing those lists practical.
+
 ## Features
 
 - **Datagroup Management** - Create, view, export, and delete internal and external datagroups
@@ -102,6 +112,17 @@ PROTECTED_DATAGROUPS=(
 | Internal | address | IP addresses, subnets |
 | Internal | integer | Port numbers |
 | External | any | Large lists (1000+ entries) |
+
+## SSLO Recommendations
+
+| Use Case | Recommended |
+|----------|-------------|
+| Bypass/intercept lists <1000 entries | Internal string datagroup |
+| Large bypass/intercept lists | External string datagroup |
+| URL filtering with categories | Custom URL category |
+| IP-based decisions | Address datagroup |
+
+**Tip:** External datagroups load from separate files and handle 10,000+ entries efficiently. For very large domain lists, external datagroups typically outperform URL categories.
 
 ## License
 
