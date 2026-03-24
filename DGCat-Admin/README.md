@@ -26,7 +26,6 @@ DGCat-Admin makes managing those lists very easy without any manual tmsh interac
 - **Bulk Import/Export** - CSV-based import and export for easy data management
 - **Bidirectional Conversion** - Convert between URL categories and datagroups
 - **Automatic Backups** - Creates backups before any destructive operation
-- **Type Validation** - Validates entries match the datagroup type (string, address, integer)
 
 ## Requirements
 
@@ -92,7 +91,7 @@ BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
 # Partitions to manage
 PARTITIONS="Common"
 
-# Protected system datagroups
+# Protected system datagroups (or datagroups you want to protect from manipulation via DGCat-Admin)
 PROTECTED_DATAGROUPS=(
     "private_net"
     "images"
