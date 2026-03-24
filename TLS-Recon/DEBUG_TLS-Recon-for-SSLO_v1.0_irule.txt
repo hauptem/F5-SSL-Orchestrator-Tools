@@ -1,6 +1,6 @@
 # DEBUG_TLS-Recon-for-SSLO_v1.0_irule
 #
-# Revision:     1.0 - March 2026
+# Revision:     1.0 
 # Created by:   Eric Haupt
 #
 # Purpose:      Identifies TLS traffic that may need to be added to SSLO intercept rules.
