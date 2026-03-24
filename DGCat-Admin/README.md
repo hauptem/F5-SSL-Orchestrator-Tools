@@ -49,11 +49,11 @@ chmod +x /shared/tmp/dgcat-admin.sh
 | Option | Description |
 |--------|-------------|
 | 1 | List all datagroups with type, class, and record count |
-| 2 | View datagroup contents |
-| 3 | Create datagroup or URL category from CSV |
-| 4 | Delete datagroup |
-| 5 | Export datagroup or URL category to CSV |
-| 6 | Convert URL category to datagroup |
+| 2 | View existing datagroup contents |
+| 3 | Create a datagroup or URL category from CSV import |
+| 4 | Delete a datagroup |
+| 5 | Export a datagroup or URL category to CSV |
+| 6 | Convert an existing URL category to a datagroup |
 
 ## CSV Format
 
