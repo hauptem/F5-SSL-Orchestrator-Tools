@@ -1,11 +1,11 @@
-# DG-Admin F5 Big-IP Datagroup Manager
+# DGCat-Admin F5 Big-IP Datagroup Manager
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
 
-A menu-drive bash script for management of LTM Datagroups for SSLO deployments
+A menu-drive bash script for management of LTM Datagroups and URL Custom Categories. Helpful for SSLO deployments or configuration migration/restoration.
 
 ## License
 
