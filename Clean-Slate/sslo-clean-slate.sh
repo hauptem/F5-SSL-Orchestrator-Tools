@@ -3,7 +3,7 @@
 # SSL Orchestrator - Clean Slate
 # =============================================================================
 # Version:  1.0
-# Created by: Eric Haupt
+# Author: Eric Haupt
 # Based on: Kevin Stewart's original "sslo nuclear delete" script v7.0 from 
 #           https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete
 #
