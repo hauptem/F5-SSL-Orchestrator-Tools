@@ -61,7 +61,7 @@ TLS-RECON: TLS spotted on port 55551 to 172.16.45.28 from 10.10.20.88
 
 ### TLS Recon Tester
 
-TLS Recon Tester is a script that can generate TLS handshakes on various ports in order to test and validate TLS Recon operation. Select an upstream server or place on on the network that is listening on desired ports and run the script while observing /var/log/ltm.
+TLS Recon Tester is a script that can generate TLS handshakes on various ports in order to test and validate TLS Recon operation. Select an upstream server or place one on the network that is listening on desired ports and run the script while observing /var/log/ltm.
 
 ## Bash Version
 
