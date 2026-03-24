@@ -33,9 +33,6 @@ SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories f
 ## Installation
 
 ```bash
-# Copy to BIG-IP
-scp dgcat-admin.sh root@<bigip-ip>:/shared/tmp/
-
 # On BIG-IP
 chmod +x /shared/tmp/dgcat-admin.sh
 ```
