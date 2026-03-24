@@ -61,7 +61,7 @@ chmod +x /shared/tmp/dgcat-admin.sh
 
 ### Datagroups
 
-Keys only (domains, IPs, subnets):
+Keys  (domains, IPs, subnets):
 ```csv
 example.com
 google.com
@@ -70,8 +70,8 @@ google.com
 
 Keys and values:
 ```csv
-example.com,bypass
-google.com,intercept
+10.10.10.10/24,Management
+172.16.100.0/24,Internal
 ```
 
 ### URL Categories
@@ -115,10 +115,10 @@ PROTECTED_DATAGROUPS=(
 | Use Case | Recommended |
 |----------|-------------|
 | Bypass/intercept lists <1000 entries | Internal string datagroup |
-| Large bypass/intercept lists | External string datagroup |
+| Large bypass/intercept lists >1000 entries | External string datagroup |
 | URL filtering with categories | Custom URL category |
 
-**Tip:** External datagroups load from separate files and handle 10,000+ entries efficiently. For very large domain lists, external datagroups typically outperform URL categories.
+**Tip:** External datagroups load from separate files and handle 1,000+ entries efficiently. For very large domain lists, external datagroups typically outperform URL categories.
 
 ## License
 
