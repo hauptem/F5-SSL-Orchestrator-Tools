@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# SSL Orchestrator Clean Slate Script
+# SSL Orchestrator - Clean Slate
 # =============================================================================
 # Version:  1.0
 # Created by: Eric Haupt
