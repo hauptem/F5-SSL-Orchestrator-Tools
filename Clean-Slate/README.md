@@ -48,7 +48,6 @@ After the script completes, reinstall the SSLO RPM manually via the GUI:
 - Backs up the SSLO RPM before deleting anything
 - Step-by-step logging with full log file output
 - Post-run verification of cleanup
-- Credentials are never written to the log file
 
 ## Warning
 
