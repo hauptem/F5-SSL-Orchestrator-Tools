@@ -17,9 +17,7 @@ SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories f
 
 **The recommended approach:** Use external datagroups or URL categories for large lists. They're optimized for fast lookups and keep policies clean. 
 
-This tool makes managing those lists very easy without any manual tmsh interaction. Need to export a few massive datagroups or custom url categories so you can replicate SSLO business logic at another site in minutes? Need to injest a large number of subnets into a datagroup for SSLO use? 
-
-This tool was designed specifically for that purpose.
+This tool makes managing those lists very easy without any manual tmsh interaction. Need to export a few massive datagroups or custom url categories so you can replicate SSLO business logic at another site in minutes? Need to injest a large number of subnets into a datagroup for SSLO use? **This tool was designed specifically for that purpose.**
 
 ## Features
 
