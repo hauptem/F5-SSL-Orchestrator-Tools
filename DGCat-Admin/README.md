@@ -25,13 +25,10 @@ SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories f
 - **Bidirectional Conversion** - Convert between URL categories and datagroups
 - **Automatic Backups** - Creates backups before any destructive operation
 - **Type Validation** - Validates entries match the datagroup type (string, address, integer)
-- **Protected Datagroups** - Prevents modification of system datagroups
 
 ## Requirements
 
 - F5 BIG-IP TMOS 17.x or higher
-- Root access
-- URL filtering module (for URL category features)
 
 ## Installation
 
@@ -120,7 +117,6 @@ PROTECTED_DATAGROUPS=(
 | Bypass/intercept lists <1000 entries | Internal string datagroup |
 | Large bypass/intercept lists | External string datagroup |
 | URL filtering with categories | Custom URL category |
-| IP-based decisions | Address datagroup |
 
 **Tip:** External datagroups load from separate files and handle 10,000+ entries efficiently. For very large domain lists, external datagroups typically outperform URL categories.
 
