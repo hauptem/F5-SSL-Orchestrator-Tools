@@ -26,36 +26,6 @@ DGCat-Admin makes managing those site lists very easy without any manual tmsh in
 
 **This tool was designed specifically for those purposes.**
 
-## Features
-
-- **Datagroup Management** - Create, view, export, and delete internal and external datagroups
-- **URL Category Management** - Create, view, export and delete custom URL categories
-- **Individual Record Management** - Create and delete records in existing datagroups or URL categories
-- **Bulk Import/Export** - CSV-based import and export for easy data management
-- **Bidirectional Conversion** - Convert between URL categories and datagroups
-- **Automatic Backups** - Creates backups before any destructive operation
-
-## Requirements
-
-- F5 BIG-IP TMOS 17.x or higher
-
-## Installation
-
-```bash
-# On BIG-IP
-chmod +x /shared/tmp/dgcat-admin.sh
-```
-
-## Usage
-
-```bash
-./dgcat-admin.sh
-```
-
-## Overview
-
-DGCat-Admin is a menu-driven administration tool for managing LTM datagroups and URL categories on F5 BIG-IP systems. It provides functionality that goes beyond the standard AdminGUI, including bulk import/export, backup management, type validation, and bidirectional conversion between datagroups and URL categories.
-
 ### Key Features
 
 - Manage both **internal** and **external** datagroups
