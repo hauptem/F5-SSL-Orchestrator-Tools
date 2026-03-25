@@ -563,28 +563,6 @@ Attempting to modify these will display an error and abort the operation.
 
 ---
 
-## Quick Reference
-
-| Task | Menu Option |
-|------|-------------|
-| See all datagroups | 1 |
-| View datagroup contents | 2 |
-| Import from CSV | 3 |
-| Delete datagroup/category | 4 |
-| Export to CSV | 5 |
-| Convert URL category → datagroup | 6 |
-| Interactive editing | 7 |
-
-| Editor Key | Action |
-|------------|--------|
-| `a` | Add entry |
-| `d` | Delete entry |
-| `x` | Delete by pattern |
-| `w` | Apply all changes |
-| `q` | Quit editor |
-| `f` | Filter |
-| `n/p` | Next/Previous page |
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
