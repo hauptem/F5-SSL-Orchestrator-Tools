@@ -281,7 +281,7 @@ Interactive editor for making multiple changes before applying.
 
 ```
   ╔══════════════════════════════════════════════════════════════════════════╗
-  ║                        DGCat-Admin Editor                             ║
+  ║                        DGCat-Admin Editor                                ║
   ╚══════════════════════════════════════════════════════════════════════════╝
   Path:  /Common/my-datagroup
   Class: internal  |  Type: string
