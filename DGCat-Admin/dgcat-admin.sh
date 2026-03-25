@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# DGCat-Admin - F5 BIG-IP Administration Tool
+# DGCat-Admin - F5 Big-IP Datagroup / URL Category Manager
 # =============================================================================
 # Version:  1.0
 # Author:   Eric Haupt
