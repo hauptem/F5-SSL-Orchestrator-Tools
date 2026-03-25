@@ -20,7 +20,7 @@ SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories f
 DGCat-Admin makes managing those site lists very easy without any manual tmsh interaction. 
 
 - Need to export a few massive datagroups or custom url categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
-- Need to injest a large number of subnets or hosts from an excel spreadsheet into a datagroup for SSLO security policy use?
+- Need to ingest a large number of subnets or hosts from an excel spreadsheet into a datagroup for SSLO security policy use?
 - Want to take a custom URL category and convert it to a datagroup?
 - Want to take a datagroup and convert it to a custom URL Category?
 
