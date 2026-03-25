@@ -29,7 +29,8 @@ DGCat-Admin makes managing those site lists very easy without any manual tmsh in
 ## Features
 
 - **Datagroup Management** - Create, view, export, and delete internal and external datagroups
-- **URL Category Management** - Create and export custom URL categories
+- **URL Category Management** - Create, view, export and delete custom URL categories
+- **Individual Record Management** - Create and delete records in existing datagroups or URL categories
 - **Bulk Import/Export** - CSV-based import and export for easy data management
 - **Bidirectional Conversion** - Convert between URL categories and datagroups
 - **Automatic Backups** - Creates backups before any destructive operation
