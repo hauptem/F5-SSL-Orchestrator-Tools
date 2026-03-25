@@ -8,7 +8,7 @@
 # Requirements: BIG-IP TMOS 17.x or higher
 #
 # PURPOSE:
-#   Menu-driven tool for managing LTM datagroups and URL categories used in 
+#   Menu-driven tool for managing LTM datagroups and SWG URL categories used in 
 #   SSL Orchestrator policies. Supports both INTERNAL and EXTERNAL datagroups 
 #   with bulk import/export via CSV files, backup before modifications, type 
 #   validation, and bidirectional conversion between datagroups and URL 
