@@ -338,10 +338,10 @@ select_datagroup() {
     
     echo "" >&2
     local dg_name
-    read -rp "  ${prompt}: " dg_name
+    read -rp "  ${prompt} (or 'q' to cancel): " dg_name
     
-    if [ -z "${dg_name}" ]; then
-        echo -e "${YELLOW}  [WARN]${NC}  ${WHITE}No datagroup name provided.${NC}" >&2
+    if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
+        echo -e "${WHITE}  [INFO]  Cancelled.${NC}" >&2
         return 1
     fi
     
@@ -1352,10 +1352,10 @@ menu_create_datagroup() {
     
     # Get datagroup name
     echo ""
-    read -rp "  Enter datagroup name: " dg_name
+    read -rp "  Enter datagroup name (or 'q' to cancel): " dg_name
     
-    if [ -z "${dg_name}" ]; then
-        log_warn "No datagroup name provided."
+    if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
+        log_info "Cancelled."
         press_enter_to_continue
         return
     fi
@@ -1770,10 +1770,10 @@ menu_delete_datagroup_only() {
     
     echo ""
     local dg_name
-    read -rp "  Enter datagroup name to delete: " dg_name
+    read -rp "  Enter datagroup name to delete (or 'q' to cancel): " dg_name
     
-    if [ -z "${dg_name}" ]; then
-        log_warn "No datagroup name provided."
+    if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
+        log_info "Cancelled."
         press_enter_to_continue
         return
     fi
@@ -2636,7 +2636,14 @@ menu_convert_url_category() {
     local default_name
     default_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
     echo ""
-    read -rp "  Enter datagroup name [${default_name}]: " dg_name
+    read -rp "  Enter datagroup name [${default_name}] (or 'q' to cancel): " dg_name
+    
+    if [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
+        log_info "Cancelled."
+        press_enter_to_continue
+        return
+    fi
+    
     dg_name="${dg_name:-${default_name}}"
     
     # Sanitize name
@@ -2853,10 +2860,10 @@ menu_create_url_category() {
     
     # Get category name
     echo ""
-    read -rp "  Enter URL category name: " cat_name
+    read -rp "  Enter URL category name (or 'q' to cancel): " cat_name
     
-    if [ -z "${cat_name}" ]; then
-        log_warn "No category name provided."
+    if [ -z "${cat_name}" ] || [ "${cat_name}" == "q" ] || [ "${cat_name}" == "Q" ]; then
+        log_info "Cancelled."
         press_enter_to_continue
         return
     fi
@@ -3298,7 +3305,7 @@ editor_submenu() {
         clear
         echo ""
         echo -e "  ${CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                        ${display_title}                             ${NC}${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}${WHITE}                        ${display_title}                                ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
         echo -e "  ${WHITE}${display_info1}${NC}"
         if [ -n "${display_info2}" ]; then
