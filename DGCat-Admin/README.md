@@ -109,9 +109,9 @@ These are pre-configured BIG-IP datagroups that cannot be modified or deleted. A
   ║                                                            ║
   ║   1)  List All Datagroups                                  ║
   ║   2)  View Datagroup Contents                              ║
-  ║   3)  Create Datagroup/URL Category from CSV               ║
-  ║   4)  Delete Datagroup/URL Category                        ║
-  ║   5)  Export Datagroup/URL Category to CSV                 ║
+  ║   3)  Create Datagroup / URL Category from CSV             ║
+  ║   4)  Delete Datagroup / URL Category                      ║
+  ║   5)  Export Datagroup / URL Category to CSV               ║
   ║   6)  Convert URL Category to Datagroup                    ║
   ║   7)  Edit a Datagroup or URL Category                     ║
   ║                                                            ║
