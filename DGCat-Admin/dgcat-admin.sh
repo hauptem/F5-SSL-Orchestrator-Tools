@@ -1194,9 +1194,9 @@ show_main_menu() {
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}List All Datagroups${NC}                                  ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}View Datagroup Contents${NC}                              ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Create Datagroup/URL Category from CSV${NC}               ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Delete Datagroup${NC}                                     ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Export Datagroup/URL Category to CSV${NC}                 ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Create Datagroup / URL Category from CSV${NC}             ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Delete Datagroup / URL Category${NC}                      ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Export Datagroup / URL Category to CSV${NC}               ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}6)${NC}  ${WHITE}Convert URL Category to Datagroup${NC}                    ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}7)${NC}  ${WHITE}Edit a Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
@@ -1723,8 +1723,34 @@ menu_create_datagroup() {
     press_enter_to_continue
 }
 
-# Option 4: Delete datagroup
+# Option 4: Delete Datagroup or URL Category
 menu_delete_datagroup() {
+    log_section "Delete Datagroup or URL Category"
+    
+    echo ""
+    echo -e "  ${WHITE}What would you like to delete?${NC}"
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo ""
+    read -rp "  Select [0-2]: " delete_choice
+    
+    case "${delete_choice}" in
+        1) menu_delete_datagroup_only ;;
+        2) menu_delete_url_category ;;
+        0|"")
+            log_info "Cancelled."
+            press_enter_to_continue
+            ;;
+        *)
+            log_warn "Invalid selection."
+            press_enter_to_continue
+            ;;
+    esac
+}
+
+# Option 4a: Delete datagroup
+menu_delete_datagroup_only() {
     log_section "Delete Datagroup"
     
     # Select partition
@@ -1851,6 +1877,179 @@ menu_delete_datagroup() {
             press_enter_to_continue
             return
         fi
+    fi
+    
+    prompt_save_config
+    press_enter_to_continue
+}
+
+# Option 4b: Delete URL Category
+menu_delete_url_category() {
+    log_section "Delete URL Category"
+    
+    # Check if URL database is available
+    if ! tmsh list sys url-db url-category one-line &>/dev/null; then
+        log_error "URL database not available or accessible."
+        log_info "This feature requires the URL filtering module."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Offer choice: enter name directly or list all
+    echo ""
+    echo -e "  ${WHITE}How would you like to select a URL category?${NC}"
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}Enter category name directly${NC}"
+    echo -e "    ${YELLOW}2)${NC} ${WHITE}List all categories${NC}"
+    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo ""
+    read -rp "  Select [0-2]: " method_choice
+    
+    local selected_category=""
+    
+    case "${method_choice}" in
+        0|"")
+            log_info "Cancelled."
+            press_enter_to_continue
+            return
+            ;;
+        1)
+            # Direct entry
+            while true; do
+                echo ""
+                read -rp "  Enter URL category name (or 'q' to cancel): " selected_category
+                
+                if [ -z "${selected_category}" ]; then
+                    log_warn "No category name provided."
+                    continue
+                fi
+                
+                if [ "${selected_category}" == "q" ] || [ "${selected_category}" == "Q" ]; then
+                    log_info "Cancelled."
+                    press_enter_to_continue
+                    return
+                fi
+                
+                # Verify category exists
+                if url_category_exists "${selected_category}"; then
+                    break
+                fi
+                
+                # Try with sslo-urlCat prefix
+                local sslo_name="sslo-urlCat${selected_category}"
+                if url_category_exists "${sslo_name}"; then
+                    log_info "Found as SSLO category: ${sslo_name}"
+                    selected_category="${sslo_name}"
+                    break
+                fi
+                
+                log_error "Category '${selected_category}' not found."
+                continue
+            done
+            ;;
+        2)
+            # List all categories
+            log_step "Retrieving URL categories..."
+            local categories
+            categories=$(get_url_category_list)
+            
+            if [ -z "${categories}" ]; then
+                log_error "No URL categories found."
+                press_enter_to_continue
+                return
+            fi
+            
+            # Display available categories
+            echo ""
+            echo -e "  ${WHITE}Available URL Categories:${NC}"
+            echo -e "  ${CYAN}─────────────────────────────────────────────────────────────${NC}"
+            local i=1
+            local cat_array=()
+            while IFS= read -r cat; do
+                printf "    ${YELLOW}%3d)${NC} ${WHITE}%s${NC}\n" "${i}" "${cat}"
+                cat_array+=("${cat}")
+                i=$((i + 1))
+            done <<< "${categories}"
+            echo -e "  ${CYAN}─────────────────────────────────────────────────────────────${NC}"
+            echo -e "      ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+            echo ""
+            
+            # Select category
+            read -rp "  Select URL category [0-$((${#cat_array[@]}))] : " cat_choice
+            
+            if [ "${cat_choice}" == "0" ] || [ -z "${cat_choice}" ]; then
+                log_info "Cancelled."
+                press_enter_to_continue
+                return
+            fi
+            
+            if ! [[ "${cat_choice}" =~ ^[0-9]+$ ]] || [ "${cat_choice}" -lt 1 ] || [ "${cat_choice}" -gt ${#cat_array[@]} ]; then
+                log_warn "Invalid selection."
+                press_enter_to_continue
+                return
+            fi
+            
+            selected_category="${cat_array[$((cat_choice - 1))]}"
+            ;;
+        *)
+            log_warn "Invalid selection."
+            press_enter_to_continue
+            return
+            ;;
+    esac
+    
+    # Get category details
+    local url_count
+    url_count=$(get_url_category_count "${selected_category}")
+    
+    echo ""
+    log_warn "You are about to delete the following URL category:"
+    log_info "  Category: ${selected_category}"
+    log_info "  URLs:     ${url_count}"
+    echo ""
+    
+    # Backup before delete
+    log_step "Creating backup before deletion..."
+    local safe_name
+    safe_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    local backup_file="${BACKUP_DIR}/urlcat_${safe_name}_${TIMESTAMP}.csv"
+    
+    {
+        echo "# URL Category Backup: ${selected_category}"
+        echo "# Created: $(date)"
+        echo "# Reason: Pre-deletion backup"
+        echo "#"
+        get_url_category_entries "${selected_category}"
+    } > "${backup_file}" 2>/dev/null
+    
+    if [ -f "${backup_file}" ]; then
+        log_ok "Backup saved: ${backup_file}"
+    else
+        log_warn "Could not create backup."
+        read -rp "  Continue without backup? (yes/no) [no]: " continue_choice
+        if [ "${continue_choice}" != "yes" ]; then
+            log_info "Aborted by user."
+            press_enter_to_continue
+            return
+        fi
+    fi
+    
+    # Confirm deletion
+    echo ""
+    read -rp "  Type DELETE to confirm: " confirm
+    if [ "${confirm}" != "DELETE" ]; then
+        log_info "Aborted by user."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Delete the URL category
+    log_step "Deleting URL category '${selected_category}'..."
+    if tmsh delete sys url-db url-category "${selected_category}" 2>/dev/null; then
+        log_ok "URL category '${selected_category}' deleted successfully."
+    else
+        log_error "Failed to delete URL category."
+        press_enter_to_continue
+        return
     fi
     
     prompt_save_config
@@ -3099,7 +3298,7 @@ editor_submenu() {
         clear
         echo ""
         echo -e "  ${CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                        ${display_title}                                ${NC}${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}${WHITE}                        ${display_title}                             ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
         echo -e "  ${WHITE}${display_info1}${NC}"
         if [ -n "${display_info2}" ]; then
