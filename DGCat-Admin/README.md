@@ -11,13 +11,13 @@ A menu-driven administration tool for managing LTM datagroups and URL categories
 
 SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories for traffic classification. While you can add sites directly to SSLO policies, this approach has limitations:
 
-- SSLO uses iAppLX to generate APM policies under the hood
-- Each host added directly becomes an expression in the policy
-- Large lists degrade policy performance
+- SSLO uses iAppLX to generate APM per-request policies under the hood
+- Each host or site added directly becomes an expression in the APM policy
+- Large lists could degrade policy performance and are not easily manageable
 
-**The recommended approach:** Use external datagroups or URL categories for large lists. They're optimized for fast lookups and keep policies clean. 
+**The recommended approach:** Use external datagroups or URL categories for SSLO security policy rules. They're optimized for fast lookups, keep policies clean and are operationally easier to maintain.
 
-DGCat-Admin makes managing those lists very easy without any manual tmsh interaction. Need to export a few massive datagroups or custom url categories so you can replicate SSLO business logic at another site in minutes? Need to injest a large number of subnets from an excel spreadsheet into a datagroup for SSLO use? **This tool was designed specifically for that purpose.**
+DGCat-Admin makes managing those site lists very easy without any manual tmsh interaction. Need to export a few massive datagroups or custom url categories so you can precisely replicate existing SSLO business logic at another site in just minutes? Need to injest a large number of subnets from an excel spreadsheet into a datagroup for SSLO policy use? **This tool was designed specifically for that purpose.**
 
 ## Features
 
