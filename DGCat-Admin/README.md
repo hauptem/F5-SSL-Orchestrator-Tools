@@ -344,15 +344,6 @@ When you press `w`:
   Apply these changes? (yes/no) [no]:
 ```
 
-### Exiting with Pending Changes
-
-If you press `q` with unapplied changes:
-
-```
-  [WARN]  You have unapplied changes that will be discarded.
-  Discard changes and exit? (yes/no) [no]:
-```
-
 ---
 
 ## Datagroup Types
@@ -387,17 +378,6 @@ For numeric values like port numbers.
 8080
 ```
 
-### Type Validation
-
-The tool analyzes CSV entries and warns if they don't match the selected type:
-
-```
-  [WARN]  Type mismatch detected!
-  [WARN]  Datagroup type is 'string' but 50 entries (100%) appear to be 'address' format.
-
-  Continue anyway? (yes/no) [no]:
-```
-
 ---
 
 ## Internal vs External Datagroups
@@ -414,9 +394,6 @@ The tool analyzes CSV entries and warns if they don't match the selected type:
 - Stored in separate files under `/config/filestore/`
 - Best for large datasets (1000+ entries)
 - Referenced by the datagroup, loaded on demand
-- Requires separate backup of the data file
-
-When creating a datagroup with 1000+ entries, the tool recommends using external class.
 
 ---
 
@@ -537,29 +514,6 @@ The log captures all operations, warnings, and errors for the session.
 
 **Cause:** CSV file created on Windows with CRLF line endings  
 **Solution:** Tool automatically converts to Unix format (LF)
-
----
-
-## Best Practices
-
-1. **Always review the pre-apply summary** before committing changes in the editor
-2. **Use external datagroups** for lists over 1000 entries
-5. **Save configuration** when prompted after modifications
-6. **Monitor backup directory size** and adjust `MAX_BACKUPS` if needed
-
----
-
-## Appendix: Protected System Datagroups
-
-These datagroups are protected and cannot be modified:
-
-| Name | Purpose |
-|------|---------|
-| `private_net` | RFC 1918 private address ranges |
-| `images` | Image file extensions |
-| `aol` | AOL network ranges |
-
-Attempting to modify these will display an error and abort the operation.
 
 ---
 
