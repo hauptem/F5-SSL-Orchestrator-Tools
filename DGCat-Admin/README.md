@@ -184,7 +184,7 @@ When you select REST API mode, you'll be prompted for connection details:
   [ OK ]  All partitions validated
 ```
 
-### REST API Menu
+### REST API Mode Menu
 
 REST API mode provides a streamlined menu with the most common operations:
 
