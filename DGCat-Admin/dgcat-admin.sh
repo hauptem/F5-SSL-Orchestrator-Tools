@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Administration Tool
 # =============================================================================
-# Version:  1.0
+# Version:  1.1
 # Author:   Eric Haupt
 #
 # Requirements: BIG-IP TMOS 17.x or higher
@@ -1194,7 +1194,7 @@ show_main_menu() {
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}List All Datagroups${NC}                                  ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}View Datagroup Contents${NC}                              ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Create Datagroup / URL Category from CSV${NC}             ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Create or Update Datagroup / URL Category from CSV${NC}   ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Delete Datagroup / URL Category${NC}                      ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Export Datagroup / URL Category to CSV${NC}               ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}6)${NC}  ${WHITE}Convert URL Category to Datagroup${NC}                    ${CYAN}║${NC}"
@@ -1313,7 +1313,7 @@ menu_view_datagroup() {
 
 # Option 3: Create/Restore from CSV (Datagroup or URL Category)
 menu_create_from_csv() {
-    log_section "Create/Restore from CSV"
+    log_section "Create/Update/Restore from CSV"
     
     echo ""
     echo -e "  ${WHITE}What would you like to create?${NC}"
@@ -1339,7 +1339,7 @@ menu_create_from_csv() {
 
 # Option 3a: Create/Restore datagroup from CSV
 menu_create_datagroup() {
-    log_section "Create/Restore Datagroup from CSV"
+    log_section "Create/Update/Restore Datagroup from CSV"
     
     # Select partition
     local partition
@@ -2982,32 +2982,32 @@ menu_create_url_category() {
         local existing_urls
         existing_urls=$(get_url_category_entries "${cat_name}")
         
-        # Use associative array for deduplication
-        declare -A url_set
+        # Use associative array to track existing URLs
+        declare -A existing_set
         
-        # Add existing URLs
+        # Add existing URLs to set
         while IFS= read -r url; do
             [ -z "${url}" ] && continue
-            url_set["${url}"]=1
+            existing_set["${url}"]=1
         done <<< "${existing_urls}"
         
-        local existing_count=${#url_set[@]}
+        local existing_count=${#existing_set[@]}
         
-        # Add new URLs
+        # Filter converted_urls to only include truly new ones
+        local -a new_urls=()
         for url in "${converted_urls[@]}"; do
-            url_set["${url}"]=1
+            if [ -z "${existing_set["${url}"]:-}" ]; then
+                new_urls+=("${url}")
+            fi
         done
         
-        local final_count=${#url_set[@]}
-        local new_added=$((final_count - existing_count))
+        local new_added=${#new_urls[@]}
+        local final_count=$((existing_count + new_added))
         
         log_info "Existing: ${existing_count}, New unique: ${new_added}, Final: ${final_count}"
         
-        # Convert back to array
-        converted_urls=()
-        for url in "${!url_set[@]}"; do
-            converted_urls+=("${url}")
-        done
+        # Replace converted_urls with only the new ones
+        converted_urls=("${new_urls[@]}")
     fi
     
     # Variables for category settings
