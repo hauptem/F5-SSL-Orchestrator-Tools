@@ -1,11 +1,11 @@
-# DGCat-Admin - F5 Big-IP Datagroup / URL Category Manager
+# DGCat-Admin - F5 BIG-IP Datagroup / URL Category Manager
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
 
-A menu-driven administration tool for managing LTM datagroups and URL categories on F5 BIG-IP systems.
+A menu-driven administration tool for managing LTM datagroups and URL categories on F5 BIG-IP systems. Supports both local TMSH and remote REST API operation.
 
 ## Why This Tool?
 
@@ -28,6 +28,7 @@ DGCat-Admin makes managing those site lists very easy without any manual tmsh in
 
 ### Key Features
 
+- **Two operation modes**: TMSH (local) or REST API (remote)
 - Manage both **internal** and **external** datagroups
 - Create and manage **custom URL categories** for SSLO/SWG
 - **Bulk import/export** via CSV files
@@ -38,7 +39,46 @@ DGCat-Admin makes managing those site lists very easy without any manual tmsh in
 
 ---
 
+## What's New in v2.0
+
+### REST API Mode
+
+Version 2.0 adds the ability to manage BIG-IP datagroups and URL categories remotely using the iControl REST API. This means you can:
+
+- Run the tool from any Linux/Mac system with network access to your BIG-IP
+- Manage multiple BIG-IP devices without copying the script to each one
+- Use the same familiar interface whether local or remote
+
+### Mode Selection
+
+When you start the tool, you'll choose your operation mode:
+
+```
+  ╔════════════════════════════════════════════════════════════╗
+  ║                    DGCAT-Admin v2.0                        ║
+  ║               F5 BIG-IP Administration Tool                ║
+  ╠════════════════════════════════════════════════════════════╣
+  ║                                                            ║
+  ║   Select operation mode:                                   ║
+  ║                                                            ║
+  ║    1)  TMSH     - Use tmsh commands                        ║
+  ║    2)  REST API - Use iControl REST API                    ║
+  ║                                                            ║
+  ║    0)  Exit                                                ║
+  ║                                                            ║
+  ╚════════════════════════════════════════════════════════════╝
+```
+
+| Mode | Use When |
+|------|----------|
+| **TMSH** | Running directly on a BIG-IP, or have tmsh access |
+| **REST API** | Managing a remote BIG-IP over the network |
+
+---
+
 ## Installation
+
+### For TMSH Mode (on BIG-IP)
 
 1. Copy the script to your BIG-IP:
    ```bash
@@ -53,6 +93,23 @@ DGCat-Admin makes managing those site lists very easy without any manual tmsh in
 3. Run the tool:
    ```bash
    /shared/scripts/dgcat-admin.sh
+   ```
+
+### For REST API Mode (remote management)
+
+1. Copy the script to any Linux/Mac system
+2. Ensure prerequisites are installed:
+   ```bash
+   # Check for curl
+   curl --version
+   
+   # Check for jq
+   jq --version
+   ```
+3. Make it executable and run:
+   ```bash
+   chmod +x dgcat-admin.sh
+   ./dgcat-admin.sh
    ```
 
 ---
@@ -70,6 +127,8 @@ MAX_BACKUPS=30
 
 - **BACKUP_DIR**: Where backups and logs are stored
 - **MAX_BACKUPS**: Number of backups to retain per datagroup (oldest are automatically deleted)
+
+> **Note:** In REST API mode, backups are stored locally on the machine running the script.
 
 ### Partition Management
 
@@ -98,19 +157,90 @@ These are pre-configured BIG-IP datagroups that cannot be modified or deleted. A
 
 ---
 
-## Main Menu
+## REST API Mode
+
+### Requirements
+
+- **curl** - For making HTTP requests
+- **jq** - For JSON parsing
+- Network access to the BIG-IP management interface (typically port 443)
+- Valid BIG-IP credentials with appropriate permissions
+
+### Connection Setup
+
+When you select REST API mode, you'll be prompted for connection details:
+
+```
+════════════════════════════════════════════════════════════════
+  REST API Connection Setup
+════════════════════════════════════════════════════════════════
+
+  Enter BIG-IP hostname or IP: 192.168.1.245
+  Enter username: admin
+  Enter password: ********
+
+  [....] Testing connection to 192.168.1.245...
+  [ OK ]  Connected successfully
+  [ OK ]  TMOS Version: 17.1.1
+  [ OK ]  All partitions validated
+```
+
+### REST API Menu
+
+REST API mode provides a streamlined menu with the most common operations:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v1.0                        ║
+  ║                    DGCAT-Admin v2.0                        ║
   ║               F5 BIG-IP Administration Tool                ║
+  ╠════════════════════════════════════════════════════════════╣
+    Mode: REST API - 192.168.1.245
+  ╠════════════════════════════════════════════════════════════╣
+  ║                                                            ║
+  ║   1)  View Datagroup                                       ║
+  ║   2)  Create/Update Datagroup or URL Category from CSV     ║
+  ║   3)  Export Datagroup or URL Category to CSV              ║
+  ║   4)  Edit a Datagroup or URL Category                     ║
+  ║                                                            ║
+  ╠════════════════════════════════════════════════════════════╣
+  ║   0)  Exit                                                 ║
+  ╚════════════════════════════════════════════════════════════╝
+```
+
+### REST API Limitations
+
+Some operations are only available in TMSH mode:
+
+| Feature | TMSH | REST API |
+|---------|:----:|:--------:|
+| View Datagroups | ✓ | ✓ |
+| Create/Update from CSV | ✓ | ✓ |
+| Export to CSV | ✓ | ✓ |
+| Edit Datagroups | ✓ | ✓ |
+| List All Datagroups | ✓ | — |
+| Delete Datagroups | ✓ | — |
+| Convert URL Category | ✓ | — |
+| External Datagroups | ✓ | — |
+
+> **Note:** REST API mode supports **internal datagroups only**. External datagroups require filesystem access and must be managed via TMSH mode.
+
+---
+
+## TMSH Mode Menu
+
+```
+  ╔════════════════════════════════════════════════════════════╗
+  ║                    DGCAT-Admin v2.0                        ║
+  ║               F5 BIG-IP Administration Tool                ║
+  ╠════════════════════════════════════════════════════════════╣
+    Mode: TMSH
   ╠════════════════════════════════════════════════════════════╣
   ║                                                            ║
   ║   1)  List All Datagroups                                  ║
   ║   2)  View Datagroup Contents                              ║
-  ║   3)  Create Datagroup / URL Category from CSV             ║
-  ║   4)  Delete Datagroup / URL Category                      ║
-  ║   5)  Export Datagroup / URL Category to CSV               ║
+  ║   3)  Create/Update Datagroup or URL Category from CSV     ║
+  ║   4)  Delete Datagroup or URL Category                     ║
+  ║   5)  Export Datagroup or URL Category to CSV              ║
   ║   6)  Convert URL Category to Datagroup                    ║
   ║   7)  Edit a Datagroup or URL Category                     ║
   ║                                                            ║
@@ -121,7 +251,7 @@ These are pre-configured BIG-IP datagroups that cannot be modified or deleted. A
 
 ---
 
-## Option 1: List All Datagroups
+## Option 1: List All Datagroups (TMSH Only)
 
 Displays all datagroups across configured partitions with details:
 
@@ -145,7 +275,7 @@ View all entries in a specific datagroup.
 2. Enter datagroup name
 3. View displays key/value pairs
 
-For external datagroups, the associated file reference is also shown.
+For external datagroups (TMSH mode), the associated file reference is also shown.
 
 ---
 
@@ -159,7 +289,7 @@ Create a new datagroup or URL category from a CSV file, or restore/merge into an
 2. Select partition
 3. Enter datagroup name
 4. If exists: choose **Overwrite** or **Merge**
-5. Select class:
+5. Select class (TMSH mode only):
    - **Internal** - Stored in bigip.conf (best for <1000 entries)
    - **External** - Stored in separate file (best for 1000+ entries)
 6. Select type:
@@ -170,6 +300,8 @@ Create a new datagroup or URL category from a CSV file, or restore/merge into an
 8. Select format:
    - **Keys only** - Single column (e.g., list of domains)
    - **Keys and Values** - Two columns (e.g., domain,action)
+
+> **Note:** In REST API mode, only internal datagroups can be created.
 
 ### Creating a URL Category
 
@@ -199,7 +331,7 @@ blocked.site,deny
 
 ---
 
-## Option 4: Delete Datagroup/URL Category
+## Option 4: Delete Datagroup/URL Category (TMSH Only)
 
 Permanently delete a datagroup or URL category.
 
@@ -251,7 +383,7 @@ Export contents to a CSV file for backup or transfer.
 
 ---
 
-## Option 6: Convert URL Category to Datagroup
+## Option 6: Convert URL Category to Datagroup (TMSH Only)
 
 Convert URLs from a URL category into a string datagroup for use with SSLO or iRules.
 
@@ -387,12 +519,14 @@ For numeric values like port numbers.
 - Best for smaller datasets (<1000 entries)
 - Loaded into memory at config load time
 - Backed up with standard UCS backups
+- **Supported in both TMSH and REST API modes**
 
 ### External Datagroups
 
 - Stored in separate files under `/config/filestore/`
 - Best for large datasets (1000+ entries)
 - Referenced by the datagroup, loaded on demand
+- **TMSH mode only** (requires filesystem access)
 
 ---
 
@@ -409,9 +543,14 @@ Backups are created automatically before:
 
 ### Backup Location
 
-All backups are stored in:
+**TMSH mode:**
 ```
 /shared/tmp/dgcat-admin-backups/
+```
+
+**REST API mode:**
+```
+/shared/tmp/dgcat-admin-backups/   (or configured BACKUP_DIR on local system)
 ```
 
 ### Backup Naming
@@ -485,31 +624,64 @@ Each session creates a log file:
 
 The log captures all operations, warnings, and errors for the session.
 
+In REST API mode, the log also records the target BIG-IP hostname.
+
 ---
 
 ## Troubleshooting
 
-### "Cannot query datagroups"
+### TMSH Mode Issues
+
+#### "Cannot query datagroups"
 
 **Cause:** Insufficient tmsh privileges  
 **Solution:** Run as root or a user with LTM datagroup permissions
 
-### "Partition does not exist"
+#### "Partition does not exist"
 
 **Cause:** Configured partition not found on system  
 **Solution:** Edit `PARTITIONS` in the script configuration
 
-### "Could not create backup directory"
+#### "Could not create backup directory"
 
 **Cause:** Permissions issue or disk full  
 **Solution:** Check `/shared/tmp/` permissions and available space
 
-### External datagroup file not found
+#### External datagroup file not found
 
 **Cause:** File reference exists but actual file missing  
 **Solution:** Check `/config/filestore/files_d/{partition}_d/data_group_d/`
 
-### Windows line endings warning
+### REST API Mode Issues
+
+#### "curl not found"
+
+**Cause:** curl is not installed  
+**Solution:** Install curl (`apt install curl`, `yum install curl`, or `brew install curl`)
+
+#### "jq not found"
+
+**Cause:** jq is not installed  
+**Solution:** Install jq (`apt install jq`, `yum install jq`, or `brew install jq`)
+
+#### "Connection failed" or "401 Unauthorized"
+
+**Cause:** Wrong hostname, credentials, or network issue  
+**Solution:** Verify BIG-IP is reachable, credentials are correct, and user has API access
+
+#### "Partition not found on target system"
+
+**Cause:** Configured partition doesn't exist on the remote BIG-IP  
+**Solution:** Edit `PARTITIONS` in the script or verify the partition exists on the target
+
+#### "External datagroups are not supported in REST API mode"
+
+**Cause:** Attempting to work with external datagroups remotely  
+**Solution:** Use TMSH mode for external datagroup operations
+
+### General Issues
+
+#### Windows line endings warning
 
 **Cause:** CSV file created on Windows with CRLF line endings  
 **Solution:** Tool automatically converts to Unix format (LF)
