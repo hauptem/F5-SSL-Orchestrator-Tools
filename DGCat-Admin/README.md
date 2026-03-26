@@ -408,7 +408,7 @@ Interactive editor for making multiple changes before applying.
 | `a` | Add new entry |
 | `d` | Delete entry (by number or name) |
 | `x` | Delete by pattern (bulk delete matching entries) |
-| `w` | **Apply changes** (write to system) |
+| `w` | Apply changes (write to system) |
 | `q` | Done (return to main menu) |
 
 ### Staged Editing
