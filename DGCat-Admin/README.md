@@ -58,14 +58,13 @@ When you start the tool, you'll choose your operation mode:
   ║                    DGCAT-Admin v2.0                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
-  ║                                                            ║
-  ║   Select operation mode:                                   ║
+  ║   Select operating mode:                                   ║
   ║                                                            ║
   ║    1)  TMSH     - Use tmsh commands                        ║
   ║    2)  REST API - Use iControl REST API                    ║
   ║                                                            ║
+  ╠════════════════════════════════════════════════════════════╣
   ║    0)  Exit                                                ║
-  ║                                                            ║
   ╚════════════════════════════════════════════════════════════╝
 ```
 
