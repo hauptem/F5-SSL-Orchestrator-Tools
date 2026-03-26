@@ -56,11 +56,6 @@ When you start the tool, you'll choose your operation mode:
   ╚════════════════════════════════════════════════════════════╝
 ```
 
-| Mode | Use When |
-|------|----------|
-| **TMSH** | Running directly on a BIG-IP, or have tmsh access |
-| **REST API** | Managing a remote BIG-IP over the network |
-
 ---
 
 ## Installation
