@@ -167,9 +167,9 @@ When you select REST API mode, you'll be prompted for connection details:
   Enter username: admin
   Enter password: ********
 
-  [....] Testing connection to 192.168.1.245...
+  [....] Connecting to 192.168.1.245...
   [ OK ]  Connected successfully
-  [ OK ]  TMOS Version: 17.1.1
+  [ OK ]  TMOS Version: 17.5.1.5
   [ OK ]  All partitions validated
 ```
 
