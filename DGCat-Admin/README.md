@@ -35,8 +35,7 @@ DGCat-Admin makes managing those site lists very easy.
 Version 2.0 adds the ability to manage BIG-IP datagroups and URL categories remotely using the iControl REST API. This means you can:
 
 - Run the tool from any Linux/Mac system with network access to your BIG-IP
-- Manage multiple BIG-IP devices without copying the script to each one
-- Use the same familiar interface whether local or remote
+- Manage multiple BIG-IP devices remotely
 
 ### Mode Selection
 
