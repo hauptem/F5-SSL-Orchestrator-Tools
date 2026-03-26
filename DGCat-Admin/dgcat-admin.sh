@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# DGCat-Admin - F5 BIG-IP Administration Tool
+# DGCat-Admin - F5 BIG-IP Datagroup / URL Category Administration Tool
 # =============================================================================
 # Version:  1.1
 # Author:   Eric Haupt
@@ -1188,15 +1188,15 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v1.0                        ${NC}${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v1.1                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}   F5 BIG-IP Datagroup / URL Category Administration Tool   ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}List All Datagroups${NC}                                  ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}View Datagroup Contents${NC}                              ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Create or Update Datagroup / URL Category from CSV${NC}   ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Delete Datagroup / URL Category${NC}                      ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Export Datagroup / URL Category to CSV${NC}               ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}View Datagroup Content${NC}                               ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Create or Update Datagroup or URL Category from CSV${NC}  ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Delete Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}6)${NC}  ${WHITE}Convert URL Category to Datagroup${NC}                    ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}7)${NC}  ${WHITE}Edit a Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
@@ -1313,10 +1313,10 @@ menu_view_datagroup() {
 
 # Option 3: Create/Restore from CSV (Datagroup or URL Category)
 menu_create_from_csv() {
-    log_section "Create/Update/Restore from CSV"
+    log_section "Create/Restore from CSV"
     
     echo ""
-    echo -e "  ${WHITE}What would you like to create?${NC}"
+    echo -e "  ${WHITE}What would you like to create or update?${NC}"
     echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup (LTM data-group for iRules/policies)${NC}"
     echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category (Custom URL category for SSLO/SWG)${NC}"
     echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
@@ -1380,7 +1380,7 @@ menu_create_datagroup() {
     local restore_mode=""
     
     if [ -n "${existing_class}" ]; then
-        # Datagroup exists - this is a restore operation
+        # Datagroup exists - this is a merge or restore operation
         dg_class="${existing_class}"
         dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
         
@@ -3007,7 +3007,14 @@ menu_create_url_category() {
         log_info "Existing: ${existing_count}, New unique: ${new_added}, Final: ${final_count}"
         
         # Replace converted_urls with only the new ones
-        converted_urls=("${new_urls[@]}")
+        if [ ${#new_urls[@]} -gt 0 ]; then
+            converted_urls=("${new_urls[@]}")
+        else
+            converted_urls=()
+            log_info "No new URLs to add - all entries already exist in category."
+            press_enter_to_continue
+            return
+        fi
     fi
     
     # Variables for category settings
