@@ -441,25 +441,6 @@ When you press `w`:
 
 ---
 
-## Internal vs External Datagroups
-
-### Internal Datagroups
-
-- Stored directly in `bigip.conf`
-- Best for smaller datasets (<1000 entries)
-- Loaded into memory at config load time
-- Backed up with standard UCS backups
-- **Supported in both TMSH and REST API modes**
-
-### External Datagroups
-
-- Stored in separate files under `/config/filestore/`
-- Best for large datasets (1000+ entries)
-- Referenced by the datagroup, loaded on demand
-- **TMSH mode only** (requires filesystem access)
-
----
-
 ## Backup System
 
 ### Automatic Backups
