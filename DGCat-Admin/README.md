@@ -310,24 +310,6 @@ Create a new datagroup or URL category from a CSV file, or restore/merge into an
 4. Enter path to CSV file (domains or URLs, one per line)
 5. Select default action: `allow`, `block`, or `confirm`
 
-### CSV File Format
-
-**Keys only (domains):**
-```
-example.com
-.wildcard.com
-subdomain.example.org
-```
-
-**Keys and values:**
-```
-example.com,bypass
-internal.corp,allow
-blocked.site,deny
-```
-
-**Comments:** Lines starting with `#` are ignored.
-
 ---
 
 ## Option 4: Delete Datagroup or URL Category
