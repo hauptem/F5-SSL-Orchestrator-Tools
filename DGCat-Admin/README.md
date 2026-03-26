@@ -15,9 +15,9 @@ SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories f
 - Each host or site added directly becomes an expression in the APM policy
 - Large lists could degrade policy performance and are not easily manageable
 
-**The recommended approach:** Use external datagroups or URL categories for SSLO security policy rules. They're optimized for fast lookups, keep policies clean and are operationally easier to maintain.
+**The recommended approach:** Use datagroups or URL categories for SSLO security policy rules. They're optimized for fast lookups, keep policies clean and are operationally easier to maintain.
 
-DGCat-Admin makes managing those site lists very easy without any manual tmsh interaction. 
+DGCat-Admin makes managing those site lists very easy. 
 
 - Need to export a few massive datagroups or custom url categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
 - Need to ingest a large number of subnets or hosts from an excel spreadsheet into a datagroup for SSLO security policy use?
@@ -25,17 +25,6 @@ DGCat-Admin makes managing those site lists very easy without any manual tmsh in
 - Want to take a datagroup and convert it to a custom URL Category?
 
 **This tool was designed specifically for those purposes.**
-
-### Key Features
-
-- **Two operation modes**: TMSH (local) or REST API (remote)
-- Manage both **internal** and **external** datagroups
-- Create and manage **custom URL categories** for SSLO/SWG
-- **Bulk import/export** via CSV files
-- **Automatic backups** before any modification
-- **Type validation** (string, address, integer)
-- **Convert** between URL categories and datagroups
-- **Staged editing** - make multiple changes, apply once
 
 ---
 
