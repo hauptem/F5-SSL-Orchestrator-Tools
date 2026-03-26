@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================================================
-# DGCat-Admin - F5 BIG-IP Datagroup / URL Category Administration Tool
+# DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version:  1.1
+# Version:  2.0
 # Author:   Eric Haupt
 #
 # Requirements: BIG-IP TMOS 17.x or higher
@@ -59,6 +59,24 @@ PREVIEW_LINES=5
 
 # Parsed partition array (populated at runtime)
 declare -a PARTITION_LIST
+
+# =============================================================================
+# SESSION MODE VARIABLES
+# =============================================================================
+
+# Session mode: "tmsh" or "rest-api"
+# - tmsh:     Uses tmsh commands directly (must run on BIG-IP or have tmsh access)
+# - rest-api: Uses REST API via curl (can run from any machine with network access)
+SESSION_MODE=""
+
+# REST API connection settings (used only in rest-api mode)
+REMOTE_HOST=""
+REMOTE_USER=""
+REMOTE_PASS=""
+
+# API response storage (used only in REST API mode)
+API_RESPONSE=""
+API_HTTP_CODE=""
 
 # =============================================================================
 # COLORS
@@ -368,12 +386,628 @@ prompt_save_config() {
     save_choice="${save_choice:-yes}"
     if [ "${save_choice}" == "yes" ]; then
         log_step "Saving configuration..."
-        if tmsh save sys config 2>/dev/null; then
+        if save_config; then
             log_ok "Configuration saved."
         else
-            log_warn "Could not save configuration. Run 'tmsh save sys config' manually."
+            if [ "${SESSION_MODE}" == "rest-api" ]; then
+                log_warn "Could not save configuration. Save manually via BIG-IP GUI or tmsh."
+            else
+                log_warn "Could not save configuration. Run 'tmsh save sys config' manually."
+            fi
         fi
     fi
+}
+
+# =============================================================================
+# REST API MODE FUNCTIONS
+# =============================================================================
+# These functions provide REST API access to BIG-IP for REST API operations.
+# Used only when SESSION_MODE="rest-api"
+
+# -----------------------------------------------------------------------------
+# API Helper Functions
+# -----------------------------------------------------------------------------
+
+# Base API request function
+# Args: method, endpoint, [data]
+# Sets: API_RESPONSE, API_HTTP_CODE
+# Returns: 0 on success (2xx), 1 on failure
+api_request() {
+    local method="$1"
+    local endpoint="$2"
+    local data="${3:-}"
+    
+    local url="https://${REMOTE_HOST}${endpoint}"
+    local auth="${REMOTE_USER}:${REMOTE_PASS}"
+    
+    local curl_opts=(
+        -sk
+        -u "${auth}"
+        -H "Content-Type: application/json"
+        -X "${method}"
+        -w "\n%{http_code}"
+    )
+    
+    if [ -n "${data}" ]; then
+        curl_opts+=(-d "${data}")
+    fi
+    
+    local response
+    response=$(curl "${curl_opts[@]}" "${url}" 2>/dev/null) || {
+        API_RESPONSE=""
+        API_HTTP_CODE="000"
+        return 1
+    }
+    
+    # Split response body and HTTP code
+    API_HTTP_CODE=$(echo "${response}" | tail -1)
+    API_RESPONSE=$(echo "${response}" | sed '$d')
+    
+    # Check for success (2xx codes)
+    if [[ "${API_HTTP_CODE}" =~ ^2[0-9]{2}$ ]]; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# GET request wrapper
+api_get() {
+    local endpoint="$1"
+    api_request "GET" "${endpoint}"
+    return $?
+}
+
+# POST request wrapper
+api_post() {
+    local endpoint="$1"
+    local data="$2"
+    api_request "POST" "${endpoint}" "${data}"
+    return $?
+}
+
+# PATCH request wrapper
+api_patch() {
+    local endpoint="$1"
+    local data="$2"
+    api_request "PATCH" "${endpoint}" "${data}"
+    return $?
+}
+
+# DELETE request wrapper
+api_delete() {
+    local endpoint="$1"
+    api_request "DELETE" "${endpoint}"
+    return $?
+}
+
+# -----------------------------------------------------------------------------
+# REST API Connection Functions
+# -----------------------------------------------------------------------------
+
+# Prompt for REST API connection details and test connection
+# Returns: 0 on successful connection, 1 on failure
+setup_remote_connection() {
+    log_section "REST API Connection Setup"
+    
+    echo ""
+    read -rp "  BIG-IP hostname or IP: " REMOTE_HOST
+    
+    if [ -z "${REMOTE_HOST}" ]; then
+        log_error "No hostname provided."
+        return 1
+    fi
+    
+    read -rp "  Username: " REMOTE_USER
+    
+    if [ -z "${REMOTE_USER}" ]; then
+        log_error "No username provided."
+        return 1
+    fi
+    
+    read -srp "  Password: " REMOTE_PASS
+    echo ""
+    
+    if [ -z "${REMOTE_PASS}" ]; then
+        log_error "No password provided."
+        return 1
+    fi
+    
+    # Test connection
+    log_step "Connecting to ${REMOTE_HOST}..."
+    if api_get "/mgmt/tm/sys/version"; then
+        local version
+        version=$(echo "${API_RESPONSE}" | jq -r '.entries[].nestedStats.entries.Version.description // empty' 2>/dev/null | head -1)
+        if [ -n "${version}" ]; then
+            log_ok "Connected to BIG-IP version ${version}"
+        else
+            log_ok "Connected to ${REMOTE_HOST}"
+        fi
+        return 0
+    else
+        if [ "${API_HTTP_CODE}" == "401" ]; then
+            log_error "Authentication failed. Check username/password."
+        elif [ "${API_HTTP_CODE}" == "000" ]; then
+            log_error "Connection failed. Check hostname and network connectivity."
+        else
+            log_error "Connection failed. HTTP ${API_HTTP_CODE}"
+        fi
+        return 1
+    fi
+}
+
+# Display mode selection menu
+# Sets: SESSION_MODE
+# Returns: 0 always
+select_session_mode() {
+    clear
+    echo ""
+    echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v2.0                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${WHITE}Select operating mode:${NC}                                   ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}    ${YELLOW}1)${NC}  ${WHITE}TMSH     - Use tmsh commands locally${NC}                ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}    ${YELLOW}2)${NC}  ${WHITE}REST API - Use iControl REST API${NC}                    ${CYAN}║${NC}"
+	echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+    echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"  
+    echo -e "  ${CYAN}║${NC}    ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                ${CYAN}║${NC}"
+    echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    while true; do
+        read -rp "  Select [0-2]: " mode_choice
+        
+        case "${mode_choice}" in
+            1)
+                SESSION_MODE="tmsh"
+                return 0
+                ;;
+            2)
+                SESSION_MODE="rest-api"
+                return 0
+                ;;
+            0)
+                echo ""
+                echo -e "  ${WHITE}Exiting.${NC}"
+                echo ""
+                exit 0
+                ;;
+            *)
+                log_warn "Invalid selection. Please choose 0, 1, or 2."
+                ;;
+        esac
+    done
+}
+
+# Pre-flight checks for REST API mode
+# Validates dependencies and establishes connection
+# Returns: 0 on success, exits on critical failure
+preflight_checks_rest_api() {
+    log_section "Pre-Flight Checks (REST API Mode)"
+    
+    # Check for curl
+    if ! command -v curl &>/dev/null; then
+        log_error "curl not found. Required for REST API operations."
+        log_error "Install curl and try again."
+        exit 1
+    fi
+    log_ok "curl found"
+    
+    # Check for jq
+    if ! command -v jq &>/dev/null; then
+        log_error "jq not found. Required for JSON parsing."
+        log_error "Install jq and try again."
+        exit 1
+    fi
+    log_ok "jq found"
+    
+    # Parse partitions
+    parse_partitions
+    if [ ${#PARTITION_LIST[@]} -eq 0 ]; then
+        log_error "No partitions configured. Check PARTITIONS setting."
+        exit 1
+    fi
+    log_ok "Configured partitions: ${PARTITIONS}"
+    
+    # Establish REST API connection (with retry loop)
+    while true; do
+        if setup_remote_connection; then
+            break
+        fi
+        echo ""
+        read -rp "  Retry connection? (yes/no) [yes]: " retry
+        retry="${retry:-yes}"
+        if [ "${retry}" != "yes" ]; then
+            log_info "Exiting."
+            exit 0
+        fi
+    done
+    
+    # Validate partitions exist on target system
+    log_step "Validating partitions on target system..."
+    local invalid_count=0
+    for partition in "${PARTITION_LIST[@]}"; do
+        if ! partition_exists_remote "${partition}"; then
+            log_warn "Partition '${partition}' not found on ${REMOTE_HOST}"
+            invalid_count=$((invalid_count + 1))
+        fi
+    done
+    
+    if [ ${invalid_count} -gt 0 ]; then
+        log_warn "${invalid_count} configured partition(s) not found. They will be skipped."
+    else
+        log_ok "All partitions validated"
+    fi
+    
+    # Setup backup directory on local machine
+    if ! ensure_backup_dir; then
+        log_warn "Cannot create or access backup directory: ${BACKUP_DIR}"
+        log_warn "Backups will be disabled. Proceed with caution."
+    else
+        log_ok "Local backup directory: ${BACKUP_DIR}"
+    fi
+    
+    log ""
+    log_info "REST API mode ready. Connected to: ${REMOTE_HOST}"
+    log_info "Log file: ${LOGFILE}"
+}
+
+# Pre-flight checks for local mode (existing logic, renamed for clarity)
+preflight_checks_tmsh() {
+    log_section "Pre-Flight Checks (TMSH Mode)"
+
+    # Check for tmsh
+    if ! command -v tmsh &>/dev/null; then
+        log_error "tmsh not found. This script must be run on a BIG-IP."
+        log_error "Use REST API mode to connect to a BIG-IP from another machine."
+        exit 1
+    fi
+    log_ok "tmsh found"
+
+    # Verify we can query datagroups (this confirms sufficient privileges)
+    if ! tmsh list ltm data-group internal one-line &>/dev/null; then
+        log_error "Cannot query datagroups. Check tmsh access and privileges."
+        exit 1
+    fi
+    log_ok "Datagroup access verified"
+
+    # Get current user for logging
+    local current_user
+    current_user=$(whoami 2>/dev/null || echo "unknown")
+    log_ok "Running as: ${current_user}"
+
+    # Get TMOS version for logging
+    local tmos_version
+    tmos_version=$(tmsh show sys version | grep "^\s*Version" | awk '{print $2}' | head -1 2>/dev/null || echo "unknown")
+    log_ok "TMOS Version: ${tmos_version}"
+
+    # Ensure backup directory exists
+    if ! ensure_backup_dir; then
+        log_warn "Cannot create or access backup directory: ${BACKUP_DIR}"
+        log_warn "Backups will be disabled. Proceed with caution."
+    else
+        log_ok "Backup/Log directory: ${BACKUP_DIR}"
+    fi
+
+    # Parse and validate configured partitions
+    parse_partitions
+    if [ ${#PARTITION_LIST[@]} -eq 0 ]; then
+        log_error "No partitions configured. Check PARTITIONS setting."
+        exit 1
+    fi
+    log_ok "Configured partitions: ${PARTITIONS}"
+    validate_partitions
+
+    log ""
+    log_info "TMSH mode ready."
+    log_info "Log file: ${LOGFILE}"
+}
+
+# -----------------------------------------------------------------------------
+# REST API System Functions
+# -----------------------------------------------------------------------------
+
+# Get BIG-IP version via REST API
+get_version_remote() {
+    if api_get "/mgmt/tm/sys/version"; then
+        echo "${API_RESPONSE}" | jq -r '.entries[].nestedStats.entries.Version.description // "unknown"' 2>/dev/null | head -1
+        return 0
+    fi
+    echo "unknown"
+    return 1
+}
+
+# Save configuration via REST API
+save_config_remote() {
+    local data='{"command":"save"}'
+    if api_post "/mgmt/tm/sys/config" "${data}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Check if partition exists via REST API
+partition_exists_remote() {
+    local partition="$1"
+    if api_get "/mgmt/tm/auth/partition/${partition}"; then
+        return 0
+    fi
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# REST API Internal Datagroup Functions
+# -----------------------------------------------------------------------------
+
+# Get list of internal datagroups in a partition via REST API
+# Returns: partition|name|internal lines
+get_internal_datagroup_list_remote() {
+    local partition="$1"
+    
+    if ! api_get "/mgmt/tm/ltm/data-group/internal?\$filter=partition%20eq%20${partition}"; then
+        return 1
+    fi
+    
+    # Parse JSON response - exclude app service datagroups
+    echo "${API_RESPONSE}" | jq -r --arg p "${partition}" '
+        .items // [] | .[] | 
+        select(.partition == $p) |
+        select(.fullPath | contains(".app/") | not) |
+        "\($p)|\(.name)|internal"
+    ' 2>/dev/null || true
+}
+
+# Check if internal datagroup exists via REST API
+internal_datagroup_exists_remote() {
+    local partition="$1"
+    local dg_name="$2"
+    
+    if api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Get internal datagroup type via REST API
+get_internal_datagroup_type_remote() {
+    local partition="$1"
+    local dg_name="$2"
+    
+    if api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+        echo "${API_RESPONSE}" | jq -r '.type // empty' 2>/dev/null
+        return 0
+    fi
+    return 1
+}
+
+# Get internal datagroup records as key|value lines via REST API
+get_internal_datagroup_records_remote() {
+    local partition="$1"
+    local dg_name="$2"
+    
+    if ! api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+        return 1
+    fi
+    
+    # Parse records from JSON
+    echo "${API_RESPONSE}" | jq -r '
+        .records // [] | .[] |
+        "\(.name)|\(.data // "")"
+    ' 2>/dev/null || true
+}
+
+# Create internal datagroup via REST API
+# Args: partition, name, type
+create_internal_datagroup_remote() {
+    local partition="$1"
+    local dg_name="$2"
+    local dg_type="$3"
+    
+    local data
+    data=$(jq -n \
+        --arg name "${dg_name}" \
+        --arg partition "${partition}" \
+        --arg type "${dg_type}" \
+        '{name: $name, partition: $partition, type: $type}')
+    
+    if api_post "/mgmt/tm/ltm/data-group/internal" "${data}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Apply records to internal datagroup (replace all) via REST API
+# Args: partition, name, records_json
+# records_json format: [{"name":"key1","data":"value1"},{"name":"key2"}]
+apply_internal_datagroup_records_remote() {
+    local partition="$1"
+    local dg_name="$2"
+    local records_json="$3"
+    
+    local data
+    data=$(jq -n --argjson records "${records_json}" '{records: $records}')
+    
+    if api_patch "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}" "${data}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Build JSON records array from key|value lines
+# Input: key|value lines via stdin
+# Output: JSON array suitable for REST API
+# Args: dg_type (for reference, not currently used in output format)
+build_records_json_remote() {
+    local dg_type="$1"
+    
+    jq -Rn '
+        [inputs | select(length > 0) | split("|") | 
+        if .[1] and .[1] != "" then
+            {name: .[0], data: .[1]}
+        else
+            {name: .[0]}
+        end]
+    '
+}
+
+# -----------------------------------------------------------------------------
+# REST API URL Category Functions
+# -----------------------------------------------------------------------------
+
+# Check if URL category exists via REST API
+url_category_exists_remote() {
+    local cat_name="$1"
+    
+    if api_get "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Get list of URL categories via REST API
+get_url_category_list_remote() {
+    if ! api_get "/mgmt/tm/sys/url-db/url-category"; then
+        return 1
+    fi
+    
+    echo "${API_RESPONSE}" | jq -r '.items // [] | .[].name' 2>/dev/null | sort || true
+}
+
+# Get URL entries from a category via REST API
+get_url_category_entries_remote() {
+    local cat_name="$1"
+    
+    if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}"; then
+        return 1
+    fi
+    
+    echo "${API_RESPONSE}" | jq -r '.urls // [] | .[].name' 2>/dev/null || true
+}
+
+# Get URL count from a category via REST API
+get_url_category_count_remote() {
+    local cat_name="$1"
+    
+    if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}"; then
+        echo "0"
+        return 1
+    fi
+    
+    echo "${API_RESPONSE}" | jq -r '.urls // [] | length' 2>/dev/null || echo "0"
+}
+
+# Create URL category via REST API
+# Args: cat_name, default_action, urls_json
+# urls_json format: [{"name":"https://example.com/","type":"exact-match"}]
+create_url_category_remote() {
+    local cat_name="$1"
+    local default_action="$2"
+    local urls_json="$3"
+    
+    local data
+    data=$(jq -n \
+        --arg name "${cat_name}" \
+        --arg displayName "${cat_name}" \
+        --arg defaultAction "${default_action}" \
+        --argjson urls "${urls_json}" \
+        '{name: $name, displayName: $displayName, defaultAction: $defaultAction, urls: $urls}')
+    
+    if api_post "/mgmt/tm/sys/url-db/url-category" "${data}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Add URLs to existing category via REST API
+# Args: cat_name, urls_json
+modify_url_category_add_remote() {
+    local cat_name="$1"
+    local urls_json="$2"
+    
+    # Get existing URLs first
+    if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}"; then
+        return 1
+    fi
+    
+    local existing_urls
+    existing_urls=$(echo "${API_RESPONSE}" | jq -c '.urls // []' 2>/dev/null)
+    
+    # Merge existing and new URLs, deduplicate by name
+    local merged_urls
+    merged_urls=$(jq -nc --argjson existing "${existing_urls}" --argjson new "${urls_json}" '$existing + $new | unique_by(.name)')
+    
+    local data
+    data=$(jq -n --argjson urls "${merged_urls}" '{urls: $urls}')
+    
+    if api_patch "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}" "${data}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Delete URLs from existing category via REST API
+# Args: cat_name, urls_to_delete (newline separated)
+modify_url_category_delete_remote() {
+    local cat_name="$1"
+    local urls_to_delete="$2"
+    
+    # Get existing URLs first
+    if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}"; then
+        return 1
+    fi
+    
+    local existing_urls
+    existing_urls=$(echo "${API_RESPONSE}" | jq -c '.urls // []' 2>/dev/null)
+    
+    # Build array of URLs to delete
+    local delete_array
+    delete_array=$(echo "${urls_to_delete}" | jq -R -s 'split("\n") | map(select(length > 0))')
+    
+    # Filter out deleted URLs
+    local remaining_urls
+    remaining_urls=$(jq -nc --argjson existing "${existing_urls}" --argjson delete "${delete_array}" '
+        $existing | map(select(.name as $n | $delete | index($n) | not))
+    ')
+    
+    local data
+    data=$(jq -n --argjson urls "${remaining_urls}" '{urls: $urls}')
+    
+    if api_patch "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}" "${data}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Replace all URLs in category (overwrite) via REST API
+# Args: cat_name, urls_json
+modify_url_category_replace_remote() {
+    local cat_name="$1"
+    local urls_json="$2"
+    
+    local data
+    data=$(jq -n --argjson urls "${urls_json}" '{urls: $urls}')
+    
+    if api_patch "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}" "${data}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Build URL JSON array from domain/URL list
+# Input: domain/url lines via stdin
+# Output: JSON array with proper type field for REST API
+build_urls_json_remote() {
+    jq -Rn '
+        [inputs | select(length > 0) | 
+        if contains("*") then
+            {name: ., type: "glob-match"}
+        else
+            {name: ., type: "exact-match"}
+        end]
+    '
 }
 
 # =============================================================================
@@ -391,10 +1025,21 @@ parse_partitions() {
     done
 }
 
-# Check if a partition exists on the system
-partition_exists() {
+# Check if a partition exists on the system (LOCAL - uses tmsh)
+partition_exists_local() {
     local partition="$1"
     tmsh list auth partition "${partition}" &>/dev/null
+    return $?
+}
+
+# Check if a partition exists (DISPATCHER)
+partition_exists() {
+    local partition="$1"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        partition_exists_remote "${partition}"
+    else
+        partition_exists_local "${partition}"
+    fi
     return $?
 }
 
@@ -457,62 +1102,23 @@ select_partition() {
 # PRE-FLIGHT CHECKS
 # =============================================================================
 
+# Dispatcher function - calls appropriate preflight based on session mode
 preflight_checks() {
-    log_section "Pre-Flight Checks"
-
-    # Check for tmsh
-    if ! command -v tmsh &>/dev/null; then
-        log_error "tmsh not found. This script must be run on a BIG-IP."
-        exit 1
-    fi
-    log_ok "tmsh found"
-
-    # Verify we can query datagroups (this confirms sufficient privileges)
-    if ! tmsh list ltm data-group internal one-line &>/dev/null; then
-        log_error "Cannot query datagroups. Check tmsh access and privileges."
-        exit 1
-    fi
-    log_ok "Datagroup access verified"
-
-    # Get current user for logging
-    local current_user
-    current_user=$(whoami 2>/dev/null || echo "unknown")
-    log_ok "Running as: ${current_user}"
-
-    # Get TMOS version for logging
-    local tmos_version
-    tmos_version=$(tmsh show sys version | grep "^\s*Version" | awk '{print $2}' | head -1 2>/dev/null || echo "unknown")
-    log_ok "TMOS Version: ${tmos_version}"
-
-    # Ensure backup directory exists
-    if ! ensure_backup_dir; then
-        log_warn "Cannot create or access backup directory: ${BACKUP_DIR}"
-        log_warn "Backups will be disabled. Proceed with caution."
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        preflight_checks_rest_api
     else
-        log_ok "Backup/Log directory: ${BACKUP_DIR}"
+        preflight_checks_tmsh
     fi
-
-    # Parse and validate configured partitions
-    parse_partitions
-    if [ ${#PARTITION_LIST[@]} -eq 0 ]; then
-        log_error "No partitions configured. Check PARTITIONS setting."
-        exit 1
-    fi
-    log_ok "Configured partitions: ${PARTITIONS}"
-    validate_partitions
-
-    log ""
-    log_info "Log file: ${LOGFILE}"
 }
 
 # =============================================================================
 # DATAGROUP OPERATIONS
 # =============================================================================
 
-# Get list of all INTERNAL datagroups from configured partitions
+# Get list of all INTERNAL datagroups from configured partitions (LOCAL - uses tmsh)
 # Returns: partition|name|internal lines
 # Note: Excludes datagroups inside application services (.app folders) as those are system-managed
-get_internal_datagroup_list() {
+get_internal_datagroup_list_local() {
     for partition in "${PARTITION_LIST[@]}"; do
         if partition_exists "${partition}"; then
             tmsh list ltm data-group internal "/${partition}/*" one-line 2>/dev/null \
@@ -527,10 +1133,23 @@ get_internal_datagroup_list() {
     done | sort -t'|' -k1,1 -k2,2
 }
 
-# Get list of all EXTERNAL datagroups from configured partitions
+# Get list of all INTERNAL datagroups (DISPATCHER)
+get_internal_datagroup_list() {
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        for partition in "${PARTITION_LIST[@]}"; do
+            if partition_exists "${partition}"; then
+                get_internal_datagroup_list_remote "${partition}"
+            fi
+        done | sort -t'|' -k1,1 -k2,2
+    else
+        get_internal_datagroup_list_local
+    fi
+}
+
+# Get list of all EXTERNAL datagroups from configured partitions (LOCAL - uses tmsh)
 # Returns: partition|name|external lines
 # Note: Excludes datagroups inside application services (.app folders) as those are system-managed
-get_external_datagroup_list() {
+get_external_datagroup_list_local() {
     for partition in "${PARTITION_LIST[@]}"; do
         if partition_exists "${partition}"; then
             tmsh list ltm data-group external "/${partition}/*" one-line 2>/dev/null \
@@ -545,6 +1164,17 @@ get_external_datagroup_list() {
     done | sort -t'|' -k1,1 -k2,2
 }
 
+# Get list of all EXTERNAL datagroups (DISPATCHER)
+# Note: External datagroups are NOT supported in REST API mode
+get_external_datagroup_list() {
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # External datagroups not supported in REST API mode - return empty
+        return 0
+    else
+        get_external_datagroup_list_local
+    fi
+}
+
 # Get combined list of all datagroups (internal and external)
 # Returns: partition|name|class lines
 get_all_datagroup_list() {
@@ -554,20 +1184,45 @@ get_all_datagroup_list() {
     } | sort -t'|' -k1,1 -k2,2
 }
 
-# Check if INTERNAL datagroup exists in specified partition
-internal_datagroup_exists() {
+# Check if INTERNAL datagroup exists in specified partition (LOCAL - uses tmsh)
+internal_datagroup_exists_local() {
     local partition="$1"
     local dg_name="$2"
     tmsh list ltm data-group internal "/${partition}/${dg_name}" 2>/dev/null | grep -q "data-group internal"
     return $?
 }
 
-# Check if EXTERNAL datagroup exists in specified partition
-external_datagroup_exists() {
+# Check if INTERNAL datagroup exists (DISPATCHER)
+internal_datagroup_exists() {
+    local partition="$1"
+    local dg_name="$2"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        internal_datagroup_exists_remote "${partition}" "${dg_name}"
+    else
+        internal_datagroup_exists_local "${partition}" "${dg_name}"
+    fi
+    return $?
+}
+
+# Check if EXTERNAL datagroup exists in specified partition (LOCAL - uses tmsh)
+external_datagroup_exists_local() {
     local partition="$1"
     local dg_name="$2"
     tmsh list ltm data-group external "/${partition}/${dg_name}" 2>/dev/null | grep -q "data-group external"
     return $?
+}
+
+# Check if EXTERNAL datagroup exists (DISPATCHER)
+# Note: External datagroups are NOT supported in REST API mode
+external_datagroup_exists() {
+    local partition="$1"
+    local dg_name="$2"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # External datagroups not supported in REST API mode
+        return 1
+    else
+        external_datagroup_exists_local "${partition}" "${dg_name}"
+    fi
 }
 
 # Check if datagroup exists (either internal or external)
@@ -587,8 +1242,8 @@ datagroup_exists() {
     return 0
 }
 
-# Get INTERNAL datagroup type (string, address, integer)
-get_internal_datagroup_type() {
+# Get INTERNAL datagroup type (string, address, integer) (LOCAL - uses tmsh)
+get_internal_datagroup_type_local() {
     local partition="$1"
     local dg_name="$2"
     tmsh list ltm data-group internal "/${partition}/${dg_name}" 2>/dev/null \
@@ -596,13 +1251,38 @@ get_internal_datagroup_type() {
         | awk '{print $2}' || true
 }
 
-# Get EXTERNAL datagroup type (string, ip, integer)
-get_external_datagroup_type() {
+# Get INTERNAL datagroup type (DISPATCHER)
+get_internal_datagroup_type() {
+    local partition="$1"
+    local dg_name="$2"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        get_internal_datagroup_type_remote "${partition}" "${dg_name}"
+    else
+        get_internal_datagroup_type_local "${partition}" "${dg_name}"
+    fi
+}
+
+# Get EXTERNAL datagroup type (string, ip, integer) (LOCAL - uses tmsh)
+get_external_datagroup_type_local() {
     local partition="$1"
     local dg_name="$2"
     tmsh list ltm data-group external "/${partition}/${dg_name}" 2>/dev/null \
         | grep "^\s*type" \
         | awk '{print $2}' || true
+}
+
+# Get EXTERNAL datagroup type (DISPATCHER)
+# Note: External datagroups are NOT supported in REST API mode
+get_external_datagroup_type() {
+    local partition="$1"
+    local dg_name="$2"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # External datagroups not supported in REST API mode
+        echo ""
+        return 1
+    else
+        get_external_datagroup_type_local "${partition}" "${dg_name}"
+    fi
 }
 
 # Get datagroup type for either internal or external
@@ -618,8 +1298,8 @@ get_datagroup_type() {
     fi
 }
 
-# Get INTERNAL datagroup records as "key|value" lines
-get_internal_datagroup_records() {
+# Get INTERNAL datagroup records as "key|value" lines (LOCAL - uses tmsh)
+get_internal_datagroup_records_local() {
     local partition="$1"
     local dg_name="$2"
     local config
@@ -658,6 +1338,17 @@ get_internal_datagroup_records() {
     '
 }
 
+# Get INTERNAL datagroup records (DISPATCHER)
+get_internal_datagroup_records() {
+    local partition="$1"
+    local dg_name="$2"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        get_internal_datagroup_records_remote "${partition}" "${dg_name}"
+    else
+        get_internal_datagroup_records_local "${partition}" "${dg_name}"
+    fi
+}
+
 # Get external datagroup file name
 get_external_datagroup_file() {
     local partition="$1"
@@ -669,9 +1360,16 @@ get_external_datagroup_file() {
 
 # Get EXTERNAL datagroup records as "key|value" lines
 # External datagroups store data in sys file data-group
+# Note: External datagroups are NOT supported in REST API mode
 get_external_datagroup_records() {
     local partition="$1"
     local dg_name="$2"
+    
+    # External datagroups not supported in REST API mode
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        log_error "External datagroups are not supported in REST API mode."
+        return 1
+    fi
     
     # Get the associated file name
     local file_name
@@ -831,8 +1529,8 @@ build_tmsh_records() {
 # Global to track space conversions during build
 SPACE_CONVERSIONS=0
 
-# Apply records to INTERNAL datagroup (atomic replace-all-with operation)
-apply_internal_datagroup_records() {
+# Apply records to INTERNAL datagroup (atomic replace-all-with operation) (LOCAL - uses tmsh)
+apply_internal_datagroup_records_local() {
     local partition="$1"
     local dg_name="$2"
     local records="$3"
@@ -849,6 +1547,56 @@ apply_internal_datagroup_records() {
         log_error "tmsh error: ${result}"
     fi
     return ${rc}
+}
+
+# Apply records to INTERNAL datagroup (DISPATCHER)
+# In local mode: expects tmsh-formatted records string
+# In remote mode: expects JSON records array
+apply_internal_datagroup_records() {
+    local partition="$1"
+    local dg_name="$2"
+    local records="$3"
+    
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # In remote mode, records should be JSON format
+        apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records}"
+    else
+        apply_internal_datagroup_records_local "${partition}" "${dg_name}" "${records}"
+    fi
+    return $?
+}
+
+# High-level function to apply records from arrays to internal datagroup
+# Handles mode-specific record building and application
+# Args: partition, dg_name, dg_type, keys_array_name, values_array_name
+apply_records_from_arrays() {
+    local partition="$1"
+    local dg_name="$2"
+    local dg_type="$3"
+    local keys_name=$4
+    local values_name=$5
+    
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # Build JSON from arrays and apply via REST API
+        eval "local keys_count=\${#${keys_name}[@]}"
+        
+        local records_json
+        records_json=$(
+            for ((i=0; i<keys_count; i++)); do
+                eval "local key=\"\${${keys_name}[$i]}\""
+                eval "local value=\"\${${values_name}[$i]:-}\""
+                echo "${key}|${value}"
+            done | build_records_json_remote "${dg_type}"
+        )
+        
+        apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"
+    else
+        # Build tmsh format and apply via tmsh
+        local records
+        records=$(build_tmsh_records "${keys_name}" "${values_name}" "${dg_type}")
+        apply_internal_datagroup_records_local "${partition}" "${dg_name}" "${records}"
+    fi
+    return $?
 }
 
 # Create external datagroup file in temp directory
@@ -1015,6 +1763,53 @@ apply_datagroup_records() {
     
     # This is for internal datagroups only
     apply_internal_datagroup_records "${partition}" "${dg_name}" "${records}"
+    return $?
+}
+
+# Create INTERNAL datagroup (LOCAL - uses tmsh)
+create_internal_datagroup_local() {
+    local partition="$1"
+    local dg_name="$2"
+    local dg_type="$3"
+    
+    local result
+    result=$(tmsh create ltm data-group internal "/${partition}/${dg_name}" type "${dg_type}" 2>&1)
+    local rc=$?
+    if [ ${rc} -ne 0 ]; then
+        echo "${result}"
+    fi
+    return ${rc}
+}
+
+# Create INTERNAL datagroup (DISPATCHER)
+create_internal_datagroup() {
+    local partition="$1"
+    local dg_name="$2"
+    local dg_type="$3"
+    
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        create_internal_datagroup_remote "${partition}" "${dg_name}" "${dg_type}"
+    else
+        create_internal_datagroup_local "${partition}" "${dg_name}" "${dg_type}"
+    fi
+    return $?
+}
+
+# Save system configuration (LOCAL - uses tmsh)
+save_config_local() {
+    if tmsh save sys config 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# Save system configuration (DISPATCHER)
+save_config() {
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        save_config_remote
+    else
+        save_config_local
+    fi
     return $?
 }
 
@@ -1188,21 +1983,40 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v1.1                        ${NC}${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}   F5 BIG-IP Datagroup / URL Category Administration Tool   ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v2.0                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}List All Datagroups${NC}                                  ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}View Datagroup Content${NC}                               ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Create or Update Datagroup or URL Category from CSV${NC}  ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Delete Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}6)${NC}  ${WHITE}Convert URL Category to Datagroup${NC}                    ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}7)${NC}  ${WHITE}Edit a Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
-    echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
-    echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # REST API mode menu
+        echo -e "  ${CYAN}${NC}  ${WHITE}Mode: ${GREEN}REST API${NC} - ${WHITE}${REMOTE_HOST}${NC}                            ${CYAN}${NC}"
+        echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}View Datagroup               ${NC}                        ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}Create/Update Datagroup or URL Category from CSV${NC}     ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Edit a Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
+        echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    else
+        # TMSH mode menu
+        echo -e "  ${CYAN}${NC}  ${WHITE}Mode: ${GREEN}TMSH${NC}                                             ${CYAN}${NC}"
+        echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}List All Datagroups${NC}                                  ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}View Datagroup Contents${NC}                              ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Create/Update Datagroup or URL Category from CSV${NC}     ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Delete Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}6)${NC}  ${WHITE}Convert URL Category to Datagroup${NC}                    ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}7)${NC}  ${WHITE}Edit a Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
+        echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    fi
     echo ""
 }
 
@@ -1263,7 +2077,7 @@ menu_view_datagroup() {
     
     # Select datagroup
     local selection dg_name dg_class
-    selection=$(select_datagroup "${partition}" "Enter datagroup name")
+    selection=$(select_datagroup "${partition}" "Enter datagroup name") || true
     if [ -z "${selection}" ]; then
         press_enter_to_continue
         return
@@ -1316,7 +2130,7 @@ menu_create_from_csv() {
     log_section "Create/Restore from CSV"
     
     echo ""
-    echo -e "  ${WHITE}What would you like to create or update?${NC}"
+    echo -e "  ${WHITE}What would you like to create?${NC}"
     echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup (LTM data-group for iRules/policies)${NC}"
     echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category (Custom URL category for SSLO/SWG)${NC}"
     echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
@@ -1339,7 +2153,7 @@ menu_create_from_csv() {
 
 # Option 3a: Create/Restore datagroup from CSV
 menu_create_datagroup() {
-    log_section "Create/Update/Restore Datagroup from CSV"
+    log_section "Create/Restore Datagroup from CSV"
     
     # Select partition
     local partition
@@ -1380,7 +2194,7 @@ menu_create_datagroup() {
     local restore_mode=""
     
     if [ -n "${existing_class}" ]; then
-        # Datagroup exists - this is a merge or restore operation
+        # Datagroup exists - this is a restore operation
         dg_class="${existing_class}"
         dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
         
@@ -1428,22 +2242,28 @@ menu_create_datagroup() {
         # New datagroup - ask for class and type
         
         # Select datagroup class (internal vs external)
-        echo ""
-        echo -e "  ${WHITE}Select datagroup class:${NC}"
-        echo -e "    ${YELLOW}1)${NC} ${WHITE}Internal - Stored in bigip.conf (best for <1000 entries)${NC}"
-        echo -e "    ${YELLOW}2)${NC} ${WHITE}External - Stored in separate file (best for large lists, 1000+ entries)${NC}"
-        echo ""
-        read -rp "  Select [1-2]: " class_choice
-        
-        case "${class_choice}" in
-            1) dg_class="internal" ;;
-            2) dg_class="external" ;;
-            *)
-                log_warn "Invalid selection."
-                press_enter_to_continue
-                return
-                ;;
-        esac
+        # External datagroups are NOT supported in REST API mode
+        if [ "${SESSION_MODE}" == "rest-api" ]; then
+            dg_class="internal"
+            log_info "REST API mode: Using internal datagroup (external not supported)."
+        else
+            echo ""
+            echo -e "  ${WHITE}Select datagroup class:${NC}"
+            echo -e "    ${YELLOW}1)${NC} ${WHITE}Internal - Stored in bigip.conf (best for <1000 entries)${NC}"
+            echo -e "    ${YELLOW}2)${NC} ${WHITE}External - Stored in separate file (best for large lists, 1000+ entries)${NC}"
+            echo ""
+            read -rp "  Select [1-2]: " class_choice
+            
+            case "${class_choice}" in
+                1) dg_class="internal" ;;
+                2) dg_class="external" ;;
+                *)
+                    log_warn "Invalid selection."
+                    press_enter_to_continue
+                    return
+                    ;;
+            esac
+        fi
         
         # Get datagroup type
         echo ""
@@ -1676,40 +2496,72 @@ menu_create_datagroup() {
     else
         # Internal datagroup workflow
         log_step "Building datagroup records..."
-        local records
-        records=$(build_tmsh_records FINAL_KEYS FINAL_VALUES "${dg_type}")
         
-        # Notify about space conversions
-        if [ ${SPACE_CONVERSIONS} -gt 0 ]; then
-            log_info "Note: ${SPACE_CONVERSIONS} value(s) contained spaces which were converted to underscores."
-            log_info "This is required for tmsh compatibility. Spaces can be restored on export."
-        fi
-        
-        # Convert type names for tmsh (address -> ip)
-        local tmsh_type="${dg_type}"
+        # Convert type names for tmsh/API (address -> ip)
+        local api_type="${dg_type}"
         if [ "${dg_type}" == "address" ]; then
-            tmsh_type="ip"
+            api_type="ip"
         fi
         
-        if [ -z "${restore_mode}" ]; then
-            # Create new internal datagroup
-            log_step "Creating internal datagroup '/${partition}/${dg_name}'..."
-            local create_error
-            if ! create_error=$(tmsh create ltm data-group internal "/${partition}/${dg_name}" type "${tmsh_type}" 2>&1); then
-                log_error "Failed to create datagroup: ${create_error}"
+        if [ "${SESSION_MODE}" == "rest-api" ]; then
+            # REST API mode: Build JSON records
+            local records_json
+            records_json=$(
+                for ((i=0; i<${#FINAL_KEYS[@]}; i++)); do
+                    echo "${FINAL_KEYS[$i]}|${FINAL_VALUES[$i]:-}"
+                done | build_records_json_remote "${dg_type}"
+            )
+            
+            if [ -z "${restore_mode}" ]; then
+                # Create new internal datagroup via REST API
+                log_step "Creating internal datagroup '/${partition}/${dg_name}'..."
+                if ! create_internal_datagroup_remote "${partition}" "${dg_name}" "${api_type}"; then
+                    log_error "Failed to create datagroup. HTTP ${API_HTTP_CODE}"
+                    [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                    press_enter_to_continue
+                    return
+                fi
+            fi
+            
+            # Apply records via REST API
+            log_step "Applying ${#FINAL_KEYS[@]} entries to datagroup..."
+            if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+                log_error "Failed to apply records to datagroup. HTTP ${API_HTTP_CODE}"
                 [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
                 press_enter_to_continue
                 return
             fi
-        fi
-        
-        # Apply records
-        log_step "Applying ${#FINAL_KEYS[@]} entries to datagroup..."
-        if ! apply_datagroup_records "${partition}" "${dg_name}" "${records}" "${dg_type}"; then
-            log_error "Failed to apply records to datagroup."
-            [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
-            press_enter_to_continue
-            return
+        else
+            # TMSH mode: Build tmsh records
+            local records
+            records=$(build_tmsh_records FINAL_KEYS FINAL_VALUES "${dg_type}")
+            
+            # Notify about space conversions
+            if [ ${SPACE_CONVERSIONS} -gt 0 ]; then
+                log_info "Note: ${SPACE_CONVERSIONS} value(s) contained spaces which were converted to underscores."
+                log_info "This is required for tmsh compatibility. Spaces can be restored on export."
+            fi
+            
+            if [ -z "${restore_mode}" ]; then
+                # Create new internal datagroup via tmsh
+                log_step "Creating internal datagroup '/${partition}/${dg_name}'..."
+                local create_error
+                if ! create_error=$(create_internal_datagroup_local "${partition}" "${dg_name}" "${api_type}"); then
+                    log_error "Failed to create datagroup: ${create_error}"
+                    [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                    press_enter_to_continue
+                    return
+                fi
+            fi
+            
+            # Apply records via tmsh
+            log_step "Applying ${#FINAL_KEYS[@]} entries to datagroup..."
+            if ! apply_internal_datagroup_records_local "${partition}" "${dg_name}" "${records}"; then
+                log_error "Failed to apply records to datagroup."
+                [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                press_enter_to_continue
+                return
+            fi
         fi
         
         log_ok "Internal datagroup '/${partition}/${dg_name}' saved with ${#FINAL_KEYS[@]} entries."
@@ -2097,7 +2949,7 @@ menu_export_datagroup() {
     
     # Select datagroup
     local selection dg_name dg_class
-    selection=$(select_datagroup "${partition}" "Enter datagroup name to export")
+    selection=$(select_datagroup "${partition}" "Enter datagroup name to export") || true
     if [ -z "${selection}" ]; then
         press_enter_to_continue
         return
@@ -2181,7 +3033,7 @@ menu_export_url_category() {
     log_section "Export URL Category to CSV"
     
     # Check if URL database is available
-    if ! tmsh list sys url-db url-category one-line &>/dev/null; then
+    if ! url_category_db_available; then
         log_error "URL database not available or accessible."
         log_info "This feature requires the URL filtering module."
         press_enter_to_continue
@@ -2374,37 +3226,98 @@ menu_export_url_category() {
 # URL CATEGORY FUNCTIONS
 # =============================================================================
 
-# Check if URL category exists
+# Check if URL database is available (LOCAL - uses tmsh)
+url_category_db_available_local() {
+    tmsh list sys url-db url-category one-line &>/dev/null
+    return $?
+}
+
+# Check if URL database is available (DISPATCHER)
+# Returns: 0 if URL categories are accessible, 1 if not
+url_category_db_available() {
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # In remote mode, try to list categories via REST API
+        if api_get "/mgmt/tm/sys/url-db/url-category"; then
+            return 0
+        fi
+        return 1
+    else
+        url_category_db_available_local
+    fi
+    return $?
+}
+
+# Check if URL category exists (LOCAL - uses tmsh)
 # Returns: 0 if exists, 1 if not
-url_category_exists() {
+url_category_exists_local() {
     local cat_name="$1"
     tmsh list sys url-db url-category "${cat_name}" &>/dev/null
     return $?
 }
 
-# Get list of custom URL categories
+# Check if URL category exists (DISPATCHER)
+url_category_exists() {
+    local cat_name="$1"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        url_category_exists_remote "${cat_name}"
+    else
+        url_category_exists_local "${cat_name}"
+    fi
+    return $?
+}
+
+# Get list of custom URL categories (LOCAL - uses tmsh)
 # Returns: category names, one per line
-get_url_category_list() {
+get_url_category_list_local() {
     tmsh list sys url-db url-category one-line 2>/dev/null \
         | grep "^sys url-db url-category" \
         | awk '{print $4}' \
         | sort || true
 }
 
-# Get URL entries from a URL category
+# Get list of custom URL categories (DISPATCHER)
+get_url_category_list() {
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        get_url_category_list_remote
+    else
+        get_url_category_list_local
+    fi
+}
+
+# Get URL entries from a URL category (LOCAL - uses tmsh)
 # Returns: raw URL entries, one per line
-get_url_category_entries() {
+get_url_category_entries_local() {
     local category="$1"
     tmsh list sys url-db url-category "${category}" urls 2>/dev/null \
         | grep -E '^\s*http' \
         | sed 's/^[[:space:]]*//; s/[[:space:]]*{.*$//' || true
 }
 
-# Get URL count from a URL category
-get_url_category_count() {
+# Get URL entries from a URL category (DISPATCHER)
+get_url_category_entries() {
+    local category="$1"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        get_url_category_entries_remote "${category}"
+    else
+        get_url_category_entries_local "${category}"
+    fi
+}
+
+# Get URL count from a URL category (LOCAL - uses tmsh)
+get_url_category_count_local() {
     local cat_name="$1"
     tmsh list sys url-db url-category "${cat_name}" urls 2>/dev/null \
         | grep -cE '^\s*http' || echo "0"
+}
+
+# Get URL count from a URL category (DISPATCHER)
+get_url_category_count() {
+    local cat_name="$1"
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        get_url_category_count_remote "${cat_name}"
+    else
+        get_url_category_count_local "${cat_name}"
+    fi
 }
 
 # Format URL for SSLO datagroup (domain-only format)
@@ -2736,37 +3649,43 @@ menu_convert_url_category() {
     fi
     
     # Select datagroup class (internal vs external)
-    echo ""
-    echo -e "  ${WHITE}Select datagroup class:${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Internal - Stored in bigip.conf (best for <1000 entries)${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}External - Stored in separate file (best for large lists)${NC}"
-    echo ""
-    
-    local recommended=""
-    if [ ${unique_count} -gt 1000 ]; then
-        recommended=" (recommended for ${unique_count} entries)"
-    fi
-    
-    read -rp "  Select [1-2]: " class_choice
-    
+    # Note: This function is disabled in REST API mode, but check anyway for safety
     local dg_class
-    case "${class_choice}" in
-        1) dg_class="internal" ;;
-        2) dg_class="external" ;;
-        *)
-            log_warn "Invalid selection."
-            press_enter_to_continue
-            return
-            ;;
-    esac
-    
-    if [ ${unique_count} -gt 1000 ] && [ "${dg_class}" == "internal" ]; then
-        log_warn "You have ${unique_count} entries. Internal datagroups work best with <1000 entries."
-        read -rp "  Continue with internal? (yes/no) [no]: " cont
-        if [ "${cont}" != "yes" ]; then
-            log_info "Aborted."
-            press_enter_to_continue
-            return
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        dg_class="internal"
+        log_info "REST API mode: Using internal datagroup (external not supported)."
+    else
+        echo ""
+        echo -e "  ${WHITE}Select datagroup class:${NC}"
+        echo -e "    ${YELLOW}1)${NC} ${WHITE}Internal - Stored in bigip.conf (best for <1000 entries)${NC}"
+        echo -e "    ${YELLOW}2)${NC} ${WHITE}External - Stored in separate file (best for large lists)${NC}"
+        echo ""
+        
+        local recommended=""
+        if [ ${unique_count} -gt 1000 ]; then
+            recommended=" (recommended for ${unique_count} entries)"
+        fi
+        
+        read -rp "  Select [1-2]: " class_choice
+        
+        case "${class_choice}" in
+            1) dg_class="internal" ;;
+            2) dg_class="external" ;;
+            *)
+                log_warn "Invalid selection."
+                press_enter_to_continue
+                return
+                ;;
+        esac
+        
+        if [ ${unique_count} -gt 1000 ] && [ "${dg_class}" == "internal" ]; then
+            log_warn "You have ${unique_count} entries. Internal datagroups work best with <1000 entries."
+            read -rp "  Continue with internal? (yes/no) [no]: " cont
+            if [ "${cont}" != "yes" ]; then
+                log_info "Aborted."
+                press_enter_to_continue
+                return
+            fi
         fi
     fi
     
@@ -2851,7 +3770,7 @@ menu_create_url_category() {
     log_section "Create URL Category from CSV"
     
     # Check if URL database is available
-    if ! tmsh list sys url-db url-category one-line &>/dev/null; then
+    if ! url_category_db_available; then
         log_error "URL database not available or accessible."
         log_info "This feature requires the URL filtering module."
         press_enter_to_continue
@@ -3071,31 +3990,69 @@ menu_create_url_category() {
     done
     
     # Create or update the URL category
-    if [ "${restore_mode}" == "overwrite" ]; then
-        # Delete and recreate
-        log_step "Removing existing URL category..."
-        if ! tmsh delete sys url-db url-category "${cat_name}" 2>/dev/null; then
-            log_warn "Could not delete existing category (may not exist)."
-        fi
-    fi
-    
-    if [ -z "${restore_mode}" ] || [ "${restore_mode}" == "overwrite" ]; then
-        # Create new category
-        log_step "Creating URL category '${cat_name}'..."
-        if ! tmsh create sys url-db url-category "${cat_name}" display-name "${cat_name}" default-action "${default_action}" urls add \{ ${urls_block} \} 2>&1; then
-            log_error "Failed to create URL category."
-            [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
-            press_enter_to_continue
-            return
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # REST API mode: use REST API
+        
+        # Build JSON URLs array
+        local urls_json
+        urls_json=$(printf '%s\n' "${converted_urls[@]}" | build_urls_json_remote)
+        
+        if [ "${restore_mode}" == "overwrite" ]; then
+            # Overwrite: Replace all URLs
+            log_step "Replacing URLs in category '${cat_name}'..."
+            if ! modify_url_category_replace_remote "${cat_name}" "${urls_json}"; then
+                log_error "Failed to update URL category. HTTP ${API_HTTP_CODE}"
+                [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                press_enter_to_continue
+                return
+            fi
+        elif [ -z "${restore_mode}" ]; then
+            # Create new category
+            log_step "Creating URL category '${cat_name}'..."
+            if ! create_url_category_remote "${cat_name}" "${default_action}" "${urls_json}"; then
+                log_error "Failed to create URL category. HTTP ${API_HTTP_CODE}"
+                [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                press_enter_to_continue
+                return
+            fi
+        else
+            # Merge mode - add to existing
+            log_step "Adding URLs to existing category '${cat_name}'..."
+            if ! modify_url_category_add_remote "${cat_name}" "${urls_json}"; then
+                log_error "Failed to update URL category. HTTP ${API_HTTP_CODE}"
+                [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                press_enter_to_continue
+                return
+            fi
         fi
     else
-        # Merge - modify existing
-        log_step "Adding URLs to existing category '${cat_name}'..."
-        if ! tmsh modify sys url-db url-category "${cat_name}" urls add \{ ${urls_block} \} 2>&1; then
-            log_error "Failed to update URL category."
-            [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
-            press_enter_to_continue
-            return
+        # TMSH mode: use tmsh
+        if [ "${restore_mode}" == "overwrite" ]; then
+            # Delete and recreate
+            log_step "Removing existing URL category..."
+            if ! tmsh delete sys url-db url-category "${cat_name}" 2>/dev/null; then
+                log_warn "Could not delete existing category (may not exist)."
+            fi
+        fi
+        
+        if [ -z "${restore_mode}" ] || [ "${restore_mode}" == "overwrite" ]; then
+            # Create new category
+            log_step "Creating URL category '${cat_name}'..."
+            if ! tmsh create sys url-db url-category "${cat_name}" display-name "${cat_name}" default-action "${default_action}" urls add \{ ${urls_block} \} 2>&1; then
+                log_error "Failed to create URL category."
+                [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                press_enter_to_continue
+                return
+            fi
+        else
+            # Merge - modify existing
+            log_step "Adding URLs to existing category '${cat_name}'..."
+            if ! tmsh modify sys url-db url-category "${cat_name}" urls add \{ ${urls_block} \} 2>&1; then
+                log_error "Failed to update URL category."
+                [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                press_enter_to_continue
+                return
+            fi
         fi
     fi
     
@@ -3737,6 +4694,12 @@ editor_submenu() {
                 # Apply changes atomically
                 if [ "${edit_type}" == "datagroup" ]; then
                     if [ "${dg_class}" == "external" ]; then
+                        # External datagroups only supported in local mode
+                        if [ "${SESSION_MODE}" == "rest-api" ]; then
+                            log_error "External datagroups cannot be edited in REST API mode."
+                            press_enter_to_continue
+                            continue
+                        fi
                         log_step "Applying changes to external datagroup..."
                         if update_external_datagroup "${partition}" "${dg_name}" "${dg_type}" working_keys working_values; then
                             log_ok "Changes applied successfully."
@@ -3747,15 +4710,35 @@ editor_submenu() {
                         fi
                     else
                         log_step "Applying changes to internal datagroup..."
-                        local records
-                        records=$(build_tmsh_records working_keys working_values "${dg_type}")
                         
-                        if apply_internal_datagroup_records "${partition}" "${dg_name}" "${records}"; then
-                            log_ok "Changes applied successfully."
+                        if [ "${SESSION_MODE}" == "rest-api" ]; then
+                            # REST API mode: Build JSON and apply via REST API
+                            local records_json
+                            records_json=$(
+                                for ((i=0; i<${#working_keys[@]}; i++)); do
+                                    echo "${working_keys[$i]}|${working_values[$i]:-}"
+                                done | build_records_json_remote "${dg_type}"
+                            )
+                            
+                            if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+                                log_ok "Changes applied successfully."
+                            else
+                                log_error "Failed to apply changes. HTTP ${API_HTTP_CODE}"
+                                press_enter_to_continue
+                                continue
+                            fi
                         else
-                            log_error "Failed to apply changes."
-                            press_enter_to_continue
-                            continue
+                            # TMSH mode: Build tmsh records and apply
+                            local records
+                            records=$(build_tmsh_records working_keys working_values "${dg_type}")
+                            
+                            if apply_internal_datagroup_records_local "${partition}" "${dg_name}" "${records}"; then
+                                log_ok "Changes applied successfully."
+                            else
+                                log_error "Failed to apply changes."
+                                press_enter_to_continue
+                                continue
+                            fi
                         fi
                     fi
                 else
@@ -3764,23 +4747,47 @@ editor_submenu() {
                     
                     local apply_errors=0
                     
-                    # Delete only the entries being removed
-                    if [ ${#deletions[@]} -gt 0 ]; then
-                        for del_url in "${deletions[@]}"; do
-                            if ! tmsh modify sys url-db url-category "${cat_name}" urls delete \{ "${del_url}" \} 2>/dev/null; then
+                    if [ "${SESSION_MODE}" == "rest-api" ]; then
+                        # REST API mode: use REST API
+                        
+                        # Handle deletions
+                        if [ ${#deletions[@]} -gt 0 ]; then
+                            local del_list
+                            del_list=$(printf '%s\n' "${deletions[@]}")
+                            if ! modify_url_category_delete_remote "${cat_name}" "${del_list}"; then
                                 apply_errors=$((apply_errors + 1))
                             fi
-                        done
-                    fi
-                    
-                    # Add only the new entries
-                    if [ ${#additions[@]} -gt 0 ]; then
-                        local urls_block=""
-                        for add_url in "${additions[@]}"; do
-                            urls_block="${urls_block} ${add_url} { }"
-                        done
-                        if ! tmsh modify sys url-db url-category "${cat_name}" urls add \{ ${urls_block} \} 2>/dev/null; then
-                            apply_errors=$((apply_errors + 1))
+                        fi
+                        
+                        # Handle additions
+                        if [ ${#additions[@]} -gt 0 ]; then
+                            local add_json
+                            add_json=$(printf '%s\n' "${additions[@]}" | build_urls_json_remote)
+                            if ! modify_url_category_add_remote "${cat_name}" "${add_json}"; then
+                                apply_errors=$((apply_errors + 1))
+                            fi
+                        fi
+                    else
+                        # TMSH mode: use tmsh
+                        
+                        # Delete only the entries being removed
+                        if [ ${#deletions[@]} -gt 0 ]; then
+                            for del_url in "${deletions[@]}"; do
+                                if ! tmsh modify sys url-db url-category "${cat_name}" urls delete \{ "${del_url}" \} 2>/dev/null; then
+                                    apply_errors=$((apply_errors + 1))
+                                fi
+                            done
+                        fi
+                        
+                        # Add only the new entries
+                        if [ ${#additions[@]} -gt 0 ]; then
+                            local urls_block=""
+                            for add_url in "${additions[@]}"; do
+                                urls_block="${urls_block} ${add_url} { }"
+                            done
+                            if ! tmsh modify sys url-db url-category "${cat_name}" urls add \{ ${urls_block} \} 2>/dev/null; then
+                                apply_errors=$((apply_errors + 1))
+                            fi
                         fi
                     fi
                     
@@ -3840,7 +4847,7 @@ menu_edit_datagroup_or_category() {
             fi
             
             local selection dg_name dg_class
-            selection=$(select_datagroup "${partition}" "Enter datagroup name to edit")
+            selection=$(select_datagroup "${partition}" "Enter datagroup name to edit") || true
             if [ -z "${selection}" ]; then
                 press_enter_to_continue
                 return
@@ -3859,7 +4866,7 @@ menu_edit_datagroup_or_category() {
             ;;
         2)
             # Edit URL category
-            if ! tmsh list sys url-db url-category one-line &>/dev/null; then
+            if ! url_category_db_available; then
                 log_error "URL database not available or accessible."
                 press_enter_to_continue
                 return
@@ -3974,7 +4981,10 @@ menu_edit_datagroup_or_category() {
 }
 
 main() {
-    # Clear screen on start
+    # Select operation mode first (before anything else)
+    select_session_mode
+    
+    # Clear screen after mode selection
     clear
     
     # Try to create backup/log directory
@@ -3984,38 +4994,75 @@ main() {
     if touch "${LOGFILE}" 2>/dev/null; then
         echo "DGCat-Admin v1.0 - F5 BIG-IP Administration Tool" > "${LOGFILE}"
         echo "Started: $(date)" >> "${LOGFILE}"
+        echo "Mode: ${SESSION_MODE}" >> "${LOGFILE}"
+        if [ "${SESSION_MODE}" == "rest-api" ]; then
+            echo "Target: (pending connection)" >> "${LOGFILE}"
+        fi
     fi
     
-    # Run pre-flight checks
+    # Run pre-flight checks (mode-specific)
     preflight_checks
     
-    press_enter_to_continue
+    # Update log with target host if applicable
+    if [ "${SESSION_MODE}" == "rest-api" ] && [ -n "${REMOTE_HOST}" ]; then
+        echo "Target: ${REMOTE_HOST}" >> "${LOGFILE}" 2>/dev/null
+    fi
+    
+    # Pause after TMSH preflight (REST API goes straight to menu)
+    if [ "${SESSION_MODE}" == "tmsh" ]; then
+        press_enter_to_continue
+    fi
     
     # Main menu loop
     while true; do
         show_main_menu
-        read -rp "  Select option [0-7]: " choice
         
-        case "${choice}" in
-            1) menu_list_datagroups ;;
-            2) menu_view_datagroup ;;
-            3) menu_create_from_csv ;;
-            4) menu_delete_datagroup ;;
-            5) menu_export_to_csv ;;
-            6) menu_convert_url_category ;;
-            7) menu_edit_datagroup_or_category ;;
-            0)
-                log_section "Exit"
-                log_info "Session ended: $(date)"
-                log_info "Log file: ${LOGFILE}"
-                echo ""
-                exit 0
-                ;;
-            *)
-                log_warn "Invalid selection. Please choose 0-7."
-                press_enter_to_continue
-                ;;
-        esac
+        if [ "${SESSION_MODE}" == "rest-api" ]; then
+            # REST API mode menu
+            read -rp "  Select option [0-4]: " choice
+            
+            case "${choice}" in
+                1) menu_view_datagroup ;;
+                2) menu_create_from_csv ;;
+                3) menu_export_to_csv ;;
+                4) menu_edit_datagroup_or_category ;;
+                0)
+                    log_section "Exit"
+                    log_info "Session ended: $(date)"
+                    log_info "Log file: ${LOGFILE}"
+                    echo ""
+                    exit 0
+                    ;;
+                *)
+                    log_warn "Invalid selection."
+                    press_enter_to_continue
+                    ;;
+            esac
+        else
+            # TMSH mode menu
+            read -rp "  Select option [0-7]: " choice
+            
+            case "${choice}" in
+                1) menu_list_datagroups ;;
+                2) menu_view_datagroup ;;
+                3) menu_create_from_csv ;;
+                4) menu_delete_datagroup ;;
+                5) menu_export_to_csv ;;
+                6) menu_convert_url_category ;;
+                7) menu_edit_datagroup_or_category ;;
+                0)
+                    log_section "Exit"
+                    log_info "Session ended: $(date)"
+                    log_info "Log file: ${LOGFILE}"
+                    echo ""
+                    exit 0
+                    ;;
+                *)
+                    log_warn "Invalid selection."
+                    press_enter_to_continue
+                    ;;
+            esac
+        fi
     done
 }
 
