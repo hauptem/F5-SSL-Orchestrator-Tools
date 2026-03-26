@@ -35,7 +35,6 @@ DGCat-Admin makes managing those site lists very easy without any manual tmsh in
 - **Type validation** (string, address, integer)
 - **Convert** between URL categories and datagroups
 - **Staged editing** - make multiple changes, apply once
-- **Protected system datagroup** safeguards
 
 ---
 
