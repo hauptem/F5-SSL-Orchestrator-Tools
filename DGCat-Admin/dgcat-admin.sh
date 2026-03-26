@@ -4992,7 +4992,7 @@ main() {
     
     # Initialize log (if directory is writable)
     if touch "${LOGFILE}" 2>/dev/null; then
-        echo "DGCat-Admin v1.0 - F5 BIG-IP Administration Tool" > "${LOGFILE}"
+        echo "DGCat-Admin - F5 BIG-IP Administration Tool" > "${LOGFILE}"
         echo "Started: $(date)" >> "${LOGFILE}"
         echo "Mode: ${SESSION_MODE}" >> "${LOGFILE}"
         if [ "${SESSION_MODE}" == "rest-api" ]; then
