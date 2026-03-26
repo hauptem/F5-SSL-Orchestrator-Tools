@@ -250,7 +250,7 @@ Some operations are only available in TMSH mode:
 
 ---
 
-## Option 1: List All Datagroups (TMSH Only)
+## Option 1: List All Datagroups 
 
 Displays all datagroups across configured partitions with details:
 
@@ -278,7 +278,7 @@ For external datagroups (TMSH mode), the associated file reference is also shown
 
 ---
 
-## Option 3: Create Datagroup/URL Category from CSV
+## Option 3: Create Datagroup or URL Category from CSV
 
 Create a new datagroup or URL category from a CSV file, or restore/merge into an existing one.
 
@@ -330,7 +330,7 @@ blocked.site,deny
 
 ---
 
-## Option 4: Delete Datagroup/URL Category (TMSH Only)
+## Option 4: Delete Datagroup or URL Category
 
 Permanently delete a datagroup or URL category.
 
@@ -357,7 +357,7 @@ For external datagroups, the associated sys file is also deleted.
 
 ---
 
-## Option 5: Export Datagroup/URL Category to CSV
+## Option 5: Export Datagroup or URL Category to CSV
 
 Export contents to a CSV file for backup or transfer.
 
@@ -382,7 +382,7 @@ Export contents to a CSV file for backup or transfer.
 
 ---
 
-## Option 6: Convert URL Category to Datagroup (TMSH Only)
+## Option 6: Convert URL Category to Datagroup
 
 Convert URLs from a URL category into a string datagroup for use with SSLO or iRules.
 
@@ -476,40 +476,6 @@ When you press `w`:
 
 ---
 
-## Datagroup Types
-
-### String
-
-For text entries like domains, hostnames, and URLs.
-
-```
-example.com
-www.google.com
-.wildcard.domain.com
-```
-
-### Address (IP)
-
-For IP addresses and CIDR subnets.
-
-```
-10.0.0.1
-192.168.1.0/24
-172.16.0.0/12
-```
-
-### Integer
-
-For numeric values like port numbers.
-
-```
-80
-443
-8080
-```
-
----
-
 ## Internal vs External Datagroups
 
 ### Internal Datagroups
@@ -564,40 +530,9 @@ Example: `Common_my-datagroup_internal_20260325_143052.csv`
 
 The tool automatically removes old backups beyond the `MAX_BACKUPS` limit (default: 30 per datagroup).
 
-### Backup File Format
-
-```csv
-# Datagroup Backup: /Common/my-datagroup
-# Partition: Common
-# Class: internal
-# Type: string
-# Created: Tue Mar 25 14:30:52 UTC 2026
-# Format: key,value
-#
-example.com,
-www.google.com,bypass
-internal.corp,allow
-```
-
 ---
 
 ## URL Category Format
-
-### URL Category Entries
-
-URL categories store URLs in this format:
-```
-https://www.example.com/
-https://*.wildcard.com/
-```
-
-### SSLO/Datagroup Format
-
-Datagroups for SSLO use domain format:
-```
-www.example.com
-.wildcard.com
-```
 
 ### Automatic Conversion
 
@@ -612,24 +547,7 @@ The tool handles conversion automatically:
 
 ---
 
-## Logging
-
-### Session Log
-
-Each session creates a log file:
-```
-/shared/tmp/dgcat-admin-backups/dgcat-admin-{timestamp}.log
-```
-
-The log captures all operations, warnings, and errors for the session.
-
-In REST API mode, the log also records the target BIG-IP hostname.
-
----
-
 ## Troubleshooting
-
-### TMSH Mode Issues
 
 #### "Cannot query datagroups"
 
@@ -650,8 +568,6 @@ In REST API mode, the log also records the target BIG-IP hostname.
 
 **Cause:** File reference exists but actual file missing  
 **Solution:** Check `/config/filestore/files_d/{partition}_d/data_group_d/`
-
-### REST API Mode Issues
 
 #### "curl not found"
 
@@ -677,8 +593,6 @@ In REST API mode, the log also records the target BIG-IP hostname.
 
 **Cause:** Attempting to work with external datagroups remotely  
 **Solution:** Use TMSH mode for external datagroup operations
-
-### General Issues
 
 #### Windows line endings warning
 
