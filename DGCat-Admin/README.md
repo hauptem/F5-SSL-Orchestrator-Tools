@@ -87,16 +87,6 @@ See the [User Guide](USERGUIDE.md) for detailed operation instructions.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file.
-
-## Disclaimer
-
-This is an independent, community-developed tool. **NOT** officially endorsed, supported, or maintained by F5 Inc. F5, BIG-IP, TMOS, and SSL Orchestrator are trademarks of F5 Inc.
-
-Provided "AS IS" without warranty. Always test in non-production environments first. Backup your configuration before making changes.
-
-## License
-
 MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Disclaimer
