@@ -14,7 +14,7 @@ Based on Kevin Stewart's [sslo-nuke-delete](https://github.com/f5devcentral/sslo
 ## Requirements
 
 - BIG-IP running TMOS 17.x or higher
-- SSL Orchestrator 12.0 or higher
+- SSL Orchestrator 12.x or higher
 
 ## What It Does
 
