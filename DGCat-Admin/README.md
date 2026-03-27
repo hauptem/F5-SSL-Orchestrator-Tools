@@ -28,7 +28,7 @@ DGCat-Admin makes managing those site lists very easy.
 
 ---
 
-## What's New in v2.0
+## What's New in v2.1
 
 ### REST API Mode
 
@@ -43,7 +43,7 @@ When you start the tool, you'll choose your operating mode:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v2.0                        ║
+  ║                    DGCAT-Admin v2.1                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
   ║   Select operating mode:                                   ║
@@ -173,7 +173,7 @@ REST API mode provides a streamlined menu with the most common operations:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v2.0                        ║
+  ║                    DGCAT-Admin v2.1                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
     Mode: REST API - 192.168.1.245
@@ -212,7 +212,7 @@ Some operations are only available in TMSH mode:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v2.0                        ║
+  ║                    DGCAT-Admin v2.1                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
     Mode: TMSH
