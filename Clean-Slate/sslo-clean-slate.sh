@@ -10,8 +10,8 @@
 # Requirements:  SSL Orchestrator 12.x or higher / TMOS 17.x or higher
 #
 # PURPOSE:
-#   Forcibly removes all SSL Orchestrator (SSLO) configuration objects,
-#   clears REST storage, and reinstalls the SSLO RPM for a clean slate install.
+#   Removes all SSL Orchestrator (SSLO) configuration objects, clears REST 
+#   storage, and reinstalls the SSLO RPM.
 #
 # WARNING:
 #   THIS SCRIPT IS DESTRUCTIVE. It will permanently delete ALL SSLO configuration 
