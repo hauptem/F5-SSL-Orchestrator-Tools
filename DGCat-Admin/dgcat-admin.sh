@@ -18,6 +18,7 @@
 #   chmod +x dgcat-admin.sh
 #   ./dgcat-admin.sh
 #
+# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 # =============================================================================
 
 set -euo pipefail
