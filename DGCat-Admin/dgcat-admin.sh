@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 2.1
+# Version: 3.0
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -79,6 +79,20 @@ REMOTE_PASS=""
 # API response storage (used only in REST API mode)
 API_RESPONSE=""
 API_HTTP_CODE=""
+
+# =============================================================================
+# FLEET CONFIGURATION
+# =============================================================================
+
+# Fleet configuration file
+FLEET_CONFIG_FILE="${BACKUP_DIR}/fleet.conf"
+
+# Runtime fleet arrays (parallel arrays - same index = same device)
+declare -a FLEET_SITES
+declare -a FLEET_HOSTS
+
+# Track unique sites for deploy menu
+declare -a FLEET_UNIQUE_SITES
 
 # =============================================================================
 # COLORS
@@ -545,7 +559,7 @@ select_session_mode() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v2.1                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v3.0                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
@@ -650,6 +664,31 @@ preflight_checks_rest_api() {
         log_warn "Backups will be disabled. Proceed with caution."
     else
         log_ok "Local backup directory: ${BACKUP_DIR}"
+    fi
+    
+    # Load fleet configuration if available
+    if load_fleet_config; then
+        local host_word="hosts"
+        local site_word="sites"
+        [ ${#FLEET_HOSTS[@]} -eq 1 ] && host_word="host"
+        [ ${#FLEET_UNIQUE_SITES[@]} -eq 1 ] && site_word="site"
+        log_ok "Fleet loaded: ${#FLEET_HOSTS[@]} ${host_word} across ${#FLEET_UNIQUE_SITES[@]} ${site_word}"
+        
+        # Display fleet details
+        for site in "${FLEET_UNIQUE_SITES[@]}"; do
+            local site_hosts=""
+            for i in "${!FLEET_HOSTS[@]}"; do
+                if [ "${FLEET_SITES[$i]}" == "${site}" ]; then
+                    if [ -n "${site_hosts}" ]; then
+                        site_hosts="${site_hosts}, "
+                    fi
+                    site_hosts="${site_hosts}${FLEET_HOSTS[$i]}"
+                fi
+            done
+            log_info "  ${site}: ${site_hosts}"
+        done
+    else
+        log_info "No fleet configured (optional: create ${FLEET_CONFIG_FILE})"
     fi
     
     log ""
@@ -1147,6 +1186,892 @@ delete_url_category() {
         delete_url_category_local "${cat_name}"
     fi
     return $?
+}
+
+# =============================================================================
+# FLEET MANAGEMENT FUNCTIONS
+# =============================================================================
+
+# Load fleet configuration from file
+# Populates FLEET_SITES, FLEET_HOSTS, and FLEET_UNIQUE_SITES arrays
+# Returns: 0 on success, 1 if file not found or empty
+load_fleet_config() {
+    FLEET_SITES=()
+    FLEET_HOSTS=()
+    FLEET_UNIQUE_SITES=()
+    
+    if [ ! -f "${FLEET_CONFIG_FILE}" ]; then
+        return 1
+    fi
+    
+    local -A seen_sites=()
+    
+    while IFS= read -r line || [ -n "${line}" ]; do
+        # Skip empty lines and comments
+        [ -z "${line}" ] && continue
+        [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+        
+        # Trim whitespace
+        line=$(echo "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -z "${line}" ] && continue
+        
+        # Parse SITE|HOST format
+        local site host
+        site=$(echo "${line}" | cut -d'|' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        host=$(echo "${line}" | cut -d'|' -f2 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        
+        # Validate format
+        if [ -z "${site}" ] || [ -z "${host}" ]; then
+            continue
+        fi
+        
+        # Validate site ID (alphanumeric, dash, underscore only)
+        if ! [[ "${site}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            continue
+        fi
+        
+        FLEET_SITES+=("${site}")
+        FLEET_HOSTS+=("${host}")
+        
+        # Track unique sites (use +x to avoid unbound variable error with set -u)
+        if [ -z "${seen_sites[${site}]+x}" ]; then
+            seen_sites["${site}"]=1
+            FLEET_UNIQUE_SITES+=("${site}")
+        fi
+    done < "${FLEET_CONFIG_FILE}"
+    
+    if [ ${#FLEET_HOSTS[@]} -eq 0 ]; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# Save fleet configuration to file
+# Returns: 0 on success, 1 on failure
+save_fleet_config() {
+    {
+        echo "# DGCat-Admin Fleet Configuration"
+        echo "# Format: SITE|HOSTNAME_OR_IP"
+        echo "# Site IDs: alphanumeric, dashes, underscores (no spaces)"
+        echo "# Generated: $(date)"
+        echo "#"
+        for i in "${!FLEET_HOSTS[@]}"; do
+            echo "${FLEET_SITES[$i]}|${FLEET_HOSTS[$i]}"
+        done
+    } > "${FLEET_CONFIG_FILE}" 2>/dev/null
+    
+    return $?
+}
+
+# Get hosts for a specific site
+# Args: site_id
+# Outputs: hostnames (one per line)
+get_site_hosts() {
+    local site_id="$1"
+    
+    for i in "${!FLEET_HOSTS[@]}"; do
+        if [ "${FLEET_SITES[$i]}" == "${site_id}" ]; then
+            echo "${FLEET_HOSTS[$i]}"
+        fi
+    done
+}
+
+# Get site ID for a host
+# Args: hostname
+# Outputs: site_id or empty if not found
+get_host_site() {
+    local hostname="$1"
+    
+    for i in "${!FLEET_HOSTS[@]}"; do
+        if [ "${FLEET_HOSTS[$i]}" == "${hostname}" ]; then
+            echo "${FLEET_SITES[$i]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Count hosts in a site
+# Args: site_id
+# Outputs: count
+count_site_hosts() {
+    local site_id="$1"
+    local count=0
+    
+    for site in "${FLEET_SITES[@]}"; do
+        if [ "${site}" == "${site_id}" ]; then
+            count=$((count + 1))
+        fi
+    done
+    
+    echo "${count}"
+}
+
+# Check if fleet is configured and loaded
+# Returns: 0 if fleet available, 1 if not
+fleet_available() {
+    if [ ${#FLEET_HOSTS[@]} -gt 0 ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Ensure site log directory exists
+# Args: site_id
+# Returns: 0 on success, 1 on failure
+ensure_site_log_dir() {
+    local site_id="$1"
+    local site_dir="${BACKUP_DIR}/${site_id}"
+    
+    if [ ! -d "${site_dir}" ]; then
+        mkdir -p "${site_dir}" 2>/dev/null || return 1
+    fi
+    return 0
+}
+
+# Get log file path for a host
+# Args: site_id, hostname
+# Outputs: log file path
+get_host_log_path() {
+    local site_id="$1"
+    local hostname="$2"
+    local safe_hostname
+    safe_hostname=$(echo "${hostname}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    
+    echo "${BACKUP_DIR}/${site_id}/${safe_hostname}_${TIMESTAMP}.log"
+}
+
+# =============================================================================
+# DEPLOY VALIDATION FUNCTIONS
+# =============================================================================
+
+# Test connectivity to a single host using current credentials
+# Args: hostname
+# Returns: 0 on success, 1 on failure
+# Sets: API_RESPONSE, API_HTTP_CODE
+test_host_connection() {
+    local host="$1"
+    
+    # Temporarily swap REMOTE_HOST
+    local orig_host="${REMOTE_HOST}"
+    REMOTE_HOST="${host}"
+    
+    local result=1
+    if api_get "/mgmt/tm/sys/version"; then
+        result=0
+    fi
+    
+    # Restore original
+    REMOTE_HOST="${orig_host}"
+    return ${result}
+}
+
+# Verify internal datagroup exists on remote host
+# Args: hostname, partition, dg_name
+# Returns: 0 if exists, 1 if not
+verify_remote_internal_datagroup() {
+    local host="$1"
+    local partition="$2"
+    local dg_name="$3"
+    
+    local orig_host="${REMOTE_HOST}"
+    REMOTE_HOST="${host}"
+    
+    local result=1
+    if internal_datagroup_exists_remote "${partition}" "${dg_name}"; then
+        result=0
+    fi
+    
+    REMOTE_HOST="${orig_host}"
+    return ${result}
+}
+
+# Verify URL category exists on remote host
+# Args: hostname, cat_name
+# Returns: 0 if exists, 1 if not
+verify_remote_url_category() {
+    local host="$1"
+    local cat_name="$2"
+    
+    local orig_host="${REMOTE_HOST}"
+    REMOTE_HOST="${host}"
+    
+    local result=1
+    if url_category_exists_remote "${cat_name}"; then
+        result=0
+    fi
+    
+    REMOTE_HOST="${orig_host}"
+    return ${result}
+}
+
+# Create backup of internal datagroup on remote host
+# Args: hostname, partition, dg_name, site_id
+# Returns: 0 on success, 1 on failure
+# Outputs: backup file path
+backup_remote_internal_datagroup() {
+    local host="$1"
+    local partition="$2"
+    local dg_name="$3"
+    local site_id="$4"
+    
+    local orig_host="${REMOTE_HOST}"
+    REMOTE_HOST="${host}"
+    
+    # Ensure site directory exists
+    ensure_site_log_dir "${site_id}"
+    
+    local safe_hostname
+    safe_hostname=$(echo "${host}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_${partition}_${dg_name}_${TIMESTAMP}.csv"
+    
+    local dg_type
+    dg_type=$(get_internal_datagroup_type_remote "${partition}" "${dg_name}")
+    
+    {
+        echo "# Datagroup Backup: /${partition}/${dg_name}"
+        echo "# Host: ${host}"
+        echo "# Site: ${site_id}"
+        echo "# Type: ${dg_type}"
+        echo "# Created: $(date)"
+        echo "# Reason: Pre-deploy backup"
+        echo "#"
+        get_internal_datagroup_records_remote "${partition}" "${dg_name}" | while IFS='|' read -r key value; do
+            echo "${key},${value}"
+        done
+    } > "${backup_file}" 2>/dev/null
+    
+    REMOTE_HOST="${orig_host}"
+    
+    if [ -f "${backup_file}" ]; then
+        echo "${backup_file}"
+        return 0
+    fi
+    return 1
+}
+
+# Create backup of URL category on remote host
+# Args: hostname, cat_name, site_id
+# Returns: 0 on success, 1 on failure
+# Outputs: backup file path
+backup_remote_url_category() {
+    local host="$1"
+    local cat_name="$2"
+    local site_id="$3"
+    
+    local orig_host="${REMOTE_HOST}"
+    REMOTE_HOST="${host}"
+    
+    # Ensure site directory exists
+    ensure_site_log_dir "${site_id}"
+    
+    local safe_hostname
+    safe_hostname=$(echo "${host}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    local safe_catname
+    safe_catname=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_urlcat_${safe_catname}_${TIMESTAMP}.csv"
+    
+    {
+        echo "# URL Category Backup: ${cat_name}"
+        echo "# Host: ${host}"
+        echo "# Site: ${site_id}"
+        echo "# Created: $(date)"
+        echo "# Reason: Pre-deploy backup"
+        echo "#"
+        get_url_category_entries_remote "${cat_name}"
+    } > "${backup_file}" 2>/dev/null
+    
+    REMOTE_HOST="${orig_host}"
+    
+    if [ -f "${backup_file}" ]; then
+        echo "${backup_file}"
+        return 0
+    fi
+    return 1
+}
+
+# =============================================================================
+# DEPLOY EXECUTION FUNCTIONS
+# =============================================================================
+
+# Global for tracking deploy error
+DEPLOY_ERROR_MSG=""
+
+# Display deploy scope selection menu
+# Args: object_type ("datagroup" or "urlcat"), object_name
+# Outputs: selected hosts (newline-separated) or empty if cancelled
+# Returns: 0 on selection, 1 on cancel
+select_deploy_scope() {
+    local object_type="$1"
+    local object_name="$2"
+    
+    echo "" >&2
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
+    echo -e "  ${WHITE}  DEPLOY SCOPE SELECTION${NC}" >&2
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
+    echo "" >&2
+    echo -e "  ${WHITE}Object: ${object_name}${NC}" >&2
+    echo -e "  ${WHITE}Type:   ${object_type}${NC}" >&2
+    echo "" >&2
+    echo -e "  ${WHITE}Select deployment scope:${NC}" >&2
+    echo "" >&2
+    
+    # Option 1: Entire topology
+    local total_hosts=${#FLEET_HOSTS[@]}
+    local skipped=0
+    for host in "${FLEET_HOSTS[@]}"; do
+        if [ "${host}" == "${REMOTE_HOST}" ]; then
+            skipped=1
+            break
+        fi
+    done
+    local deploy_count=$((total_hosts - skipped))
+    
+    # Pluralization for topology
+    local topo_host_word="hosts"
+    local topo_site_word="sites"
+    [ ${deploy_count} -eq 1 ] && topo_host_word="host"
+    [ ${#FLEET_UNIQUE_SITES[@]} -eq 1 ] && topo_site_word="site"
+    
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}Entire topology${NC} (${deploy_count} ${topo_host_word} across ${#FLEET_UNIQUE_SITES[@]} ${topo_site_word})" >&2
+    
+    # Options 2+: Individual sites
+    local option_num=2
+    for site in "${FLEET_UNIQUE_SITES[@]}"; do
+        local site_count
+        site_count=$(count_site_hosts "${site}")
+        
+        # Check if current host is in this site
+        local site_skipped=0
+        local current_site
+        current_site=$(get_host_site "${REMOTE_HOST}")
+        if [ "${current_site}" == "${site}" ]; then
+            site_skipped=1
+        fi
+        local site_deploy_count=$((site_count - site_skipped))
+        
+        # Pluralization for site
+        local site_host_word="hosts"
+        [ ${site_deploy_count} -eq 1 ] && site_host_word="host"
+        
+        echo -e "    ${YELLOW}${option_num})${NC} ${WHITE}Site: ${site}${NC} (${site_deploy_count} ${site_host_word})" >&2
+        option_num=$((option_num + 1))
+    done
+    
+    echo "" >&2
+    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}" >&2
+    echo "" >&2
+    
+    local max_option=$((option_num - 1))
+    read -rp "  Select [0-${max_option}]: " scope_choice
+    
+    if [ "${scope_choice}" == "0" ] || [ -z "${scope_choice}" ]; then
+        return 1
+    fi
+    
+    if ! [[ "${scope_choice}" =~ ^[0-9]+$ ]] || [ "${scope_choice}" -lt 1 ] || [ "${scope_choice}" -gt ${max_option} ]; then
+        return 1
+    fi
+    
+    # Build target list based on selection
+    local -a targets=()
+    
+    if [ "${scope_choice}" == "1" ]; then
+        # Entire topology
+        for host in "${FLEET_HOSTS[@]}"; do
+            if [ "${host}" != "${REMOTE_HOST}" ]; then
+                targets+=("${host}")
+            fi
+        done
+    else
+        # Specific site
+        local site_index=$((scope_choice - 2))
+        local selected_site="${FLEET_UNIQUE_SITES[${site_index}]}"
+        
+        for i in "${!FLEET_HOSTS[@]}"; do
+            if [ "${FLEET_SITES[$i]}" == "${selected_site}" ] && [ "${FLEET_HOSTS[$i]}" != "${REMOTE_HOST}" ]; then
+                targets+=("${FLEET_HOSTS[$i]}")
+            fi
+        done
+    fi
+    
+    # Output selected hosts
+    printf '%s\n' "${targets[@]}"
+    return 0
+}
+
+# Deploy internal datagroup to a single host
+# Args: hostname, partition, dg_name, dg_type, records_json, site_id
+# Returns: 0 on success, 1 on failure
+# Sets: DEPLOY_ERROR_MSG on failure
+deploy_internal_datagroup_to_host() {
+    local host="$1"
+    local partition="$2"
+    local dg_name="$3"
+    local dg_type="$4"
+    local records_json="$5"
+    local site_id="$6"
+    
+    DEPLOY_ERROR_MSG=""
+    
+    local orig_host="${REMOTE_HOST}"
+    REMOTE_HOST="${host}"
+    
+    # Apply records
+    if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+        DEPLOY_ERROR_MSG="Failed to apply records (HTTP ${API_HTTP_CODE})"
+        REMOTE_HOST="${orig_host}"
+        return 1
+    fi
+    
+    # Save config
+    if ! save_config_remote; then
+        DEPLOY_ERROR_MSG="Applied but failed to save config (HTTP ${API_HTTP_CODE})"
+        REMOTE_HOST="${orig_host}"
+        return 1
+    fi
+    
+    REMOTE_HOST="${orig_host}"
+    return 0
+}
+
+# Deploy URL category to a single host
+# Args: hostname, cat_name, urls_json, site_id
+# Returns: 0 on success, 1 on failure
+# Sets: DEPLOY_ERROR_MSG on failure
+deploy_url_category_to_host() {
+    local host="$1"
+    local cat_name="$2"
+    local urls_json="$3"
+    local site_id="$4"
+    
+    DEPLOY_ERROR_MSG=""
+    
+    local orig_host="${REMOTE_HOST}"
+    REMOTE_HOST="${host}"
+    
+    # Replace all URLs in category
+    if ! modify_url_category_replace_remote "${cat_name}" "${urls_json}"; then
+        DEPLOY_ERROR_MSG="Failed to apply URLs (HTTP ${API_HTTP_CODE})"
+        REMOTE_HOST="${orig_host}"
+        return 1
+    fi
+    
+    # Save config
+    if ! save_config_remote; then
+        DEPLOY_ERROR_MSG="Applied but failed to save config (HTTP ${API_HTTP_CODE})"
+        REMOTE_HOST="${orig_host}"
+        return 1
+    fi
+    
+    REMOTE_HOST="${orig_host}"
+    return 0
+}
+
+# Run pre-deploy validation for internal datagroup
+# Args: partition, dg_name, targets (newline-separated hosts)
+# Returns: 0 if all pass, 1 if any fail
+# Outputs: validation summary to stderr, results to stdout
+run_predeploy_validation_datagroup() {
+    local partition="$1"
+    local dg_name="$2"
+    local targets="$3"
+    
+    local all_passed=true
+    local -a validation_results=()
+    
+    echo "" >&2
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
+    echo -e "  ${WHITE}  PRE-DEPLOY VALIDATION${NC}" >&2
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
+    echo "" >&2
+    
+    while IFS= read -r host; do
+        [ -z "${host}" ] && continue
+        
+        local site_id
+        site_id=$(get_host_site "${host}")
+        
+        echo -ne "  ${WHITE}[....] ${host} (${site_id})${NC}\r" >&2
+        
+        # Test connectivity
+        if ! test_host_connection "${host}"; then
+            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Connection failed" >&2
+            validation_results+=("${host}|${site_id}|FAIL|Connection failed")
+            all_passed=false
+            continue
+        fi
+        
+        # Verify object exists
+        if ! verify_remote_internal_datagroup "${host}" "${partition}" "${dg_name}"; then
+            echo -e "  ${YELLOW}[SKIP]${NC} ${WHITE}${host} (${site_id})${NC} - Datagroup not found" >&2
+            validation_results+=("${host}|${site_id}|SKIP|Datagroup not found")
+            continue
+        fi
+        
+        # Create backup
+        local backup_file
+        backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${site_id}")
+        if [ -z "${backup_file}" ]; then
+            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Backup failed" >&2
+            validation_results+=("${host}|${site_id}|FAIL|Backup failed")
+            all_passed=false
+            continue
+        fi
+        
+        echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC} - Ready" >&2
+        validation_results+=("${host}|${site_id}|OK|Ready")
+    done <<< "${targets}"
+    
+    echo "" >&2
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}" >&2
+    
+    # Count results
+    local ok_count=0
+    local skip_count=0
+    local fail_count=0
+    
+    for result in "${validation_results[@]}"; do
+        local status
+        status=$(echo "${result}" | cut -d'|' -f3)
+        case "${status}" in
+            OK) ok_count=$((ok_count + 1)) ;;
+            SKIP) skip_count=$((skip_count + 1)) ;;
+            FAIL) fail_count=$((fail_count + 1)) ;;
+        esac
+    done
+    
+    echo -e "  ${WHITE}Validation complete: ${GREEN}${ok_count} ready${NC}, ${YELLOW}${skip_count} skipped${NC}, ${RED}${fail_count} failed${NC}" >&2
+    
+    # Output results for deploy function to use
+    printf '%s\n' "${validation_results[@]}"
+    
+    if [ "${all_passed}" == "true" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Run pre-deploy validation for URL category
+# Args: cat_name, targets (newline-separated hosts)
+# Returns: 0 if all pass, 1 if any fail
+# Outputs: validation summary to stderr, results to stdout
+run_predeploy_validation_urlcat() {
+    local cat_name="$1"
+    local targets="$2"
+    
+    local all_passed=true
+    local -a validation_results=()
+    
+    echo "" >&2
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
+    echo -e "  ${WHITE}  PRE-DEPLOY VALIDATION${NC}" >&2
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
+    echo "" >&2
+    
+    while IFS= read -r host; do
+        [ -z "${host}" ] && continue
+        
+        local site_id
+        site_id=$(get_host_site "${host}")
+        
+        echo -ne "  ${WHITE}[....] ${host} (${site_id})${NC}\r" >&2
+        
+        # Test connectivity
+        if ! test_host_connection "${host}"; then
+            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Connection failed" >&2
+            validation_results+=("${host}|${site_id}|FAIL|Connection failed")
+            all_passed=false
+            continue
+        fi
+        
+        # Verify object exists
+        if ! verify_remote_url_category "${host}" "${cat_name}"; then
+            echo -e "  ${YELLOW}[SKIP]${NC} ${WHITE}${host} (${site_id})${NC} - Category not found" >&2
+            validation_results+=("${host}|${site_id}|SKIP|Category not found")
+            continue
+        fi
+        
+        # Create backup
+        local backup_file
+        backup_file=$(backup_remote_url_category "${host}" "${cat_name}" "${site_id}")
+        if [ -z "${backup_file}" ]; then
+            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Backup failed" >&2
+            validation_results+=("${host}|${site_id}|FAIL|Backup failed")
+            all_passed=false
+            continue
+        fi
+        
+        echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC} - Ready" >&2
+        validation_results+=("${host}|${site_id}|OK|Ready")
+    done <<< "${targets}"
+    
+    echo "" >&2
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}" >&2
+    
+    # Count results
+    local ok_count=0
+    local skip_count=0
+    local fail_count=0
+    
+    for result in "${validation_results[@]}"; do
+        local status
+        status=$(echo "${result}" | cut -d'|' -f3)
+        case "${status}" in
+            OK) ok_count=$((ok_count + 1)) ;;
+            SKIP) skip_count=$((skip_count + 1)) ;;
+            FAIL) fail_count=$((fail_count + 1)) ;;
+        esac
+    done
+    
+    echo -e "  ${WHITE}Validation complete: ${GREEN}${ok_count} ready${NC}, ${YELLOW}${skip_count} skipped${NC}, ${RED}${fail_count} failed${NC}" >&2
+    
+    # Output results for deploy function to use
+    printf '%s\n' "${validation_results[@]}"
+    
+    if [ "${all_passed}" == "true" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Execute deploy for internal datagroup
+# Args: partition, dg_name, dg_type, records_json, validation_results (newline-separated), current_host, current_status, current_message
+# Returns: 0 on complete success, 1 on any failure
+execute_deploy_datagroup() {
+    local partition="$1"
+    local dg_name="$2"
+    local dg_type="$3"
+    local records_json="$4"
+    local validation_results="$5"
+    local current_host="${6:-}"
+    local current_status="${7:-}"
+    local current_message="${8:-}"
+    
+    local success_count=0
+    local fail_count=0
+    local skip_count=0
+    local last_error=""
+    local consecutive_same_error=0
+    local -a deploy_results=()
+    
+    # Add current device to results if provided
+    if [ -n "${current_host}" ]; then
+        deploy_results+=("${current_host}|CURRENT|${current_status}|${current_message}")
+        if [ "${current_status}" == "OK" ]; then
+            success_count=$((success_count + 1))
+        else
+            fail_count=$((fail_count + 1))
+        fi
+    fi
+    
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  DEPLOYING TO FLEET${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    
+    while IFS='|' read -r host site_id status message; do
+        [ -z "${host}" ] && continue
+        
+        # Skip hosts that failed validation or were skipped
+        if [ "${status}" != "OK" ]; then
+            deploy_results+=("${host}|${site_id}|${status}|${message}")
+            if [ "${status}" == "SKIP" ]; then
+                skip_count=$((skip_count + 1))
+            else
+                fail_count=$((fail_count + 1))
+            fi
+            continue
+        fi
+        
+        echo -ne "  ${WHITE}[....] Deploying to ${host} (${site_id})${NC}\r"
+        
+        # Deploy to host
+        if deploy_internal_datagroup_to_host "${host}" "${partition}" "${dg_name}" "${dg_type}" "${records_json}" "${site_id}"; then
+            echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
+            deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
+            success_count=$((success_count + 1))
+            last_error=""
+            consecutive_same_error=0
+        else
+            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - ${DEPLOY_ERROR_MSG}"
+            deploy_results+=("${host}|${site_id}|FAIL|${DEPLOY_ERROR_MSG}")
+            fail_count=$((fail_count + 1))
+            
+            # Check for systemic failure (same error on consecutive hosts)
+            if [ "${DEPLOY_ERROR_MSG}" == "${last_error}" ]; then
+                consecutive_same_error=$((consecutive_same_error + 1))
+                if [ ${consecutive_same_error} -ge 3 ]; then
+                    echo ""
+                    log_error "Systemic failure detected: Same error on 3 consecutive hosts"
+                    log_error "Aborting remaining deployments"
+                    break
+                fi
+            else
+                last_error="${DEPLOY_ERROR_MSG}"
+                consecutive_same_error=1
+            fi
+        fi
+    done <<< "${validation_results}"
+    
+    # Display summary
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  DEPLOY SUMMARY${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    printf "  ${WHITE}%-35s %-10s %-8s %s${NC}\n" "HOST" "SITE" "STATUS" "MESSAGE"
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    
+    for result in "${deploy_results[@]}"; do
+        local r_host r_site r_status r_message
+        IFS='|' read -r r_host r_site r_status r_message <<< "${result}"
+        
+        local status_color="${WHITE}"
+        case "${r_status}" in
+            OK) status_color="${GREEN}" ;;
+            FAIL) status_color="${RED}" ;;
+            SKIP) status_color="${YELLOW}" ;;
+        esac
+        
+        # Mark current device
+        local site_display="${r_site}"
+        if [ "${r_site}" == "CURRENT" ]; then
+            site_display="(current)"
+        fi
+        
+        printf "  ${WHITE}%-35s${NC} ${WHITE}%-10s${NC} ${status_color}%-8s${NC} ${WHITE}%s${NC}\n" \
+            "${r_host:0:35}" "${site_display}" "${r_status}" "${r_message:0:30}"
+    done
+    
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${WHITE}Total: ${GREEN}${success_count} succeeded${NC}, ${RED}${fail_count} failed${NC}, ${YELLOW}${skip_count} skipped${NC}"
+    echo ""
+    
+    if [ ${fail_count} -eq 0 ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Execute deploy for URL category
+# Args: cat_name, urls_json, validation_results (newline-separated), current_host, current_status, current_message
+# Returns: 0 on complete success, 1 on any failure
+execute_deploy_urlcat() {
+    local cat_name="$1"
+    local urls_json="$2"
+    local validation_results="$3"
+    local current_host="${4:-}"
+    local current_status="${5:-}"
+    local current_message="${6:-}"
+    
+    local success_count=0
+    local fail_count=0
+    local skip_count=0
+    local last_error=""
+    local consecutive_same_error=0
+    local -a deploy_results=()
+    
+    # Add current device to results if provided
+    if [ -n "${current_host}" ]; then
+        deploy_results+=("${current_host}|CURRENT|${current_status}|${current_message}")
+        if [ "${current_status}" == "OK" ]; then
+            success_count=$((success_count + 1))
+        else
+            fail_count=$((fail_count + 1))
+        fi
+    fi
+    
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  DEPLOYING TO FLEET${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    
+    while IFS='|' read -r host site_id status message; do
+        [ -z "${host}" ] && continue
+        
+        # Skip hosts that failed validation or were skipped
+        if [ "${status}" != "OK" ]; then
+            deploy_results+=("${host}|${site_id}|${status}|${message}")
+            if [ "${status}" == "SKIP" ]; then
+                skip_count=$((skip_count + 1))
+            else
+                fail_count=$((fail_count + 1))
+            fi
+            continue
+        fi
+        
+        echo -ne "  ${WHITE}[....] Deploying to ${host} (${site_id})${NC}\r"
+        
+        # Deploy to host
+        if deploy_url_category_to_host "${host}" "${cat_name}" "${urls_json}" "${site_id}"; then
+            echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
+            deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
+            success_count=$((success_count + 1))
+            last_error=""
+            consecutive_same_error=0
+        else
+            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - ${DEPLOY_ERROR_MSG}"
+            deploy_results+=("${host}|${site_id}|FAIL|${DEPLOY_ERROR_MSG}")
+            fail_count=$((fail_count + 1))
+            
+            # Check for systemic failure (same error on consecutive hosts)
+            if [ "${DEPLOY_ERROR_MSG}" == "${last_error}" ]; then
+                consecutive_same_error=$((consecutive_same_error + 1))
+                if [ ${consecutive_same_error} -ge 3 ]; then
+                    echo ""
+                    log_error "Systemic failure detected: Same error on 3 consecutive hosts"
+                    log_error "Aborting remaining deployments"
+                    break
+                fi
+            else
+                last_error="${DEPLOY_ERROR_MSG}"
+                consecutive_same_error=1
+            fi
+        fi
+    done <<< "${validation_results}"
+    
+    # Display summary
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  DEPLOY SUMMARY${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    printf "  ${WHITE}%-35s %-10s %-8s %s${NC}\n" "HOST" "SITE" "STATUS" "MESSAGE"
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    
+    for result in "${deploy_results[@]}"; do
+        local r_host r_site r_status r_message
+        IFS='|' read -r r_host r_site r_status r_message <<< "${result}"
+        
+        local status_color="${WHITE}"
+        case "${r_status}" in
+            OK) status_color="${GREEN}" ;;
+            FAIL) status_color="${RED}" ;;
+            SKIP) status_color="${YELLOW}" ;;
+        esac
+        
+        # Mark current device
+        local site_display="${r_site}"
+        if [ "${r_site}" == "CURRENT" ]; then
+            site_display="(current)"
+        fi
+        
+        printf "  ${WHITE}%-35s${NC} ${WHITE}%-10s${NC} ${status_color}%-8s${NC} ${WHITE}%s${NC}\n" \
+            "${r_host:0:35}" "${site_display}" "${r_status}" "${r_message:0:30}"
+    done
+    
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${WHITE}Total: ${GREEN}${success_count} succeeded${NC}, ${RED}${fail_count} failed${NC}, ${YELLOW}${skip_count} skipped${NC}"
+    echo ""
+    
+    if [ ${fail_count} -eq 0 ]; then
+        return 0
+    fi
+    return 1
 }
 
 # =============================================================================
@@ -2122,13 +3047,13 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v2.1                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v3.0                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     
     if [ "${SESSION_MODE}" == "rest-api" ]; then
         # REST API mode menu
-        echo -e "  ${CYAN}║${NC}  ${WHITE}Mode: ${GREEN}REST API${NC} - ${WHITE}${REMOTE_HOST}${NC}"
+        echo -e "  ${CYAN}${NC}  ${WHITE}Mode: ${GREEN}REST API${NC} - ${WHITE}${REMOTE_HOST}${NC}"
         echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
         echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
         echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}View Datagroup${NC}                                       ${CYAN}║${NC}"
@@ -4426,7 +5351,7 @@ editor_submenu() {
         clear
         echo ""
         echo -e "  ${CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                        ${display_title}                                ${NC}${CYAN}║${NC}"
+        echo -e "  ${CYAN}${NC}${WHITE}                           ${display_title}                             ${NC}${CYAN}${NC}"
         echo -e "  ${CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
         echo -e "  ${WHITE}${display_info1}${NC}"
         if [ -n "${display_info2}" ]; then
@@ -4459,27 +5384,30 @@ editor_submenu() {
         echo -e "  ${WHITE}Sort: ${sort_indicator}${NC}"
         
         # Menu options
-        echo ""
+		echo ""
         echo -e "  ${YELLOW}n)${NC} Next page    ${YELLOW}p)${NC} Previous page    ${YELLOW}g)${NC} Go to page"
         echo -e "  ${YELLOW}f)${NC} Filter       ${YELLOW}c)${NC} Clear filter     ${YELLOW}s)${NC} Change sort"
         echo -e "  ${YELLOW}a)${NC} Add entry    ${YELLOW}d)${NC} Delete entry     ${YELLOW}x)${NC} Delete by pattern"
-        echo -e "  ${YELLOW}w)${NC} Apply changes (write to system)"
+        echo -e "  ${YELLOW}w)${NC} Apply changes (write to current device)"
+        if [ "${SESSION_MODE}" == "rest-api" ] && fleet_available; then
+            echo -e "  ${YELLOW}D)${NC} Deploy to fleet"
+        fi
         echo -e "  ${YELLOW}q)${NC} Done (return to main menu)"
         echo ""
         read -rp "  Select option: " edit_choice
         
         case "${edit_choice}" in
-            n|N)
+            n)
                 if [ ${current_page} -lt ${total_pages} ]; then
                     current_page=$((current_page + 1))
                 fi
                 ;;
-            p|P)
+            p)
                 if [ ${current_page} -gt 1 ]; then
                     current_page=$((current_page - 1))
                 fi
                 ;;
-            g|G)
+            g)
                 echo ""
                 read -rp "  Enter page number (1-${total_pages}): " goto_page
                 if [[ "${goto_page}" =~ ^[0-9]+$ ]] && [ "${goto_page}" -ge 1 ] && [ "${goto_page}" -le "${total_pages}" ]; then
@@ -4489,16 +5417,16 @@ editor_submenu() {
                     press_enter_to_continue
                 fi
                 ;;
-            f|F)
+            f)
                 echo ""
                 read -rp "  Enter search pattern (case-insensitive): " current_filter
                 current_page=1
                 ;;
-            c|C)
+            c)
                 current_filter=""
                 current_page=1
                 ;;
-            s|S)
+            s)
                 echo ""
                 echo -e "  ${WHITE}Sort order:${NC}"
                 echo -e "    ${YELLOW}1)${NC} Original (as stored)"
@@ -4512,7 +5440,7 @@ editor_submenu() {
                     3) current_sort="desc" ;;
                 esac
                 ;;
-            a|A)
+            a)
                 # Add entry - modifies working arrays only
                 if [ "${edit_type}" == "datagroup" ]; then
                     echo ""
@@ -4591,13 +5519,13 @@ editor_submenu() {
                 fi
                 press_enter_to_continue
                 ;;
-            d|D)
+			d)
                 # Delete entry - modifies working arrays only
                 echo ""
-                read -rp "  Enter entry number or key to delete: " del_input
+                read -rp "  Enter entry number or key to delete (or 'q' to cancel): " del_input
                 
-                if [ -z "${del_input}" ]; then
-                    log_warn "No entry specified."
+                if [ -z "${del_input}" ] || [ "${del_input}" == "q" ] || [ "${del_input}" == "Q" ]; then
+                    log_info "Cancelled."
                     press_enter_to_continue
                     continue
                 fi
@@ -4672,7 +5600,7 @@ editor_submenu() {
                 log_ok "Entry staged for deletion: ${del_key}"
                 press_enter_to_continue
                 ;;
-            x|X)
+            x)
                 # Delete by pattern - modifies working arrays only
                 echo ""
                 read -rp "  Enter pattern to match entries for deletion: " del_pattern
@@ -4745,7 +5673,7 @@ editor_submenu() {
                 log_ok "${match_count} entries staged for deletion."
                 press_enter_to_continue
                 ;;
-            w|W)
+            w)
                 # Apply changes - create backup and write to system
                 if ! has_pending_changes; then
                     log_info "No changes to apply."
@@ -4962,7 +5890,332 @@ editor_submenu() {
                 prompt_save_config
                 press_enter_to_continue
                 ;;
-            q|Q)
+			D)
+                # Deploy to Big-IPs (REST API mode only)
+                if [ "${SESSION_MODE}" != "rest-api" ]; then
+                    log_warn "Deploy is only available in REST API mode."
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                if ! fleet_available; then
+                    log_warn "No Big-IPs configured. Add hosts to ${FLEET_CONFIG_FILE}"
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                if ! has_pending_changes; then
+                    log_info "No changes to deploy."
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                # Show processing message for large datasets
+                echo ""
+                echo -ne "  ${WHITE}[....] Analyzing changes...${NC}\r"
+                
+                # Build lookup tables for O(n) comparison
+                local -A orig_lookup=()
+                local -A work_lookup=()
+                
+                for key in "${original_keys[@]}"; do
+                    orig_lookup["${key}"]=1
+                done
+                
+                for key in "${working_keys[@]}"; do
+                    work_lookup["${key}"]=1
+                done
+                
+                # Build lists of additions and deletions using lookup tables
+                local -a deploy_additions=()
+                local -a deploy_deletions=()
+                
+                # Deleted = in original but not in working
+                for orig_key in "${original_keys[@]}"; do
+                    if [ -z "${work_lookup[${orig_key}]+x}" ]; then
+                        deploy_deletions+=("${orig_key}")
+                    fi
+                done
+                
+                # Added = in working but not in original
+                for work_key in "${working_keys[@]}"; do
+                    if [ -z "${orig_lookup[${work_key}]+x}" ]; then
+                        deploy_additions+=("${work_key}")
+                    fi
+                done
+                
+                echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Analyzing changes... done${NC}"
+                
+                # Show pending changes
+                echo ""
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo -e "  ${WHITE}  PENDING CHANGES TO DEPLOY${NC}"
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo ""
+                
+                if [ ${#deploy_additions[@]} -gt 0 ]; then
+                    echo -e "  ${GREEN}Additions (${#deploy_additions[@]}):${NC}"
+                    local show_count=0
+                    for entry in "${deploy_additions[@]}"; do
+                        if [ ${show_count} -lt 10 ]; then
+                            echo -e "    ${GREEN}+ ${entry}${NC}"
+                        fi
+                        show_count=$((show_count + 1))
+                    done
+                    if [ ${#deploy_additions[@]} -gt 10 ]; then
+                        echo -e "    ${GREEN}... and $((${#deploy_additions[@]} - 10)) more${NC}"
+                    fi
+                fi
+                
+                if [ ${#deploy_deletions[@]} -gt 0 ]; then
+                    if [ ${#deploy_additions[@]} -gt 0 ]; then
+                        echo ""
+                    fi
+                    echo -e "  ${RED}Deletions (${#deploy_deletions[@]}):${NC}"
+                    local show_count=0
+                    for entry in "${deploy_deletions[@]}"; do
+                        if [ ${show_count} -lt 10 ]; then
+                            echo -e "    ${RED}- ${entry}${NC}"
+                        fi
+                        show_count=$((show_count + 1))
+                    done
+                    if [ ${#deploy_deletions[@]} -gt 10 ]; then
+                        echo -e "    ${RED}... and $((${#deploy_deletions[@]} - 10)) more${NC}"
+                    fi
+                fi
+                
+                echo ""
+                echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+                echo -e "  ${WHITE}Final entry count: ${#working_keys[@]}${NC}"
+                echo ""
+                
+                read -rp "  Continue to deployment options? (yes/no) [no]: " continue_deploy
+                if [ "${continue_deploy}" != "yes" ]; then
+                    log_info "Deploy cancelled."
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                # Select deploy scope
+                local deploy_targets
+                if [ "${edit_type}" == "datagroup" ]; then
+                    deploy_targets=$(select_deploy_scope "datagroup" "/${partition}/${dg_name}")
+                else
+                    deploy_targets=$(select_deploy_scope "urlcat" "${cat_name}")
+                fi
+                
+                if [ -z "${deploy_targets}" ]; then
+                    log_info "Deploy cancelled."
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                local target_count
+                target_count=$(echo "${deploy_targets}" | grep -c . || echo "0")
+                
+                # Show deployment summary
+                echo ""
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo -e "  ${WHITE}  DEPLOY PREVIEW${NC}"
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo ""
+                if [ "${edit_type}" == "datagroup" ]; then
+                    echo -e "  ${WHITE}Object:  /${partition}/${dg_name} (${dg_type})${NC}"
+                else
+                    echo -e "  ${WHITE}Object:  ${cat_name}${NC}"
+                fi
+                echo -e "  ${WHITE}Changes: ${GREEN}+${#deploy_additions[@]}${NC} / ${RED}-${#deploy_deletions[@]}${NC}"
+                echo ""
+                echo -e "  ${WHITE}Deployment order:${NC}"
+                echo -e "    ${WHITE}1. ${REMOTE_HOST} (current device)${NC}"
+                local target_num=2
+                while IFS= read -r target_host; do
+                    [ -z "${target_host}" ] && continue
+                    local target_site
+                    target_site=$(get_host_site "${target_host}")
+                    echo -e "    ${WHITE}${target_num}. ${target_host} (${target_site})${NC}"
+                    target_num=$((target_num + 1))
+                done <<< "${deploy_targets}"
+                echo ""
+                
+                local total_targets=$((target_count + 1))
+                echo -e "  ${WHITE}Total: ${total_targets} device(s)${NC}"
+                echo ""
+                
+                # Require explicit confirmation
+                echo -e "  ${RED}WARNING: This will push pending changes to all listed Big-IPs.${NC}"
+                echo ""
+                read -rp "  Type DEPLOY to confirm: " confirm_deploy
+                
+                if [ "${confirm_deploy}" != "DEPLOY" ]; then
+                    log_info "Deploy cancelled."
+                    press_enter_to_continue
+                    continue
+                fi
+				clear
+                # =====================================================================
+                # STEP 1: Apply to current device first
+                # =====================================================================
+                echo ""
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo -e "  ${WHITE}  STEP 1: APPLYING TO CURRENT DEVICE${NC}"
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo ""
+                
+                # Create backup of current device
+                log_step "Creating backup on ${REMOTE_HOST}..."
+                local current_backup=""
+                if [ "${edit_type}" == "datagroup" ]; then
+                    current_backup=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+                else
+                    local safe_name
+                    safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+                    current_backup="${BACKUP_DIR}/urlcat_${safe_name}_${TIMESTAMP}.csv"
+                    {
+                        echo "# URL Category Backup: ${cat_name}"
+                        echo "# Host: ${REMOTE_HOST}"
+                        echo "# Created: $(date)"
+                        echo "#"
+                        for orig_url in "${original_keys[@]}"; do
+                            echo "${orig_url}"
+                        done
+                    } > "${current_backup}" 2>/dev/null
+                fi
+                
+                if [ -n "${current_backup}" ] && [ -f "${current_backup}" ]; then
+                    log_ok "Backup saved: ${current_backup}"
+                else
+                    log_warn "Could not create backup for current device."
+                    read -rp "  Continue without backup? (yes/no) [no]: " cont
+                    if [ "${cont}" != "yes" ]; then
+                        log_info "Deploy cancelled."
+                        press_enter_to_continue
+                        continue
+                    fi
+                fi
+                
+                # Apply to current device
+                local current_device_success=false
+                if [ "${edit_type}" == "datagroup" ]; then
+                    log_step "Applying changes to ${REMOTE_HOST}..."
+                    
+                    echo -ne "  ${WHITE}[....] Building records...${NC}\r"
+                    local current_records_json
+                    current_records_json=$(
+                        for ((i=0; i<${#working_keys[@]}; i++)); do
+                            echo "${working_keys[$i]}|${working_values[$i]:-}"
+                        done | build_records_json_remote "${dg_type}"
+                    )
+                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building records... done${NC}"
+                    
+                    if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${current_records_json}"; then
+                        log_ok "Changes applied to ${REMOTE_HOST}"
+                        log_step "Saving configuration on ${REMOTE_HOST}..."
+                        if save_config_remote; then
+                            log_ok "Configuration saved on ${REMOTE_HOST}"
+                            current_device_success=true
+                        else
+                            log_error "Failed to save configuration on ${REMOTE_HOST}"
+                        fi
+                    else
+                        log_error "Failed to apply changes to ${REMOTE_HOST} (HTTP ${API_HTTP_CODE})"
+                    fi
+                else
+                    log_step "Applying changes to ${REMOTE_HOST}..."
+                    
+                    echo -ne "  ${WHITE}[....] Building URL list...${NC}\r"
+                    local current_urls_json
+                    current_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
+                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building URL list... done${NC}"
+                    
+                    if modify_url_category_replace_remote "${cat_name}" "${current_urls_json}"; then
+                        log_ok "Changes applied to ${REMOTE_HOST}"
+                        log_step "Saving configuration on ${REMOTE_HOST}..."
+                        if save_config_remote; then
+                            log_ok "Configuration saved on ${REMOTE_HOST}"
+                            current_device_success=true
+                        else
+                            log_error "Failed to save configuration on ${REMOTE_HOST}"
+                        fi
+                    else
+                        log_error "Failed to apply changes to ${REMOTE_HOST} (HTTP ${API_HTTP_CODE})"
+                    fi
+                fi
+                
+                if [ "${current_device_success}" != "true" ]; then
+                    echo ""
+                    log_error "Failed to apply changes to current device."
+                    read -rp "  Continue deploying to Big-IPs anyway? (yes/no) [no]: " cont_fleet
+                    if [ "${cont_fleet}" != "yes" ]; then
+                        log_info "Deploy aborted."
+                        press_enter_to_continue
+                        continue
+                    fi
+                fi
+                
+				# Track current device status for summary
+                local current_device_status="FAIL"
+                local current_device_message="Failed to apply"
+                if [ "${current_device_success}" == "true" ]; then
+                    current_device_status="OK"
+                    current_device_message="Deployed and saved"
+                    original_keys=("${working_keys[@]}")
+                    original_values=("${working_values[@]}")
+                fi
+                
+                # =====================================================================
+                # STEP 2: Deploy to Big-IPs
+                # =====================================================================
+                echo ""
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo -e "  ${WHITE}  STEP 2: DEPLOYING TO BIG-IPS${NC}"
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                
+                # Run pre-deploy validation
+                local validation_results
+                if [ "${edit_type}" == "datagroup" ]; then
+                    validation_results=$(run_predeploy_validation_datagroup "${partition}" "${dg_name}" "${deploy_targets}")
+                else
+                    validation_results=$(run_predeploy_validation_urlcat "${cat_name}" "${deploy_targets}")
+                fi
+                
+                # Count ready Big-IPs
+                local ready_count
+                ready_count=$(echo "${validation_results}" | grep -c '|OK|' || echo "0")
+                
+                if [ "${ready_count}" -eq 0 ]; then
+                    log_warn "No Big-IPs ready for deployment."
+                    if [ "${current_device_success}" == "true" ]; then
+                        log_ok "Changes were applied to current device (${REMOTE_HOST})."
+                    fi
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                # Execute deploy to Big-IPs
+                if [ "${edit_type}" == "datagroup" ]; then
+                    echo -ne "  ${WHITE}[....] Building records for deployment...${NC}\r"
+                    local deploy_records_json
+                    deploy_records_json=$(
+                        for ((i=0; i<${#working_keys[@]}; i++)); do
+                            echo "${working_keys[$i]}|${working_values[$i]:-}"
+                        done | build_records_json_remote "${dg_type}"
+                    )
+                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building records for deployment... done${NC}"
+                    
+                    execute_deploy_datagroup "${partition}" "${dg_name}" "${dg_type}" "${deploy_records_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}"
+                else
+                    echo -ne "  ${WHITE}[....] Building URL list for deployment...${NC}\r"
+                    local deploy_urls_json
+                    deploy_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
+                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building URL list for deployment... done${NC}"
+                    
+                    execute_deploy_urlcat "${cat_name}" "${deploy_urls_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}"
+                fi
+                
+                press_enter_to_continue
+                ;;
+            q)
                 # Check for pending changes before exit
                 if has_pending_changes; then
                     echo ""
@@ -5138,87 +6391,110 @@ menu_edit_datagroup_or_category() {
 }
 
 main() {
-    # Select operation mode first (before anything else)
-    select_session_mode
-    
-    # Clear screen after mode selection
-    clear
-    
-    # Try to create backup/log directory
-    mkdir -p "${BACKUP_DIR}" 2>/dev/null
-    
-    # Initialize log (if directory is writable)
-    if touch "${LOGFILE}" 2>/dev/null; then
-        echo "DGCat-Admin - F5 BIG-IP Administration Tool" > "${LOGFILE}"
-        echo "Started: $(date)" >> "${LOGFILE}"
-        echo "Mode: ${SESSION_MODE}" >> "${LOGFILE}"
-        if [ "${SESSION_MODE}" == "rest-api" ]; then
-            echo "Target: (pending connection)" >> "${LOGFILE}"
-        fi
-    fi
-    
-    # Run pre-flight checks (mode-specific)
-    preflight_checks
-    
-    # Update log with target host if applicable
-    if [ "${SESSION_MODE}" == "rest-api" ] && [ -n "${REMOTE_HOST}" ]; then
-        echo "Target: ${REMOTE_HOST}" >> "${LOGFILE}" 2>/dev/null
-    fi
-    
-    # Pause after TMSH preflight (REST API goes straight to menu)
-    if [ "${SESSION_MODE}" == "tmsh" ]; then
-        press_enter_to_continue
-    fi
-    
-    # Main menu loop
+    # Outer loop for mode selection
     while true; do
-        show_main_menu
-			if [ "${SESSION_MODE}" == "rest-api" ]; then
-            # REST API mode menu
-            read -rp "  Select option [0-5]: " choice
+        # Reset session variables
+        SESSION_MODE=""
+        REMOTE_HOST=""
+        REMOTE_USER=""
+        REMOTE_PASS=""
+        FLEET_SITES=()
+        FLEET_HOSTS=()
+        FLEET_UNIQUE_SITES=()
+        
+        # Select operation mode first (before anything else)
+        select_session_mode
+        
+        # Clear screen after mode selection
+        clear
+        
+        # Try to create backup/log directory
+        mkdir -p "${BACKUP_DIR}" 2>/dev/null
+        
+        # Update timestamp for new session
+        TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+        LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
+        
+        # Initialize log (if directory is writable)
+        if touch "${LOGFILE}" 2>/dev/null; then
+            echo "DGCat-Admin - F5 BIG-IP Administration Tool" > "${LOGFILE}"
+            echo "Started: $(date)" >> "${LOGFILE}"
+            echo "Mode: ${SESSION_MODE}" >> "${LOGFILE}"
+            if [ "${SESSION_MODE}" == "rest-api" ]; then
+                echo "Target: (pending connection)" >> "${LOGFILE}"
+            fi
+        fi
+        
+        # Run pre-flight checks (mode-specific)
+        preflight_checks
+        
+        # Update log with target host if applicable
+        if [ "${SESSION_MODE}" == "rest-api" ] && [ -n "${REMOTE_HOST}" ]; then
+            echo "Target: ${REMOTE_HOST}" >> "${LOGFILE}" 2>/dev/null
+        fi
+        
+        # Pause after preflight checks
+        press_enter_to_continue
+        
+        # Main menu loop
+        local return_to_mode_select=false
+        while true; do
+            show_main_menu
             
-            case "${choice}" in
-                1) menu_view_datagroup ;;
-                2) menu_create_from_csv ;;
-                3) menu_delete_datagroup ;;
-                4) menu_export_to_csv ;;
-                5) menu_edit_datagroup_or_category ;;
-                0)
-                    log_section "Exit"
-                    log_info "Session ended: $(date)"
-                    log_info "Log file: ${LOGFILE}"
-                    echo ""
-                    exit 0
-                    ;;
-                *)
-                    log_warn "Invalid selection."
-                    press_enter_to_continue
-                    ;;
-            esac
-        else
-            # TMSH mode menu
-            read -rp "  Select option [0-7]: " choice
-            
-            case "${choice}" in
-                1) menu_list_datagroups ;;
-                2) menu_view_datagroup ;;
-                3) menu_create_from_csv ;;
-                4) menu_delete_datagroup ;;
-                5) menu_export_to_csv ;;
-                6) menu_convert_url_category ;;
-                7) menu_edit_datagroup_or_category ;;
-                0)
-                    log_section "Exit"
-                    log_info "Session ended: $(date)"
-                    log_info "Log file: ${LOGFILE}"
-                    echo ""
-                    exit 0
-                    ;;
-                *)
-                    log_warn "Invalid selection."
-                    press_enter_to_continue
-                    ;;
-            esac
+            if [ "${SESSION_MODE}" == "rest-api" ]; then
+                # REST API mode menu
+                read -rp "  Select option [0-5]: " choice
+                
+                case "${choice}" in
+                    1) menu_view_datagroup ;;
+                    2) menu_create_from_csv ;;
+                    3) menu_delete_datagroup ;;
+                    4) menu_export_to_csv ;;
+                    5) menu_edit_datagroup_or_category ;;
+                    0)
+                        log_section "Session End"
+                        log_info "Session ended: $(date)"
+                        log_info "Log file: ${LOGFILE}"
+                        echo ""
+                        return_to_mode_select=true
+                        break
+                        ;;
+                    *)
+                        log_warn "Invalid selection."
+                        press_enter_to_continue
+                        ;;
+                esac
+            else
+                # TMSH mode menu
+                read -rp "  Select option [0-7]: " choice
+                
+                case "${choice}" in
+                    1) menu_list_datagroups ;;
+                    2) menu_view_datagroup ;;
+                    3) menu_create_from_csv ;;
+                    4) menu_delete_datagroup ;;
+                    5) menu_export_to_csv ;;
+                    6) menu_convert_url_category ;;
+                    7) menu_edit_datagroup_or_category ;;
+                    0)
+                        log_section "Session End"
+                        log_info "Session ended: $(date)"
+                        log_info "Log file: ${LOGFILE}"
+                        echo ""
+                        return_to_mode_select=true
+                        break
+                        ;;
+                    *)
+                        log_warn "Invalid selection."
+                        press_enter_to_continue
+                        ;;
+                esac
+            fi
+        done
+        
+        # If we broke out of menu loop, continue outer loop to mode select
+        if [ "${return_to_mode_select}" == "true" ]; then
+            continue
         fi
     done
 }
