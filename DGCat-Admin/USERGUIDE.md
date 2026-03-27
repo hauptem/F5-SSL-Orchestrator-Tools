@@ -2,9 +2,9 @@
 
 ## What This Tool Does
 
-DGCat-Admin manages LTM datagroups and custom URL categories on F5 BIG-IP systems. If you're running SSL Orchestrator, you probably have a bunch of datagroups and URL categories driving your security policies. This tool makes them easier to manage.
+DGCat-Admin manages LTM datagroups and custom URL categories on F5 BIG-IP systems. If you're running SSL Orchestrator, you probably have a bunch of datagroups and URL categories driving your security policies. This tool makes them easier to manage and ensure your deployed SSLO topology stays synchronized with regards to security policy lookups.
 
-You can run it directly on a BIG-IP (TMSH mode) or remotely from any Linux/Mac box with curl and jq (REST API mode). The REST API mode also lets you push changes to multiple BIG-IPs at once.
+You can DGCat-Admin directly on a BIG-IP (TMSH mode) or remotely from any Linux/Mac box with curl and jq (REST API mode). The REST API mode also lets you push changes to multiple BIG-IPs at once.
 
 ---
 
