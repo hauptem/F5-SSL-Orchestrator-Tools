@@ -429,7 +429,7 @@ Before any changes are made, the tool validates each target:
 2. **Object exists** — The datagroup/URL category exists on the target
 3. **Backup** — Creates a backup on the local machine
 
-Hosts that fail validation are skipped. If an object doesn't exist on a target, that target is skipped (not created).
+Hosts that fail validation are skipped. If an object doesn't exist on a target, that target is skipped.
 
 ### Systemic Failure Detection
 
@@ -455,7 +455,7 @@ ${BACKUP_DIR}/
 
 ## Interactive Editor
 
-The editor provides a powerful interface for making multiple changes before applying them.
+The editor provides a powerful interface for making multiple changes.
 
 ### Editor Interface
 
@@ -578,13 +578,6 @@ example.com,Production Site
 443,HTTPS
 8080,Proxy
 ```
-
-**Notes:**
-- First column is the key, second column is the value
-- Values are optional (can have key-only entries)
-- Lines starting with `#` are treated as comments
-- Empty lines are ignored
-- Windows line endings (CRLF) are automatically converted
 
 ### URL Category CSV Format
 
