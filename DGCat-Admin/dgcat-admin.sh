@@ -2,8 +2,10 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version:  2.1
-# Author:   Eric Haupt
+# Version: 2.1
+# Author: Eric Haupt
+# Released under the MIT License. See LICENSE file for details.
+# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
 # Requirements: BIG-IP TMOS 17.x or higher
 #
