@@ -349,7 +349,7 @@ DR|sslo-dr-secondary.example.com
   ──────────────────────────────────────────────────────────────
   Final entry count: 152
 
-  Continue to scope selection? (yes/no) [no]:
+  Continue to deployment options? (yes/no) [no]:
 ```
 
 **Step 2: Select Deploy Scope**
