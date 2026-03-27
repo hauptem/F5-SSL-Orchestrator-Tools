@@ -39,7 +39,7 @@ Version 2.0 adds the ability to manage BIG-IP datagroups and URL categories remo
 
 ### Mode Selection
 
-When you start the tool, you'll choose your operation mode:
+When you start the tool, you'll choose your operating mode:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
