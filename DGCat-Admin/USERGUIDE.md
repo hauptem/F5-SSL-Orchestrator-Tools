@@ -41,15 +41,15 @@ Pick REST API if you're managing multiple boxes Pick TMSH if you need external d
 
 ## The Menus
 
-Both modes are menu-driven. TMSH mode has 7 options, REST API has 5. The options do what they say — view, create, delete, export, edit.
+Both modes are menu-driven. 
 
 A few things worth noting:
 
 **Create/Update from CSV** can either create a new object or update an existing one. If the object exists, you choose overwrite (replace everything) or merge (add to what's there).
 
-**Delete** requires typing DELETE to confirm. There's no undo, but the tool creates a backup first.
+**Delete** requires typing DELETE for final confirmation. There's no undo, but the tool creates a backup first.
 
-**Edit** opens an interactive editor where you can make multiple changes before applying them. More on that below.
+**Edit** opens an interactive editor where you can make multiple changes before applying them. 
 
 ---
 
