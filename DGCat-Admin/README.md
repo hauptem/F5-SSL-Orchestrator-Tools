@@ -6,6 +6,25 @@
 
 A menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. Designed for primarily for SSL Orchestrator (SSLO) policy management, but can be used for general purpose datagroup and URL category management.
 
+## Why This Tool?
+
+SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories for traffic classification. While you can add sites directly to SSLO policies, this approach has limitations:
+
+- SSLO uses iAppLX to generate APM per-request policies under the hood
+- Each host or site added directly becomes an expression in the APM policy
+- Large lists could degrade policy performance and are not easily manageable
+
+**The recommended approach:** Use datagroups or URL categories for SSLO security policy rules. They're optimized for fast lookups, keep policies clean and are operationally easier to maintain.
+
+DGCat-Admin makes managing those site lists very easy. 
+
+- Need to export a few massive datagroups or custom url categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
+- Need to ingest a large number of subnets or hosts from an excel spreadsheet into a datagroup for SSLO security policy use?
+- Want to take a custom URL category and convert it to a datagroup?
+- Want to take a datagroup and convert it to a custom URL Category?
+
+**This tool was designed specifically for those purposes.**
+
 ## Features
 
 - **Dual Mode Operation** — Local TMSH or remote REST API
