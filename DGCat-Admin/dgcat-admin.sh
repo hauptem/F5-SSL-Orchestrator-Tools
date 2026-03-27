@@ -567,7 +567,7 @@ select_session_mode() {
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}    ${YELLOW}1)${NC}  ${WHITE}TMSH     - Use tmsh commands locally${NC}                ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}    ${YELLOW}2)${NC}  ${WHITE}REST API - Use iControl REST API${NC}                    ${CYAN}║${NC}"
-	echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"  
     echo -e "  ${CYAN}║${NC}    ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                ${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
@@ -5384,7 +5384,7 @@ editor_submenu() {
         echo -e "  ${WHITE}Sort: ${sort_indicator}${NC}"
         
         # Menu options
-		echo ""
+        echo ""
         echo -e "  ${YELLOW}n)${NC} Next page    ${YELLOW}p)${NC} Previous page    ${YELLOW}g)${NC} Go to page"
         echo -e "  ${YELLOW}f)${NC} Filter       ${YELLOW}c)${NC} Clear filter     ${YELLOW}s)${NC} Change sort"
         echo -e "  ${YELLOW}a)${NC} Add entry    ${YELLOW}d)${NC} Delete entry     ${YELLOW}x)${NC} Delete by pattern"
@@ -5519,7 +5519,7 @@ editor_submenu() {
                 fi
                 press_enter_to_continue
                 ;;
-			d)
+            d)
                 # Delete entry - modifies working arrays only
                 echo ""
                 read -rp "  Enter entry number or key to delete (or 'q' to cancel): " del_input
@@ -5890,7 +5890,7 @@ editor_submenu() {
                 prompt_save_config
                 press_enter_to_continue
                 ;;
-			D)
+            D)
                 # Deploy to Big-IPs (REST API mode only)
                 if [ "${SESSION_MODE}" != "rest-api" ]; then
                     log_warn "Deploy is only available in REST API mode."
@@ -6052,7 +6052,7 @@ editor_submenu() {
                     press_enter_to_continue
                     continue
                 fi
-				clear
+                clear
                 # =====================================================================
                 # STEP 1: Apply to current device first
                 # =====================================================================
@@ -6153,7 +6153,7 @@ editor_submenu() {
                     fi
                 fi
                 
-				# Track current device status for summary
+                # Track current device status for summary
                 local current_device_status="FAIL"
                 local current_device_message="Failed to apply"
                 if [ "${current_device_success}" == "true" ]; then
