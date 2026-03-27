@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version:  2.0
+# Version:  2.1
 # Author:   Eric Haupt
 #
 # Requirements: BIG-IP TMOS 17.x or higher
@@ -18,7 +18,6 @@
 #   chmod +x dgcat-admin.sh
 #   ./dgcat-admin.sh
 #
-# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 # =============================================================================
 
 set -euo pipefail
@@ -544,7 +543,7 @@ select_session_mode() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v2.0                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v2.1                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
@@ -1009,6 +1008,143 @@ build_urls_json_remote() {
             {name: ., type: "exact-match"}
         end]
     '
+}
+
+# -----------------------------------------------------------------------------
+# REST API Delete Functions
+# -----------------------------------------------------------------------------
+
+# Delete internal datagroup via REST API
+# Args: partition, dg_name
+# Returns: 0 on success, 1 on failure
+delete_internal_datagroup_remote() {
+    local partition="$1"
+    local dg_name="$2"
+    
+    if api_delete "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Delete URL category via REST API
+# Args: cat_name
+# Returns: 0 on success, 1 on failure
+delete_url_category_remote() {
+    local cat_name="$1"
+    
+    if api_delete "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}"; then
+        return 0
+    fi
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# Local (TMSH) Delete Functions
+# -----------------------------------------------------------------------------
+
+# Delete internal datagroup via TMSH
+# Args: partition, dg_name
+# Returns: 0 on success, 1 on failure
+delete_internal_datagroup_local() {
+    local partition="$1"
+    local dg_name="$2"
+    
+    if tmsh delete ltm data-group internal "/${partition}/${dg_name}" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# Delete external datagroup via TMSH (includes associated file cleanup)
+# Args: partition, dg_name, ext_file (optional - file name to clean up)
+# Returns: 0 on full success, 1 on datagroup delete failure, 2 on file cleanup failure
+delete_external_datagroup_local() {
+    local partition="$1"
+    local dg_name="$2"
+    local ext_file="${3:-}"
+    
+    # If ext_file not provided, look it up
+    if [ -z "${ext_file}" ]; then
+        ext_file=$(get_external_datagroup_file "${partition}" "${dg_name}")
+    fi
+    
+    # Delete the external datagroup
+    if ! tmsh delete ltm data-group external "/${partition}/${dg_name}" 2>/dev/null; then
+        return 1
+    fi
+    
+    # Delete the associated sys file data-group if it exists
+    if [ -n "${ext_file}" ]; then
+        if ! tmsh delete sys file data-group "/${partition}/${ext_file}" 2>/dev/null; then
+            return 2
+        fi
+    fi
+    
+    return 0
+}
+
+# Delete URL category via TMSH
+# Args: cat_name
+# Returns: 0 on success, 1 on failure
+delete_url_category_local() {
+    local cat_name="$1"
+    
+    if tmsh delete sys url-db url-category "${cat_name}" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# Delete Dispatcher Functions
+# -----------------------------------------------------------------------------
+
+# Delete internal datagroup (DISPATCHER)
+# Args: partition, dg_name
+# Returns: 0 on success, 1 on failure
+delete_internal_datagroup() {
+    local partition="$1"
+    local dg_name="$2"
+    
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        delete_internal_datagroup_remote "${partition}" "${dg_name}"
+    else
+        delete_internal_datagroup_local "${partition}" "${dg_name}"
+    fi
+    return $?
+}
+
+# Delete external datagroup (DISPATCHER)
+# Note: External datagroups are NOT supported in REST API mode
+# Args: partition, dg_name, ext_file (optional)
+# Returns: 0 on success, 1 on failure, 2 on partial failure (file cleanup)
+delete_external_datagroup() {
+    local partition="$1"
+    local dg_name="$2"
+    local ext_file="${3:-}"
+    
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        # External datagroups not supported in REST API mode
+        return 1
+    else
+        delete_external_datagroup_local "${partition}" "${dg_name}" "${ext_file}"
+    fi
+    return $?
+}
+
+# Delete URL category (DISPATCHER)
+# Args: cat_name
+# Returns: 0 on success, 1 on failure
+delete_url_category() {
+    local cat_name="$1"
+    
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        delete_url_category_remote "${cat_name}"
+    else
+        delete_url_category_local "${cat_name}"
+    fi
+    return $?
 }
 
 # =============================================================================
@@ -1984,19 +2120,20 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v2.0                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v2.1                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     
     if [ "${SESSION_MODE}" == "rest-api" ]; then
         # REST API mode menu
-        echo -e "  ${CYAN}${NC}  ${WHITE}Mode: ${GREEN}REST API${NC} - ${WHITE}${REMOTE_HOST}${NC}                            ${CYAN}${NC}"
+        echo -e "  ${CYAN}║${NC}  ${WHITE}Mode: ${GREEN}REST API${NC} - ${WHITE}${REMOTE_HOST}${NC}"
         echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
         echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
-        echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}View Datagroup               ${NC}                        ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}View Datagroup${NC}                                       ${CYAN}║${NC}"
         echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}Create/Update Datagroup or URL Category from CSV${NC}     ${CYAN}║${NC}"
-        echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
-        echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Edit a Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Delete Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Edit a Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
         echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
         echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
         echo -e "  ${CYAN}║${NC}   ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
@@ -2652,6 +2789,14 @@ menu_delete_datagroup_only() {
         return
     fi
     
+    # Check if external datagroup in REST API mode (not supported)
+    if [ "${dg_class}" == "external" ] && [ "${SESSION_MODE}" == "rest-api" ]; then
+        log_error "External datagroups cannot be deleted in REST API mode."
+        log_info "Use TMSH mode or delete via BIG-IP GUI."
+        press_enter_to_continue
+        return
+    fi
+    
     # Show current contents
     local dg_type record_count
     dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
@@ -2703,30 +2848,36 @@ menu_delete_datagroup_only() {
     if [ "${dg_class}" == "external" ]; then
         # Delete external datagroup
         log_step "Deleting external datagroup '/${partition}/${dg_name}'..."
-        if tmsh delete ltm data-group external "/${partition}/${dg_name}" 2>/dev/null; then
-            log_ok "External datagroup deleted."
-        else
-            log_error "Failed to delete external datagroup."
-            press_enter_to_continue
-            return
-        fi
+        delete_external_datagroup "${partition}" "${dg_name}" "${ext_file}"
+        local del_result=$?
         
-        # Delete the associated sys file data-group
-        if [ -n "${ext_file}" ]; then
-            log_step "Deleting associated file '${ext_file}'..."
-            if tmsh delete sys file data-group "/${partition}/${ext_file}" 2>/dev/null; then
-                log_ok "File reference deleted."
-            else
-                log_warn "Could not delete file reference. It may need manual cleanup."
-            fi
-        fi
+        case "${del_result}" in
+            0)
+                log_ok "External datagroup deleted."
+                if [ -n "${ext_file}" ]; then
+                    log_ok "Associated file '${ext_file}' deleted."
+                fi
+                ;;
+            1)
+                log_error "Failed to delete external datagroup."
+                press_enter_to_continue
+                return
+                ;;
+            2)
+                log_ok "External datagroup deleted."
+                log_warn "Could not delete associated file '${ext_file}'. It may need manual cleanup."
+                ;;
+        esac
     else
         # Delete internal datagroup
         log_step "Deleting internal datagroup '/${partition}/${dg_name}'..."
-        if tmsh delete ltm data-group internal "/${partition}/${dg_name}" 2>/dev/null; then
-            log_ok "Datagroup '/${partition}/${dg_name}' deleted successfully."
+        if delete_internal_datagroup "${partition}" "${dg_name}"; then
+            log_ok "Internal datagroup '/${partition}/${dg_name}' deleted successfully."
         else
-            log_error "Failed to delete datagroup."
+            log_error "Failed to delete internal datagroup."
+            if [ "${SESSION_MODE}" == "rest-api" ]; then
+                log_error "HTTP ${API_HTTP_CODE}"
+            fi
             press_enter_to_continue
             return
         fi
@@ -2897,10 +3048,13 @@ menu_delete_url_category() {
     
     # Delete the URL category
     log_step "Deleting URL category '${selected_category}'..."
-    if tmsh delete sys url-db url-category "${selected_category}" 2>/dev/null; then
+    if delete_url_category "${selected_category}"; then
         log_ok "URL category '${selected_category}' deleted successfully."
     else
         log_error "Failed to delete URL category."
+        if [ "${SESSION_MODE}" == "rest-api" ]; then
+            log_error "HTTP ${API_HTTP_CODE}"
+        fi
         press_enter_to_continue
         return
     fi
@@ -5017,16 +5171,16 @@ main() {
     # Main menu loop
     while true; do
         show_main_menu
-        
-        if [ "${SESSION_MODE}" == "rest-api" ]; then
+			if [ "${SESSION_MODE}" == "rest-api" ]; then
             # REST API mode menu
-            read -rp "  Select option [0-4]: " choice
+            read -rp "  Select option [0-5]: " choice
             
             case "${choice}" in
                 1) menu_view_datagroup ;;
                 2) menu_create_from_csv ;;
-                3) menu_export_to_csv ;;
-                4) menu_edit_datagroup_or_category ;;
+                3) menu_delete_datagroup ;;
+                4) menu_export_to_csv ;;
+                5) menu_edit_datagroup_or_category ;;
                 0)
                     log_section "Exit"
                     log_info "Session ended: $(date)"
