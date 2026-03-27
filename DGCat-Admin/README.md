@@ -30,18 +30,18 @@ DGCat-Admin makes managing those site lists very easy.
 - **Dual Mode Operation** — Local TMSH or remote REST API
 - **Datagroup Management** — Create, view, edit, delete, import/export
 - **URL Category Management** — Create, view, edit, delete, import/export
-- **Fleet Deployment** — Push changes to multiple BIG-IPs simultaneously
+- **Fleet Deployment** — Push changes to multiple BIG-IPs simultaneously (from within the editor)
 - **Interactive Editor** — Staged editing with add, delete, filter, sort
 - **Automatic Backups** — Pre-change backups with configurable retention
 - **CSV Import/Export** — Bulk operations via standard CSV files
 
 ## Requirements
 
-**TMSH Mode (on BIG-IP):**
+**TMSH Mode:**
 - TMOS 17.x or later
 - Root or admin shell access
 
-**REST API Mode (remote):**
+**REST API Mode:**
 - curl
 - jq
 - Network access to BIG-IP management interface (port 443)
@@ -72,13 +72,16 @@ Edit these variables at the top of the script:
 
 ### Fleet Configuration
 
-For multi-device remote management, create a `${BACKUP_DIR}/fleet.conf`:
+For multi-device remote management, create a `${BACKUP_DIR}/fleet.conf` file. Deployment is only supported for editor change pushes. Ensure the datagroup or URL Category exists at all sites where you wish to push changes to because deployment will not create it if it doesnt already exist.
 
 ```
-# Format: SITE|HOSTNAME_OR_IP
-DC1|sslo-dc1-primary.example.com
-DC1|sslo-dc1-secondary.example.com
-DC2|sslo-dc2-primary.example.com
+# Fleet.conf file format:
+SITE|HOSTNAME_OR_IP_ADDRESS
+DC1|sslo-dc1-primary.company.com
+DC1|sslo-dc1-secondary.company.com
+DC2|sslo-dc2-primary.company.com
+DC2|sslo-dc2-secondary.company.com
+DR1|sslo-dr1-primary-company.com
 ```
 
 ## License
