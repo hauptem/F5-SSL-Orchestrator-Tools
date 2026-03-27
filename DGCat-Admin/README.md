@@ -72,7 +72,7 @@ Edit these variables at the top of the script:
 
 ### Fleet Configuration
 
-For multi-device deployment, create `${BACKUP_DIR}/fleet.conf`:
+For multi-device remote management, create a `${BACKUP_DIR}/fleet.conf`:
 
 ```
 # Format: SITE|HOSTNAME_OR_IP
@@ -81,14 +81,6 @@ DC1|sslo-dc1-secondary.example.com
 DC2|sslo-dc2-primary.example.com
 ```
 
-## Quick Reference
-
-| Mode | Capabilities |
-|------|--------------|
-| TMSH | Full functionality including external datagroups and URL category conversion |
-| REST API | Internal datagroups, URL categories, fleet deployment |
-
-## License
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
