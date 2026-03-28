@@ -225,7 +225,7 @@ function Confirm-BackupDir {
 
 function Remove-OldBackups {
     param([string]$Pattern)
-    $files = Get-ChildItem -Path $script:BACKUP_DIR -Filter "${Pattern}_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+    $files = @(Get-ChildItem -Path $script:BACKUP_DIR -Filter "${Pattern}_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
     if ($files -and $files.Count -gt $script:MAX_BACKUPS) {
         $files | Select-Object -Skip $script:MAX_BACKUPS | Remove-Item -Force -ErrorAction SilentlyContinue
     }
@@ -543,7 +543,7 @@ function Get-UrlCategoryListRemote {
     if ($result.Response.items) {
         foreach ($item in $result.Response.items) { $names += $item.name }
     }
-    return $names | Sort-Object
+    return @($names | Sort-Object)
 }
 
 function Get-UrlCategoryEntriesRemote {
@@ -600,7 +600,7 @@ function Remove-UrlCategoryEntriesRemote {
     $existing = @()
     if ($result.Response.urls) { $existing = @($result.Response.urls) }
     
-    $remaining = $existing | Where-Object { $UrlsToDelete -notcontains $_.name }
+    $remaining = @($existing | Where-Object { $UrlsToDelete -notcontains $_.name })
     
     $body = @{ urls = @($remaining) }
     $patchResult = Invoke-F5Patch -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$Name" -Body $body
@@ -698,14 +698,14 @@ function Get-AllDatagroupList {
             $all += Get-DatagroupListRemote -Partition $partition
         }
     }
-    return $all | Sort-Object { $_.Partition }, { $_.Name }
+    return @($all | Sort-Object { $_.Partition }, { $_.Name })
 }
 
 function Show-PartitionDatagroups {
     param([string]$Partition, [bool]$ShowSystem = $false)
     
     Write-Host "  [....] Retrieving datagroups..." -ForegroundColor White
-    $datagroups = Get-AllDatagroupList | Where-Object { $_.Partition -eq $Partition }
+    $datagroups = @(Get-AllDatagroupList | Where-Object { $_.Partition -eq $Partition })
     
     if ($datagroups.Count -eq 0) {
         Write-LogInfo "No datagroups found in partition '$Partition'."
@@ -997,7 +997,7 @@ function Select-DeployScope {
     $targets = @()
     if ($num -eq 1) {
         # Entire topology
-        $targets = $script:FleetHosts | Where-Object { $_ -ne $script:RemoteHost }
+        $targets = @($script:FleetHosts | Where-Object { $_ -ne $script:RemoteHost })
     } else {
         # Specific site
         $siteIndex = $num - 2
@@ -1429,7 +1429,7 @@ function Show-CsvPreview {
     param([string]$FilePath)
     
     $allLines = Get-Content $FilePath
-    $dataLines = $allLines | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') }
+    $dataLines = @($allLines | Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith('#') })
     
     Write-Host ""
     Write-Host "  Analyzing file: $(Split-Path $FilePath -Leaf)" -ForegroundColor White
@@ -1993,7 +1993,7 @@ function Invoke-CreateUrlCategory {
         $existingSet = @{}
         foreach ($url in $existing) { $existingSet[$url] = $true }
         
-        $newUrls = $convertedUrls | Where-Object { -not $existingSet.ContainsKey($_) }
+        $newUrls = @($convertedUrls | Where-Object { -not $existingSet.ContainsKey($_) })
         
         if ($newUrls.Count -eq 0) {
             Write-LogInfo "No new URLs to add - all entries already exist."
@@ -2656,20 +2656,20 @@ function Invoke-EditorSubmenu {
         }
         
         # Apply filter
-        $filteredEntries = $displayEntries
+        $filteredEntries = @($displayEntries)
         if ($currentFilter) {
-            $filteredEntries = $displayEntries | Where-Object { $_ -match [regex]::Escape($currentFilter) }
-            if ($null -eq $filteredEntries) { $filteredEntries = @() }
+            $filteredEntries = @($displayEntries | Where-Object { $_ -match [regex]::Escape($currentFilter) })
         }
         
         # Apply sort
-        $sortedEntries = switch ($currentSort) {
-            "asc" { $filteredEntries | Sort-Object }
-            "desc" { $filteredEntries | Sort-Object -Descending }
-            default { $filteredEntries }
+        if ($currentSort -eq "asc") {
+            $sortedEntries = @($filteredEntries | Sort-Object)
+        } elseif ($currentSort -eq "desc") {
+            $sortedEntries = @($filteredEntries | Sort-Object -Descending)
+        } else {
+            $sortedEntries = @($filteredEntries)
         }
-        if ($null -eq $sortedEntries) { $sortedEntries = @() }
-        $totalCount = @($sortedEntries).Count
+        $totalCount = $sortedEntries.Count
         
         # Pagination
         $pageSize = $script:EDIT_PAGE_SIZE
