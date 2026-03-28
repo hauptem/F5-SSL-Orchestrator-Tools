@@ -1,4 +1,4 @@
-# DGCat-Admin v3.0 — User Guide
+# DGCat-Admin v4.0 — User Guide
 
 ## Table of Contents
 
