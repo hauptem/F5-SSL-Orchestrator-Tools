@@ -22,11 +22,11 @@
 
 ## 1. System Overview
 
-DGCat-Admin (PowerShell) is a PowerShell script (approximately 3,200 lines) that manages LTM internal datagroups and custom URL categories on F5 BIG-IP systems. It communicates exclusively through the iControl REST API over HTTPS. All operations are performed through a menu-driven interactive interface. The script is a feature-complete port of the Bash v4.0 tool, producing identical behavior from the operator's perspective and identical API interactions with the BIG-IP.
+DGCat-Admin (PowerShell) is a PowerShell script that manages LTM internal datagroups and custom URL categories on F5 BIG-IP systems. It communicates exclusively through the iControl REST API over HTTPS. All operations are performed through a menu-driven interactive interface. 
 
 ### Requirements
 
-The script requires PowerShell 5.1 or later. PowerShell 5.1 ships with Windows 10 and Windows 11 and requires no additional installation.
+The script requires PowerShell 5.1 or later. 
 
 No external dependencies are required. The script uses built-in PowerShell cmdlets and .NET Framework classes:
 
