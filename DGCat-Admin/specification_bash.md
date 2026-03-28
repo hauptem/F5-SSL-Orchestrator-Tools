@@ -1,4 +1,4 @@
-# DGCat-Admin v4.0 — Technical Specification
+# DGCat-Admin v4.0 (Bash) — Technical Specification
 
 ## Table of Contents
 
