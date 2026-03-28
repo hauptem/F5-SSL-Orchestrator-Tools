@@ -117,9 +117,8 @@ When deploying changes to the fleet, two modes are available:
 ## Documentation
 
 - [User Guide](USERGUIDE.md) — Detailed operation instructions
-- [Technical Specification (Bash)](DGCat-Admin_Technical_Specification.md) — Internal architecture and API reference
-- [Technical Specification (PowerShell)](DGCat-Admin_PS_Technical_Specification.md) — PowerShell-specific implementation details
-- [Automation Options](SSLO_Automation_Options.md) — Comparison with Ansible Automation Platform
+- [Technical Specification (Bash)](specification_bash.md) — Internal architecture and API reference
+- [Technical Specification (PowerShell)](specification_bash.md) — PowerShell-specific implementation details
 
 ## License
 
