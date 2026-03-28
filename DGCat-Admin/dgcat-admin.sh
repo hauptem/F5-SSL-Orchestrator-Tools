@@ -506,12 +506,39 @@ api_delete() {
 # -----------------------------------------------------------------------------
 
 # Prompt for REST API connection details and test connection
+# Uses FLEET_HOSTS/FLEET_SITES arrays if already loaded by load_fleet_config()
 # Returns: 0 on successful connection, 1 on failure
 setup_remote_connection() {
     log_section "REST API Connection Setup"
     
+    # Show fleet hosts for quick selection if fleet is loaded
+    if [ ${#FLEET_HOSTS[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${WHITE}Fleet hosts:${NC}"
+        echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}"
+        local i=1
+        for idx in "${!FLEET_HOSTS[@]}"; do
+            printf "    ${YELLOW}%2d)${NC} ${WHITE}%s (%s)${NC}\n" "${i}" "${FLEET_HOSTS[$idx]}" "${FLEET_SITES[$idx]}"
+            i=$((i + 1))
+        done
+        echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}"
+    fi
+    
     echo ""
-    read -rp "  BIG-IP hostname or IP: " REMOTE_HOST
+    local host_input
+    if [ ${#FLEET_HOSTS[@]} -gt 0 ]; then
+        read -rp "  Select [1-${#FLEET_HOSTS[@]}] or enter hostname/IP: " host_input
+    else
+        read -rp "  BIG-IP hostname or IP: " host_input
+    fi
+    
+    if [ -n "${host_input}" ] && [[ "${host_input}" =~ ^[0-9]+$ ]] && \
+       [ ${#FLEET_HOSTS[@]} -gt 0 ] && \
+       [ "${host_input}" -ge 1 ] && [ "${host_input}" -le ${#FLEET_HOSTS[@]} ] 2>/dev/null; then
+        REMOTE_HOST="${FLEET_HOSTS[$((host_input - 1))]}"
+    else
+        REMOTE_HOST="${host_input}"
+    fi
     
     if [ -z "${REMOTE_HOST}" ]; then
         log_error "No hostname provided."
@@ -632,6 +659,17 @@ preflight_checks_rest_api() {
     fi
     log_ok "Configured partitions: ${PARTITIONS}"
     
+    # Load fleet configuration if available (before connection for host selection)
+    if load_fleet_config; then
+        local host_word="hosts"
+        local site_word="sites"
+        [ ${#FLEET_HOSTS[@]} -eq 1 ] && host_word="host"
+        [ ${#FLEET_UNIQUE_SITES[@]} -eq 1 ] && site_word="site"
+        log_ok "Fleet loaded: ${#FLEET_HOSTS[@]} ${host_word} across ${#FLEET_UNIQUE_SITES[@]} ${site_word}"
+    else
+        log_info "No fleet configured (optional: create ${FLEET_CONFIG_FILE})"
+    fi
+    
     # Establish REST API connection (with retry loop)
     while true; do
         if setup_remote_connection; then
@@ -668,31 +706,6 @@ preflight_checks_rest_api() {
         log_warn "Backups will be disabled. Proceed with caution."
     else
         log_ok "Local backup directory: ${BACKUP_DIR}"
-    fi
-    
-    # Load fleet configuration if available
-    if load_fleet_config; then
-        local host_word="hosts"
-        local site_word="sites"
-        [ ${#FLEET_HOSTS[@]} -eq 1 ] && host_word="host"
-        [ ${#FLEET_UNIQUE_SITES[@]} -eq 1 ] && site_word="site"
-        log_ok "Fleet loaded: ${#FLEET_HOSTS[@]} ${host_word} across ${#FLEET_UNIQUE_SITES[@]} ${site_word}"
-        
-        # Display fleet details
-        for site in "${FLEET_UNIQUE_SITES[@]}"; do
-            local site_hosts=""
-            for i in "${!FLEET_HOSTS[@]}"; do
-                if [ "${FLEET_SITES[$i]}" == "${site}" ]; then
-                    if [ -n "${site_hosts}" ]; then
-                        site_hosts="${site_hosts}, "
-                    fi
-                    site_hosts="${site_hosts}${FLEET_HOSTS[$i]}"
-                fi
-            done
-            log_info "  ${site}: ${site_hosts}"
-        done
-    else
-        log_info "No fleet configured (optional: create ${FLEET_CONFIG_FILE})"
     fi
     
     # Cache URL category DB availability for the session
