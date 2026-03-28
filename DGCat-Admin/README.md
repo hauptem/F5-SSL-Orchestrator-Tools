@@ -94,7 +94,7 @@ Edit the variables at the top of the script:
 
 ### Fleet Configuration
 
-For multi-device deployment, create `fleet.conf` in your backup directory:
+For multi-device deployment, edit `fleet.conf` the script creates in your backup directory:
 
 ```
 # =============================================================================
