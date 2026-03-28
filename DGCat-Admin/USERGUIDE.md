@@ -35,8 +35,6 @@ PARTITIONS="Common"                             # which partitions to manage
 
 **REST API mode** connects remotely. You get most features plus fleet deployment, but no external datagroups (those need filesystem access).
 
-Pick REST API if you're managing multiple boxes Pick TMSH if you need external datagroups or URL category conversion.
-
 ---
 
 ## The Menus
