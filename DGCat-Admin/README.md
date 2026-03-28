@@ -45,7 +45,6 @@ DGCat-Admin makes managing those site lists very easy.
 - curl
 - jq
 - Network access to BIG-IP management interface (port 443)
-- Valid BIG-IP credentials
 
 ## Installation
 
