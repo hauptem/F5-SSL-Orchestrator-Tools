@@ -31,6 +31,12 @@ set -euo pipefail
 BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
 MAX_BACKUPS=30
 
+# API timeout settings (seconds)
+# Connect timeout: max time to establish TCP connection to a BIG-IP
+# Request timeout: max total time for any single API request
+API_CONNECT_TIMEOUT=10
+API_REQUEST_TIMEOUT=30
+
 # Logging
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
@@ -281,28 +287,30 @@ select_datagroup() {
         return 1
     fi
     
-    echo "" >&2
-    local dg_name
-    read -rp "  ${prompt} (or 'q' to cancel): " dg_name
-    
-    if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
-        echo -e "${WHITE}  [INFO]  Cancelled.${NC}" >&2
-        return 1
-    fi
-    
-    # Strip partition prefix if included
-    dg_name=$(strip_partition_prefix "${dg_name}")
-    
-    # Check if exists
-    local dg_class
-    dg_class=$(datagroup_exists "${partition}" "${dg_name}")
-    if [ -z "${dg_class}" ]; then
-        echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_name}' does not exist in partition '${partition}'.${NC}" >&2
-        return 1
-    fi
-    
-    echo "${dg_name}|${dg_class}"
-    return 0
+    while true; do
+        echo "" >&2
+        local dg_name
+        read -rp "  ${prompt} (or 'q' to cancel): " dg_name
+        
+        if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
+            echo -e "${WHITE}  [INFO]  Cancelled.${NC}" >&2
+            return 1
+        fi
+        
+        # Strip partition prefix if included
+        dg_name=$(strip_partition_prefix "${dg_name}")
+        
+        # Check if exists
+        local dg_class
+        dg_class=$(datagroup_exists "${partition}" "${dg_name}")
+        if [ -z "${dg_class}" ]; then
+            echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_name}' does not exist in partition '${partition}'. Try again.${NC}" >&2
+            continue
+        fi
+        
+        echo "${dg_name}|${dg_class}"
+        return 0
+    done
 }
 
 # Prompt to save configuration
@@ -347,6 +355,8 @@ api_request() {
         -H "Content-Type: application/json"
         -X "${method}"
         -w "\n%{http_code}"
+        --connect-timeout "${API_CONNECT_TIMEOUT}"
+        --max-time "${API_REQUEST_TIMEOUT}"
     )
     
     if [ -n "${data}" ]; then
@@ -1486,10 +1496,6 @@ run_predeploy_validation_datagroup() {
     local -a validation_results=()
     
     echo "" >&2
-    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
-    echo -e "  ${WHITE}  PRE-DEPLOY VALIDATION${NC}" >&2
-    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
-    echo "" >&2
     
     while IFS= read -r host; do
         [ -z "${host}" ] && continue
@@ -1501,7 +1507,7 @@ run_predeploy_validation_datagroup() {
         
         # Test connectivity
         if ! test_host_connection "${host}"; then
-            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Connection failed" >&2
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Connection failed" >&2
             validation_results+=("${host}|${site_id}|FAIL|Connection failed")
             all_passed=false
             continue
@@ -1509,7 +1515,7 @@ run_predeploy_validation_datagroup() {
         
         # Verify object exists
         if ! verify_remote_internal_datagroup "${host}" "${partition}" "${dg_name}"; then
-            echo -e "  ${YELLOW}[SKIP]${NC} ${WHITE}${host} (${site_id})${NC} - Datagroup not found" >&2
+            echo -e "\033[2K\r  ${YELLOW}[SKIP]${NC} ${WHITE}${host} (${site_id})${NC} - Datagroup not found" >&2
             validation_results+=("${host}|${site_id}|SKIP|Datagroup not found")
             continue
         fi
@@ -1518,13 +1524,13 @@ run_predeploy_validation_datagroup() {
         local backup_file
         backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${site_id}")
         if [ -z "${backup_file}" ]; then
-            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Backup failed" >&2
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Backup failed" >&2
             validation_results+=("${host}|${site_id}|FAIL|Backup failed")
             all_passed=false
             continue
         fi
         
-        echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC} - Ready" >&2
+        echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC} - Ready" >&2
         validation_results+=("${host}|${site_id}|OK|Ready")
     done <<< "${targets}"
     
@@ -1569,10 +1575,6 @@ run_predeploy_validation_urlcat() {
     local -a validation_results=()
     
     echo "" >&2
-    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
-    echo -e "  ${WHITE}  PRE-DEPLOY VALIDATION${NC}" >&2
-    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
-    echo "" >&2
     
     while IFS= read -r host; do
         [ -z "${host}" ] && continue
@@ -1584,7 +1586,7 @@ run_predeploy_validation_urlcat() {
         
         # Test connectivity
         if ! test_host_connection "${host}"; then
-            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Connection failed" >&2
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Connection failed" >&2
             validation_results+=("${host}|${site_id}|FAIL|Connection failed")
             all_passed=false
             continue
@@ -1601,13 +1603,13 @@ run_predeploy_validation_urlcat() {
         local backup_file
         backup_file=$(backup_remote_url_category "${host}" "${cat_name}" "${site_id}")
         if [ -z "${backup_file}" ]; then
-            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Backup failed" >&2
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Backup failed" >&2
             validation_results+=("${host}|${site_id}|FAIL|Backup failed")
             all_passed=false
             continue
         fi
         
-        echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC} - Ready" >&2
+        echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC} - Ready" >&2
         validation_results+=("${host}|${site_id}|OK|Ready")
     done <<< "${targets}"
     
@@ -1674,10 +1676,6 @@ execute_deploy_datagroup() {
     fi
     
     echo ""
-    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  ${WHITE}  DEPLOYING TO FLEET${NC}"
-    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo ""
     
     while IFS='|' read -r host site_id status message; do
         [ -z "${host}" ] && continue
@@ -1697,13 +1695,13 @@ execute_deploy_datagroup() {
         
         # Deploy to host
         if deploy_internal_datagroup_to_host "${host}" "${partition}" "${dg_name}" "${dg_type}" "${records_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
-            echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
+            echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
             deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
             success_count=$((success_count + 1))
             last_error=""
             consecutive_same_error=0
         else
-            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - ${DEPLOY_ERROR_MSG}"
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - ${DEPLOY_ERROR_MSG}"
             deploy_results+=("${host}|${site_id}|FAIL|${DEPLOY_ERROR_MSG}")
             fail_count=$((fail_count + 1))
             
@@ -1799,10 +1797,6 @@ execute_deploy_urlcat() {
     fi
     
     echo ""
-    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "  ${WHITE}  DEPLOYING TO FLEET${NC}"
-    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
-    echo ""
     
     while IFS='|' read -r host site_id status message; do
         [ -z "${host}" ] && continue
@@ -1822,13 +1816,13 @@ execute_deploy_urlcat() {
         
         # Deploy to host
         if deploy_url_category_to_host "${host}" "${cat_name}" "${urls_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
-            echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
+            echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
             deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
             success_count=$((success_count + 1))
             last_error=""
             consecutive_same_error=0
         else
-            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - ${DEPLOY_ERROR_MSG}"
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - ${DEPLOY_ERROR_MSG}"
             deploy_results+=("${host}|${site_id}|FAIL|${DEPLOY_ERROR_MSG}")
             fail_count=$((fail_count + 1))
             
@@ -4391,11 +4385,15 @@ editor_submenu() {
                     fi
                 fi
                 
+                # Track whether there are actual changes to apply locally
+                local deploy_has_local_changes=false
+                
                 # Analyze changes (may be empty if deploying current state)
                 local -a deploy_additions=()
                 local -a deploy_deletions=()
                 
                 if has_pending_changes; then
+                    deploy_has_local_changes=true
                     # Show processing message for large datasets
                     echo ""
                     echo -ne "  ${WHITE}[....] Analyzing changes...${NC}\r"
@@ -4608,8 +4606,12 @@ editor_submenu() {
                 fi
                 
                 # =====================================================================
-                # STEP 2: Apply to current device
+                # STEP 2: Apply to current device (only if pending changes)
                 # =====================================================================
+                local current_device_status="OK"
+                local current_device_message="No changes needed"
+                
+                if [ "${deploy_has_local_changes}" == "true" ]; then
                 echo ""
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
                 echo -e "  ${WHITE}  STEP 2: APPLYING TO CURRENT DEVICE${NC}"
@@ -4708,21 +4710,26 @@ editor_submenu() {
                 fi
                 
                 # Track current device status for summary
-                local current_device_status="FAIL"
-                local current_device_message="Failed to apply"
+                current_device_status="FAIL"
+                current_device_message="Failed to apply"
                 if [ "${current_device_success}" == "true" ]; then
                     current_device_status="OK"
                     current_device_message="Deployed and saved"
                     original_keys=("${working_keys[@]}")
                     original_values=("${working_values[@]}")
                 fi
+                fi
                 
                 # =====================================================================
-                # STEP 3: Deploy to fleet
+                # Deploy to fleet
                 # =====================================================================
+                local fleet_step_num=3
+                if [ "${deploy_has_local_changes}" != "true" ]; then
+                    fleet_step_num=2
+                fi
                 echo ""
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
-                echo -e "  ${WHITE}  STEP 3: DEPLOYING TO FLEET${NC}"
+                echo -e "  ${WHITE}  STEP ${fleet_step_num}: DEPLOYING TO FLEET${NC}"
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
                 
                 # Build merge data for deploy functions
