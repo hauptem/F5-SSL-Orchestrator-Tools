@@ -3009,17 +3009,22 @@ function Invoke-EditorSubmenu {
                 }
                 Write-Host ""
                 Write-Host "  Deployment order:" -ForegroundColor White
-                Write-Host "    1. $($script:RemoteHost) (current device)" -ForegroundColor White
-                $tNum = 2
+                $tNum = 1
+                if ($hasPending) {
+                    Write-Host "    $tNum. $($script:RemoteHost) (current device)" -ForegroundColor White
+                    $tNum++
+                }
                 foreach ($t in $deployTargets) {
                     $tSite = Get-HostSite -Hostname $t
                     Write-Host "    $tNum. $t ($tSite)" -ForegroundColor White
                     $tNum++
                 }
                 Write-Host ""
-                Write-Host "  Total: $($targetCount + 1) device(s)" -ForegroundColor White
+                $totalDevices = $(if ($hasPending) { $targetCount + 1 } else { $targetCount })
+                Write-Host "  Total: $totalDevices device(s)" -ForegroundColor White
                 Write-Host ""
-                Write-Host "  WARNING: This will push pending changes to all listed Big-IPs." -ForegroundColor Red
+                $warningText = $(if ($hasPending) { "  WARNING: This will push pending changes to all listed Big-IPs." } else { "  WARNING: This will push current state to all listed Big-IPs." })
+                Write-Host $warningText -ForegroundColor Red
                 Write-Host ""
                 $confirmDeploy = Read-Host "  Type DEPLOY to confirm"
                 if ($confirmDeploy -cne "DEPLOY") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
@@ -3046,7 +3051,8 @@ function Invoke-EditorSubmenu {
                 }
                 
                 Write-Host ""
-                $proceedDeploy = Read-Host "  Proceed with deployment to $readyCount fleet host(s) + current device? (yes/no) [no]"
+                $deployPrompt = $(if ($hasPending) { "  Proceed with deployment to $readyCount fleet host(s) + current device? (yes/no) [no]" } else { "  Proceed with deployment to $readyCount fleet host(s)? (yes/no) [no]" })
+                $proceedDeploy = Read-Host $deployPrompt
                 if ($proceedDeploy -ne "yes") {
                     Write-LogInfo "Deploy cancelled. No changes have been made."
                     Press-EnterToContinue

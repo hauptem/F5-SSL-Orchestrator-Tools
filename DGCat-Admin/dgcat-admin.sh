@@ -4576,8 +4576,11 @@ editor_submenu() {
                 fi
                 echo ""
                 echo -e "  ${WHITE}Deployment order:${NC}"
-                echo -e "    ${WHITE}1. ${REMOTE_HOST} (current device)${NC}"
-                local target_num=2
+                local target_num=1
+                if [ "${deploy_has_local_changes}" == "true" ]; then
+                    echo -e "    ${WHITE}${target_num}. ${REMOTE_HOST} (current device)${NC}"
+                    target_num=$((target_num + 1))
+                fi
                 while IFS= read -r target_host; do
                     [ -z "${target_host}" ] && continue
                     local target_site
@@ -4587,12 +4590,19 @@ editor_submenu() {
                 done <<< "${deploy_targets}"
                 echo ""
                 
-                local total_targets=$((target_count + 1))
+                local total_targets=${target_count}
+                if [ "${deploy_has_local_changes}" == "true" ]; then
+                    total_targets=$((target_count + 1))
+                fi
                 echo -e "  ${WHITE}Total: ${total_targets} device(s)${NC}"
                 echo ""
                 
                 # Require explicit confirmation
-                echo -e "  ${RED}WARNING: This will push pending changes to all listed Big-IPs.${NC}"
+                if [ "${deploy_has_local_changes}" == "true" ]; then
+                    echo -e "  ${RED}WARNING: This will push pending changes to all listed Big-IPs.${NC}"
+                else
+                    echo -e "  ${RED}WARNING: This will push current state to all listed Big-IPs.${NC}"
+                fi
                 echo ""
                 read -rp "  Type DEPLOY to confirm: " confirm_deploy
                 
@@ -4630,7 +4640,13 @@ editor_submenu() {
                 
                 # User decision point - no changes have been made anywhere yet
                 echo ""
-                read -rp "  Proceed with deployment to ${ready_count} fleet host(s) + current device? (yes/no) [no]: " proceed_deploy
+                local deploy_prompt=""
+                if [ "${deploy_has_local_changes}" == "true" ]; then
+                    deploy_prompt="  Proceed with deployment to ${ready_count} fleet host(s) + current device? (yes/no) [no]: "
+                else
+                    deploy_prompt="  Proceed with deployment to ${ready_count} fleet host(s)? (yes/no) [no]: "
+                fi
+                read -rp "${deploy_prompt}" proceed_deploy
                 if [ "${proceed_deploy}" != "yes" ]; then
                     log_info "Deploy cancelled. No changes have been made."
                     press_enter_to_continue
