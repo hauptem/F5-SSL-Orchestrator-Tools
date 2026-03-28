@@ -1471,7 +1471,44 @@ function Invoke-PreFlightChecks {
         $siteWord = $(if ($script:FleetUniqueSites.Count -eq 1) { "site" } else { "sites" })
         Write-LogOk "Fleet loaded: $($script:FleetHosts.Count) $hostWord across $($script:FleetUniqueSites.Count) $siteWord"
     } else {
-        Write-LogInfo "No fleet configured (optional: create $($script:FLEET_CONFIG_FILE))"
+        # Create boilerplate fleet.conf for the user
+        if (-not (Test-Path $script:FLEET_CONFIG_FILE) -and (Test-Path $script:BACKUP_DIR)) {
+            $template = @(
+                "# =============================================================================",
+                "# DGCat-Admin Fleet Configuration",
+                "# =============================================================================",
+                "#",
+                "# Define BIG-IP devices for fleet deployment operations.",
+                "# Format: SITE|HOSTNAME_OR_IP",
+                "#",
+                "# SITE     - A label for grouping devices (datacenter, environment, etc.)",
+                "# HOSTNAME - Management IP or resolvable hostname of the BIG-IP",
+                "#",
+                "# Examples:",
+                "# East|10.1.1.10",
+                "# East|10.1.1.11",
+                "# West|10.2.1.10",
+                "# West|10.2.1.11",
+                "# DR|10.3.1.10",
+                "#",
+                "# Notes:",
+                "# - Lines starting with # are comments",
+                "# - Site names must contain only letters, numbers, dashes, and underscores",
+                "# - The device you connect to is automatically excluded from fleet targets",
+                "# - Fleet deployment uses the same credentials as your active connection",
+                "#",
+                "# Add your BIG-IP devices below:",
+                "# ============================================================================="
+            )
+            try {
+                $template | Out-File -FilePath $script:FLEET_CONFIG_FILE -Encoding UTF8
+                Write-LogInfo "Fleet config template created: $($script:FLEET_CONFIG_FILE)"
+            } catch {
+                Write-LogInfo "No fleet configured (optional: create $($script:FLEET_CONFIG_FILE))"
+            }
+        } else {
+            Write-LogInfo "No fleet configured (optional: create $($script:FLEET_CONFIG_FILE))"
+        }
     }
     
     # Establish connection (with retry loop)

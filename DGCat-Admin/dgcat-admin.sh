@@ -539,7 +539,39 @@ preflight_checks_rest_api() {
         [ ${#FLEET_UNIQUE_SITES[@]} -eq 1 ] && site_word="site"
         log_ok "Fleet loaded: ${#FLEET_HOSTS[@]} ${host_word} across ${#FLEET_UNIQUE_SITES[@]} ${site_word}"
     else
-        log_info "No fleet configured (optional: create ${FLEET_CONFIG_FILE})"
+        # Create boilerplate fleet.conf for the user
+        if [ ! -f "${FLEET_CONFIG_FILE}" ] && [ -d "${BACKUP_DIR}" ]; then
+            cat > "${FLEET_CONFIG_FILE}" 2>/dev/null << 'FLEET_TEMPLATE'
+# =============================================================================
+# DGCat-Admin Fleet Configuration
+# =============================================================================
+#
+# Define BIG-IP devices for fleet deployment operations.
+# Format: SITE|HOSTNAME_OR_IP
+#
+# SITE     - A label for grouping devices (datacenter, environment, etc.)
+# HOSTNAME - Management IP or resolvable hostname of the BIG-IP
+#
+# Examples:
+# East|10.1.1.10
+# East|10.1.1.11
+# West|10.2.1.10
+# West|10.2.1.11
+# DR|10.3.1.10
+#
+# Notes:
+# - Lines starting with # are comments
+# - Site names must contain only letters, numbers, dashes, and underscores
+# - The device you connect to is automatically excluded from fleet targets
+# - Fleet deployment uses the same credentials as your active connection
+#
+# Add your BIG-IP devices below:
+# =============================================================================
+FLEET_TEMPLATE
+            log_info "Fleet config template created: ${FLEET_CONFIG_FILE}"
+        else
+            log_info "No fleet configured (optional: create ${FLEET_CONFIG_FILE})"
+        fi
     fi
     
     # Establish REST API connection (with retry loop)
