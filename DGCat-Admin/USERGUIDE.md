@@ -173,8 +173,6 @@ To restore, just use the Create/Update option and point it at the backup file.
 
 **Partition not found** — The partition you configured doesn't exist on the target BIG-IP. Edit the PARTITIONS variable.
 
-**External datagroups not supported** — These need filesystem access. Use TMSH mode.
-
 **Fleet deploy skipping hosts** — Either the object doesn't exist on that host (expected in some cases) or connectivity/auth failed. Check the summary for details.
 
 **Editor seems slow** — Large datasets (1000+ entries) take a moment to process. The tool shows status messages when it's working.
