@@ -55,37 +55,6 @@ chmod +x /shared/scripts/dgcat-admin.sh
 # Run
 /shared/scripts/dgcat-admin.sh
 ```
-
-## Configuration
-
-Edit these variables at the top of the script:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | Backup and log storage |
-| `MAX_BACKUPS` | `30` | Backups retained per object |
-| `PARTITIONS` | `Common` | Comma-separated partition list |
-
-### Fleet Configuration
-
-For multi-device deployment, create `${BACKUP_DIR}/fleet.conf`:
-
-```
-# Format: SITE|HOSTNAME_OR_IP
-DC1|sslo-dc1-primary.example.com
-DC1|sslo-dc1-secondary.example.com
-DC2|sslo-dc2-primary.example.com
-```
-
-When a fleet configuration is present, fleet hosts are displayed at the connection prompt for quick selection. You can select a fleet host by number or enter any hostname or IP manually to connect to a non-fleet device.
-
-### Fleet Deployment Modes
-
-When deploying changes to the fleet, two modes are available:
-
-- **Full Replace** — Overwrites the target object with the exact state from the current device. Guarantees parity across all devices.
-- **Merge** — Applies only additions and deletions to each target, preserving any entries that are specific to that device. Useful when sites have intentional differences such as local bypass lists or site-specific address ranges.
-
 ## Documentation
 
 See the [User Guide](USERGUIDE.md) for detailed operation instructions.
