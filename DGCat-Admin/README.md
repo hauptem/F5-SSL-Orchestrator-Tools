@@ -79,8 +79,6 @@ chmod +x /shared/scripts/dgcat-admin.sh
 .\dgcat-admin.ps1
 ```
 
-No installation required for either version. Both are single-file scripts with no external modules or packages.
-
 ## Configuration
 
 Edit the variables at the top of the script:
