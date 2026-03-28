@@ -1712,14 +1712,10 @@ execute_deploy_datagroup() {
     while IFS='|' read -r host site_id status message; do
         [ -z "${host}" ] && continue
         
-        # Skip hosts that failed validation or were skipped
+        # Pre-check failures are skips in deploy - FAIL is reserved for actual deploy failures
         if [ "${status}" != "OK" ]; then
-            deploy_results+=("${host}|${site_id}|${status}|${message}")
-            if [ "${status}" == "SKIP" ]; then
-                skip_count=$((skip_count + 1))
-            else
-                fail_count=$((fail_count + 1))
-            fi
+            deploy_results+=("${host}|${site_id}|SKIP|${message}")
+            skip_count=$((skip_count + 1))
             continue
         fi
         
@@ -1833,14 +1829,10 @@ execute_deploy_urlcat() {
     while IFS='|' read -r host site_id status message; do
         [ -z "${host}" ] && continue
         
-        # Skip hosts that failed validation or were skipped
+        # Pre-check failures are skips in deploy - FAIL is reserved for actual deploy failures
         if [ "${status}" != "OK" ]; then
-            deploy_results+=("${host}|${site_id}|${status}|${message}")
-            if [ "${status}" == "SKIP" ]; then
-                skip_count=$((skip_count + 1))
-            else
-                fail_count=$((fail_count + 1))
-            fi
+            deploy_results+=("${host}|${site_id}|SKIP|${message}")
+            skip_count=$((skip_count + 1))
             continue
         fi
         

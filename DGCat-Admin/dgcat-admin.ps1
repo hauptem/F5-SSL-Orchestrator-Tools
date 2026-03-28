@@ -1218,8 +1218,9 @@ function Invoke-FleetDeploy {
     
     foreach ($vr in $ValidationResults) {
         if ($vr.Status -ne "OK") {
-            $deployResults += $vr
-            if ($vr.Status -eq "SKIP") { $skipCount++ } else { $failCount++ }
+            # Pre-check failures are skips in deploy - FAIL is reserved for actual deploy failures
+            $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "SKIP"; Message = $vr.Message }
+            $skipCount++
             continue
         }
         
