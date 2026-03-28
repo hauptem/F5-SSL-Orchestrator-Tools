@@ -4,7 +4,7 @@
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 
-A menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. Designed for primarily for SSL Orchestrator (SSLO) policy management, but can be used for general purpose datagroup and URL category management.
+A menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems via the iControl REST API. Designed primarily for SSL Orchestrator (SSLO) policy management, but can be used for general purpose datagroup and URL category management.
 
 ## Why This Tool?
 
@@ -16,40 +16,37 @@ SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories f
 
 **The recommended approach:** Use datagroups or URL categories for SSLO security policy rules. They're optimized for fast lookups, keep policies clean and are operationally easier to maintain.
 
-DGCat-Admin makes managing those site lists very easy. 
+DGCat-Admin makes managing those site lists very easy.
 
-- Need to export a few massive datagroups or custom url categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
-- Need to ingest a large number of subnets or hosts from an excel spreadsheet into a datagroup for SSLO security policy use?
+- Need to export a few massive datagroups or custom URL categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
+- Need to ingest a large number of subnets or hosts from an Excel spreadsheet into a datagroup for SSLO security policy use?
 - Want to take a custom URL category and convert it to a datagroup?
-- Want to take a datagroup and convert it to a custom URL Category?
+- Want to take a datagroup and convert it to a custom URL category?
 
 **This tool was designed specifically for those purposes.**
 
 ## Features
 
-- **Dual Mode Operation** — Local TMSH or remote REST API
+- **REST API Driven** — Connects to any BIG-IP via iControl REST from any machine with curl and jq
 - **Datagroup Management** — Create, view, edit, delete, import/export
 - **URL Category Management** — Create, view, edit, delete, import/export
-- **Fleet Deployment** — Push changes to multiple BIG-IPs simultaneously
-- **Interactive Editor** — Staged editing with add, delete, filter, sort
+- **Fleet Deployment** — Push changes to multiple BIG-IPs with pre-deploy validation, backup, and full replace or merge modes
+- **Interactive Editor** — Staged editing with add, delete, pattern delete, filter, sort, and paginated browsing
 - **Automatic Backups** — Pre-change backups with configurable retention
 - **CSV Import/Export** — Bulk operations via standard CSV files
+- **API Efficiency** — Partition and URL category DB availability are cached at session start to minimize management plane impact
 
 ## Requirements
 
-**TMSH Mode (on BIG-IP):**
-- TMOS 17.x or later
-- Root or admin shell access
-
-**REST API Mode (remote):**
 - curl
 - jq
 - Network access to BIG-IP management interface (port 443)
+- BIG-IP running TMOS 17.x or later
 
 ## Installation
 
 ```bash
-# Copy to BIG-IP or management host
+# Copy to a management host or directly to BIG-IP
 scp dgcat-admin.sh root@<host>:/shared/scripts/
 
 # Make executable
@@ -79,6 +76,15 @@ DC1|sslo-dc1-primary.example.com
 DC1|sslo-dc1-secondary.example.com
 DC2|sslo-dc2-primary.example.com
 ```
+
+When a fleet configuration is present, fleet hosts are displayed at the connection prompt for quick selection. You can select a fleet host by number or enter any hostname or IP manually to connect to a non-fleet device.
+
+### Fleet Deployment Modes
+
+When deploying changes to the fleet, two modes are available:
+
+- **Full Replace** — Overwrites the target object with the exact state from the current device. Guarantees parity across all devices.
+- **Merge** — Applies only additions and deletions to each target, preserving any entries that are specific to that device. Useful when sites have intentional differences such as local bypass lists or site-specific address ranges.
 
 ## Documentation
 
