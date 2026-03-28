@@ -108,7 +108,7 @@ The tool shows you what's about to change (additions/deletions), lets you pick s
 
 It applies to the device you're connected to first, then hits each fleet member in sequence. Each one gets validated first (can we connect? does the object exist? backup created?) and the config is saved after each successful apply.
 
-If something fails, you'll see it in the summary. If the same error happens 3 times in a row, it stops and tells you there's probably a systemic problem.
+If something fails, you'll see it in the summary. 
 
 ### What It Won't Do
 
