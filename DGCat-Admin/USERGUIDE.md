@@ -153,7 +153,7 @@ After a successful connection, you see the main menu:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v3.0                        ║
+  ║                    DGCAT-Admin v4.0                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
     Connected: 10.251.0.171
@@ -574,21 +574,13 @@ Every target host either failed to connect or didn't have the target object. Ver
 **Hosts showing as SKIP in the deploy summary.**
 The target object (datagroup or URL category) does not exist on that host. This is expected if not all fleet members have the same objects configured. Create the object on the target host first, then redeploy.
 
-**"Systemic failure detected: Same error on 3 consecutive hosts."**
-The same error occurred on three hosts in a row, which usually indicates a systemic problem (wrong credentials for a site, network issue to a datacenter, API endpoint down) rather than an isolated failure. The tool asks whether you want to continue. If you're confident the remaining hosts are reachable, you can proceed. Otherwise, stop and investigate.
 
 ### Editor Issues
-
-**The editor shows stale data.**
-The editor loads data once when you open it. If another user or process modifies the object while you're editing, the editor won't reflect those changes. Apply your changes or close and reopen the editor to get a fresh copy.
 
 **"No changes to apply" when you expected changes.**
 The editor compares your working state against the state that was loaded when you opened it (or last applied). If you applied changes with `w` and then didn't make further edits, the tool correctly reports no pending changes. Use `D` to deploy the current state to the fleet even without pending changes.
 
 ### General Issues
-
-**Script exits unexpectedly.**
-The tool runs with `set -euo pipefail`, which means any unhandled error causes an immediate exit. Check the session log file in the backup directory for details about what was happening when the exit occurred. If the issue is reproducible, the log will show the last operation attempted.
 
 **Slow performance with large datasets.**
 Operations on datagroups or URL categories with thousands of entries may take longer due to API response times and JSON processing. The tool shows progress indicators when it's working. If performance is consistently poor, check the BIG-IP management plane utilization — other automation or monitoring tools competing for API access can slow things down.
