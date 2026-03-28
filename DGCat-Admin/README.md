@@ -57,7 +57,7 @@ chmod +x /shared/scripts/dgcat-admin.sh
 ```
 ## Documentation
 
-See the [User Guide](USERGUIDE.md) for detailed operation instructions.
+See the [USERGUIDE](USERGUIDE.md) for detailed operation instructions.
 
 ## License
 
