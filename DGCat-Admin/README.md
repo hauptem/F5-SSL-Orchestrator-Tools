@@ -1,4 +1,4 @@
-# DGCat-Admin v3.0 — F5 BIG-IP Datagroup & URL Category Manager
+# DGCat-Admin — F5 BIG-IP Datagroup & URL Category Manager
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
