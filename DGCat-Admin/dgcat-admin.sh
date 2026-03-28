@@ -1547,8 +1547,8 @@ run_predeploy_validation_datagroup() {
         
         # Verify object exists
         if ! verify_remote_internal_datagroup "${host}" "${partition}" "${dg_name}"; then
-            echo -e "\033[2K\r  ${YELLOW}[SKIP]${NC} ${WHITE}${host} (${site_id})${NC} - Datagroup not found" >&2
-            validation_results+=("${host}|${site_id}|SKIP|Datagroup not found")
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Datagroup not found" >&2
+            validation_results+=("${host}|${site_id}|FAIL|Datagroup not found")
             continue
         fi
         
@@ -1571,7 +1571,6 @@ run_predeploy_validation_datagroup() {
     
     # Count results
     local ok_count=0
-    local skip_count=0
     local fail_count=0
     
     for result in "${validation_results[@]}"; do
@@ -1579,12 +1578,11 @@ run_predeploy_validation_datagroup() {
         status=$(echo "${result}" | cut -d'|' -f3)
         case "${status}" in
             OK) ok_count=$((ok_count + 1)) ;;
-            SKIP) skip_count=$((skip_count + 1)) ;;
-            FAIL) fail_count=$((fail_count + 1)) ;;
+            *) fail_count=$((fail_count + 1)) ;;
         esac
     done
     
-    echo -e "  ${WHITE}Validation complete: ${GREEN}${ok_count} ready${NC}, ${YELLOW}${skip_count} skipped${NC}, ${RED}${fail_count} failed${NC}" >&2
+    echo -e "  ${WHITE}Validation complete: ${GREEN}${ok_count} ready${NC}, ${RED}${fail_count} failed${NC}" >&2
     
     # Output results for deploy function to use
     printf '%s\n' "${validation_results[@]}"
@@ -1626,8 +1624,8 @@ run_predeploy_validation_urlcat() {
         
         # Verify object exists
         if ! verify_remote_url_category "${host}" "${cat_name}"; then
-            echo -e "  ${YELLOW}[SKIP]${NC} ${WHITE}${host} (${site_id})${NC} - Category not found" >&2
-            validation_results+=("${host}|${site_id}|SKIP|Category not found")
+            echo -e "  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Category not found" >&2
+            validation_results+=("${host}|${site_id}|FAIL|Category not found")
             continue
         fi
         
@@ -1650,7 +1648,6 @@ run_predeploy_validation_urlcat() {
     
     # Count results
     local ok_count=0
-    local skip_count=0
     local fail_count=0
     
     for result in "${validation_results[@]}"; do
@@ -1658,12 +1655,11 @@ run_predeploy_validation_urlcat() {
         status=$(echo "${result}" | cut -d'|' -f3)
         case "${status}" in
             OK) ok_count=$((ok_count + 1)) ;;
-            SKIP) skip_count=$((skip_count + 1)) ;;
-            FAIL) fail_count=$((fail_count + 1)) ;;
+            *) fail_count=$((fail_count + 1)) ;;
         esac
     done
     
-    echo -e "  ${WHITE}Validation complete: ${GREEN}${ok_count} ready${NC}, ${YELLOW}${skip_count} skipped${NC}, ${RED}${fail_count} failed${NC}" >&2
+    echo -e "  ${WHITE}Validation complete: ${GREEN}${ok_count} ready${NC}, ${RED}${fail_count} failed${NC}" >&2
     
     # Output results for deploy function to use
     printf '%s\n' "${validation_results[@]}"

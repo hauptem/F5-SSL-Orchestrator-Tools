@@ -1151,9 +1151,9 @@ function Invoke-PreDeployValidation {
         }
         
         if (-not $exists) {
-            Write-Host "`r  [SKIP]" -NoNewline -ForegroundColor Yellow
+            Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
             Write-Host " $hostName ($siteId) - Object not found" -ForegroundColor White
-            $results += @{ Host = $hostName; Site = $siteId; Status = "SKIP"; Message = "Object not found" }
+            $results += @{ Host = $hostName; Site = $siteId; Status = "FAIL"; Message = "Object not found" }
             continue
         }
         
@@ -1181,12 +1181,10 @@ function Invoke-PreDeployValidation {
     Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
     
     $okCount = @($results | Where-Object { $_.Status -eq "OK" }).Count
-    $skipCount = @($results | Where-Object { $_.Status -eq "SKIP" }).Count
-    $failCount = @($results | Where-Object { $_.Status -eq "FAIL" }).Count
+    $failCount = @($results | Where-Object { $_.Status -ne "OK" }).Count
     
     Write-Host -NoNewline "  Validation complete: "
     Write-Host -NoNewline "$okCount ready" -ForegroundColor Green
-    Write-Host -NoNewline ", $skipCount skipped" -ForegroundColor Yellow
     Write-Host ", $failCount failed" -ForegroundColor Red
     
     return $results
