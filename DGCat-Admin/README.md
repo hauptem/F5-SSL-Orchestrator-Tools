@@ -97,7 +97,31 @@ Edit the variables at the top of the script:
 For multi-device deployment, create `fleet.conf` in your backup directory:
 
 ```
+# =============================================================================
+# DGCat-Admin Fleet Configuration
+# =============================================================================
+#
+# Define BIG-IP devices for fleet deployment operations.
 # Format: SITE|HOSTNAME_OR_IP
+#
+# SITE     - A label for grouping devices (datacenter, environment, etc.)
+# HOSTNAME - Management IP or resolvable hostname of the BIG-IP
+#
+# Examples:
+# East|10.1.1.10
+# East|10.1.1.11
+# West|10.2.1.10
+# West|10.2.1.11
+# DR|10.3.1.10
+#
+# Notes:
+# - Lines starting with # are comments
+# - Site names must contain only letters, numbers, dashes, and underscores
+# - The device you connect to is automatically excluded from fleet targets
+# - Fleet deployment uses the same credentials as your active connection
+#
+# Add your BIG-IP devices below:
+# =============================================================================
 DC1|sslo-dc1-primary.example.com
 DC1|sslo-dc1-secondary.example.com
 DC2|sslo-dc2-primary.example.com
