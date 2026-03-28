@@ -80,6 +80,10 @@ REMOTE_PASS=""
 API_RESPONSE=""
 API_HTTP_CODE=""
 
+# Session cache (populated during preflight, avoids redundant API calls)
+declare -A PARTITION_CACHE          # Partition existence: PARTITION_CACHE["Common"]="valid"
+URL_CATEGORY_DB_CACHED=""           # URL DB availability: "yes", "no", or "" (not yet checked)
+
 # =============================================================================
 # FLEET CONFIGURATION
 # =============================================================================
@@ -646,7 +650,7 @@ preflight_checks_rest_api() {
     log_step "Validating partitions on target system..."
     local invalid_count=0
     for partition in "${PARTITION_LIST[@]}"; do
-        if ! partition_exists_remote "${partition}"; then
+        if ! partition_exists "${partition}"; then
             log_warn "Partition '${partition}' not found on ${REMOTE_HOST}"
             invalid_count=$((invalid_count + 1))
         fi
@@ -689,6 +693,13 @@ preflight_checks_rest_api() {
         done
     else
         log_info "No fleet configured (optional: create ${FLEET_CONFIG_FILE})"
+    fi
+    
+    # Cache URL category DB availability for the session
+    if url_category_db_available; then
+        log_ok "URL category database available"
+    else
+        log_info "URL category database not available (URL filtering module may not be provisioned)"
     fi
     
     log ""
@@ -741,6 +752,13 @@ preflight_checks_tmsh() {
     fi
     log_ok "Configured partitions: ${PARTITIONS}"
     validate_partitions
+
+    # Cache URL category DB availability for the session
+    if url_category_db_available; then
+        log_ok "URL category database available"
+    else
+        log_info "URL category database not available (URL filtering module may not be provisioned)"
+    fi
 
     log ""
     log_info "TMSH mode ready."
@@ -1602,7 +1620,9 @@ select_deploy_scope() {
 }
 
 # Deploy internal datagroup to a single host
-# Args: hostname, partition, dg_name, dg_type, records_json, site_id
+# Args: hostname, partition, dg_name, dg_type, records_json, site_id, deploy_mode, additions_json, deletions_list
+# deploy_mode: "replace" (default) or "merge"
+# For merge: additions_json = JSON records to add, deletions_list = newline-separated keys to remove
 # Returns: 0 on success, 1 on failure
 # Sets: DEPLOY_ERROR_MSG on failure
 deploy_internal_datagroup_to_host() {
@@ -1612,14 +1632,43 @@ deploy_internal_datagroup_to_host() {
     local dg_type="$4"
     local records_json="$5"
     local site_id="$6"
+    local deploy_mode="${7:-replace}"
+    local additions_json="${8:-[]}"
+    local deletions_list="${9:-}"
     
     DEPLOY_ERROR_MSG=""
     
     local orig_host="${REMOTE_HOST}"
     REMOTE_HOST="${host}"
     
+    local final_records_json="${records_json}"
+    
+    if [ "${deploy_mode}" == "merge" ]; then
+        # Pull current records from target host
+        local target_records
+        if ! target_records=$(get_internal_datagroup_records_remote "${partition}" "${dg_name}"); then
+            DEPLOY_ERROR_MSG="Failed to read target records (HTTP ${API_HTTP_CODE})"
+            REMOTE_HOST="${orig_host}"
+            return 1
+        fi
+        
+        # Build merged result: start with target, remove deletions, add additions
+        # Use jq to merge: target records - deletions + additions
+        local delete_array
+        delete_array=$(echo "${deletions_list}" | jq -R -s 'split("\n") | map(select(length > 0))')
+        
+        local target_json
+        target_json=$(echo "${target_records}" | build_records_json_remote "${dg_type}")
+        
+        final_records_json=$(jq -nc \
+            --argjson target "${target_json}" \
+            --argjson additions "${additions_json}" \
+            --argjson deletions "${delete_array}" \
+            '($target | map(select(.name as $n | $deletions | index($n) | not))) + $additions | unique_by(.name)')
+    fi
+    
     # Apply records
-    if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+    if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${final_records_json}"; then
         DEPLOY_ERROR_MSG="Failed to apply records (HTTP ${API_HTTP_CODE})"
         REMOTE_HOST="${orig_host}"
         return 1
@@ -1637,7 +1686,9 @@ deploy_internal_datagroup_to_host() {
 }
 
 # Deploy URL category to a single host
-# Args: hostname, cat_name, urls_json, site_id
+# Args: hostname, cat_name, urls_json, site_id, deploy_mode, additions_json, deletions_list
+# deploy_mode: "replace" (default) or "merge"
+# For merge: additions_json = JSON URLs to add, deletions_list = newline-separated URLs to remove
 # Returns: 0 on success, 1 on failure
 # Sets: DEPLOY_ERROR_MSG on failure
 deploy_url_category_to_host() {
@@ -1645,17 +1696,45 @@ deploy_url_category_to_host() {
     local cat_name="$2"
     local urls_json="$3"
     local site_id="$4"
+    local deploy_mode="${5:-replace}"
+    local additions_json="${6:-[]}"
+    local deletions_list="${7:-}"
     
     DEPLOY_ERROR_MSG=""
     
     local orig_host="${REMOTE_HOST}"
     REMOTE_HOST="${host}"
     
-    # Replace all URLs in category
-    if ! modify_url_category_replace_remote "${cat_name}" "${urls_json}"; then
-        DEPLOY_ERROR_MSG="Failed to apply URLs (HTTP ${API_HTTP_CODE})"
-        REMOTE_HOST="${orig_host}"
-        return 1
+    if [ "${deploy_mode}" == "merge" ]; then
+        # Merge mode: apply only additions and deletions
+        local merge_errors=0
+        
+        # Delete removed URLs
+        if [ -n "${deletions_list}" ]; then
+            if ! modify_url_category_delete_remote "${cat_name}" "${deletions_list}"; then
+                merge_errors=$((merge_errors + 1))
+            fi
+        fi
+        
+        # Add new URLs
+        if [ "${additions_json}" != "[]" ]; then
+            if ! modify_url_category_add_remote "${cat_name}" "${additions_json}"; then
+                merge_errors=$((merge_errors + 1))
+            fi
+        fi
+        
+        if [ ${merge_errors} -gt 0 ]; then
+            DEPLOY_ERROR_MSG="Merge completed with ${merge_errors} error(s) (HTTP ${API_HTTP_CODE})"
+            REMOTE_HOST="${orig_host}"
+            return 1
+        fi
+    else
+        # Replace mode: overwrite all URLs
+        if ! modify_url_category_replace_remote "${cat_name}" "${urls_json}"; then
+            DEPLOY_ERROR_MSG="Failed to apply URLs (HTTP ${API_HTTP_CODE})"
+            REMOTE_HOST="${orig_host}"
+            return 1
+        fi
     fi
     
     # Save config
@@ -1837,7 +1916,7 @@ run_predeploy_validation_urlcat() {
 }
 
 # Execute deploy for internal datagroup
-# Args: partition, dg_name, dg_type, records_json, validation_results (newline-separated), current_host, current_status, current_message
+# Args: partition, dg_name, dg_type, records_json, validation_results (newline-separated), current_host, current_status, current_message, deploy_mode, additions_json, deletions_list
 # Returns: 0 on complete success, 1 on any failure
 execute_deploy_datagroup() {
     local partition="$1"
@@ -1848,6 +1927,9 @@ execute_deploy_datagroup() {
     local current_host="${6:-}"
     local current_status="${7:-}"
     local current_message="${8:-}"
+    local deploy_mode="${9:-replace}"
+    local additions_json="${10:-[]}"
+    local deletions_list="${11:-}"
     
     local success_count=0
     local fail_count=0
@@ -1889,7 +1971,7 @@ execute_deploy_datagroup() {
         echo -ne "  ${WHITE}[....] Deploying to ${host} (${site_id})${NC}\r"
         
         # Deploy to host
-        if deploy_internal_datagroup_to_host "${host}" "${partition}" "${dg_name}" "${dg_type}" "${records_json}" "${site_id}"; then
+        if deploy_internal_datagroup_to_host "${host}" "${partition}" "${dg_name}" "${dg_type}" "${records_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
             echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
             deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
             success_count=$((success_count + 1))
@@ -1905,9 +1987,13 @@ execute_deploy_datagroup() {
                 consecutive_same_error=$((consecutive_same_error + 1))
                 if [ ${consecutive_same_error} -ge 3 ]; then
                     echo ""
-                    log_error "Systemic failure detected: Same error on 3 consecutive hosts"
-                    log_error "Aborting remaining deployments"
-                    break
+                    log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
+                    read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                    if [ "${cont_deploy}" != "yes" ]; then
+                        log_info "Deployment stopped by user."
+                        break
+                    fi
+                    consecutive_same_error=0
                 fi
             else
                 last_error="${DEPLOY_ERROR_MSG}"
@@ -1957,7 +2043,7 @@ execute_deploy_datagroup() {
 }
 
 # Execute deploy for URL category
-# Args: cat_name, urls_json, validation_results (newline-separated), current_host, current_status, current_message
+# Args: cat_name, urls_json, validation_results (newline-separated), current_host, current_status, current_message, deploy_mode, additions_json, deletions_list
 # Returns: 0 on complete success, 1 on any failure
 execute_deploy_urlcat() {
     local cat_name="$1"
@@ -1966,6 +2052,9 @@ execute_deploy_urlcat() {
     local current_host="${4:-}"
     local current_status="${5:-}"
     local current_message="${6:-}"
+    local deploy_mode="${7:-replace}"
+    local additions_json="${8:-[]}"
+    local deletions_list="${9:-}"
     
     local success_count=0
     local fail_count=0
@@ -2007,7 +2096,7 @@ execute_deploy_urlcat() {
         echo -ne "  ${WHITE}[....] Deploying to ${host} (${site_id})${NC}\r"
         
         # Deploy to host
-        if deploy_url_category_to_host "${host}" "${cat_name}" "${urls_json}" "${site_id}"; then
+        if deploy_url_category_to_host "${host}" "${cat_name}" "${urls_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
             echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
             deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
             success_count=$((success_count + 1))
@@ -2023,9 +2112,13 @@ execute_deploy_urlcat() {
                 consecutive_same_error=$((consecutive_same_error + 1))
                 if [ ${consecutive_same_error} -ge 3 ]; then
                     echo ""
-                    log_error "Systemic failure detected: Same error on 3 consecutive hosts"
-                    log_error "Aborting remaining deployments"
-                    break
+                    log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
+                    read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                    if [ "${cont_deploy}" != "yes" ]; then
+                        log_info "Deployment stopped by user."
+                        break
+                    fi
+                    consecutive_same_error=0
                 fi
             else
                 last_error="${DEPLOY_ERROR_MSG}"
@@ -2097,14 +2190,37 @@ partition_exists_local() {
 }
 
 # Check if a partition exists (DISPATCHER)
+# Uses session cache when available to avoid redundant API/tmsh calls
 partition_exists() {
     local partition="$1"
-    if [ "${SESSION_MODE}" == "rest-api" ]; then
-        partition_exists_remote "${partition}"
-    else
-        partition_exists_local "${partition}"
+    
+    # Check session cache first
+    if [ -n "${PARTITION_CACHE[${partition}]+x}" ]; then
+        if [ "${PARTITION_CACHE[${partition}]}" == "valid" ]; then
+            return 0
+        else
+            return 1
+        fi
     fi
-    return $?
+    
+    # Cache miss - query and cache result
+    local result=1
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        if partition_exists_remote "${partition}"; then
+            result=0
+        fi
+    else
+        if partition_exists_local "${partition}"; then
+            result=0
+        fi
+    fi
+    
+    if [ ${result} -eq 0 ]; then
+        PARTITION_CACHE["${partition}"]="valid"
+    else
+        PARTITION_CACHE["${partition}"]="invalid"
+    fi
+    return ${result}
 }
 
 # Validate all configured partitions exist
@@ -3819,7 +3935,7 @@ menu_delete_url_category() {
     log_section "Delete URL Category"
     
     # Check if URL database is available
-    if ! tmsh list sys url-db url-category one-line &>/dev/null; then
+    if ! url_category_db_available; then
         log_error "URL database not available or accessible."
         log_info "This feature requires the URL filtering module."
         press_enter_to_continue
@@ -4315,18 +4431,34 @@ url_category_db_available_local() {
 }
 
 # Check if URL database is available (DISPATCHER)
+# Uses session cache when available to avoid redundant API/tmsh calls
 # Returns: 0 if URL categories are accessible, 1 if not
 url_category_db_available() {
-    if [ "${SESSION_MODE}" == "rest-api" ]; then
-        # In remote mode, try to list categories via REST API
-        if api_get "/mgmt/tm/sys/url-db/url-category"; then
-            return 0
-        fi
+    # Check session cache first
+    if [ "${URL_CATEGORY_DB_CACHED}" == "yes" ]; then
+        return 0
+    elif [ "${URL_CATEGORY_DB_CACHED}" == "no" ]; then
         return 1
-    else
-        url_category_db_available_local
     fi
-    return $?
+    
+    # Cache miss - query and cache result
+    local result=1
+    if [ "${SESSION_MODE}" == "rest-api" ]; then
+        if api_get "/mgmt/tm/sys/url-db/url-category"; then
+            result=0
+        fi
+    else
+        if url_category_db_available_local; then
+            result=0
+        fi
+    fi
+    
+    if [ ${result} -eq 0 ]; then
+        URL_CATEGORY_DB_CACHED="yes"
+    else
+        URL_CATEGORY_DB_CACHED="no"
+    fi
+    return ${result}
 }
 
 # Check if URL category exists (LOCAL - uses tmsh)
@@ -5996,6 +6128,31 @@ editor_submenu() {
                     continue
                 fi
                 
+                # Select deploy mode
+                echo ""
+                echo -e "  ${WHITE}Select deployment mode:${NC}"
+                echo -e "    ${YELLOW}1)${NC} ${WHITE}Full Replace - Overwrite target with exact state from current device${NC}"
+                echo -e "    ${YELLOW}2)${NC} ${WHITE}Merge        - Apply only additions/deletions, preserve target-specific entries${NC}"
+                echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+                echo ""
+                read -rp "  Select [0-2]: " deploy_mode_choice
+                
+                local deploy_mode="replace"
+                case "${deploy_mode_choice}" in
+                    1) deploy_mode="replace" ;;
+                    2) deploy_mode="merge" ;;
+                    0|"")
+                        log_info "Deploy cancelled."
+                        press_enter_to_continue
+                        continue
+                        ;;
+                    *)
+                        log_warn "Invalid selection."
+                        press_enter_to_continue
+                        continue
+                        ;;
+                esac
+                
                 # Select deploy scope
                 local deploy_targets
                 if [ "${edit_type}" == "datagroup" ]; then
@@ -6025,6 +6182,11 @@ editor_submenu() {
                     echo -e "  ${WHITE}Object:  ${cat_name}${NC}"
                 fi
                 echo -e "  ${WHITE}Changes: ${GREEN}+${#deploy_additions[@]}${NC} / ${RED}-${#deploy_deletions[@]}${NC}"
+                if [ "${deploy_mode}" == "merge" ]; then
+                    echo -e "  ${WHITE}Mode:    ${YELLOW}Merge${NC} ${WHITE}(additions/deletions only, preserves target-specific entries)${NC}"
+                else
+                    echo -e "  ${WHITE}Mode:    Full Replace${NC} ${WHITE}(exact parity with current device)${NC}"
+                fi
                 echo ""
                 echo -e "  ${WHITE}Deployment order:${NC}"
                 echo -e "    ${WHITE}1. ${REMOTE_HOST} (current device)${NC}"
@@ -6054,11 +6216,46 @@ editor_submenu() {
                 fi
                 clear
                 # =====================================================================
-                # STEP 1: Apply to current device first
+                # STEP 1: Pre-deploy validation on fleet
                 # =====================================================================
                 echo ""
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
-                echo -e "  ${WHITE}  STEP 1: APPLYING TO CURRENT DEVICE${NC}"
+                echo -e "  ${WHITE}  STEP 1: PRE-DEPLOY VALIDATION${NC}"
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                
+                # Run pre-deploy validation on fleet BEFORE making any changes
+                local validation_results
+                if [ "${edit_type}" == "datagroup" ]; then
+                    validation_results=$(run_predeploy_validation_datagroup "${partition}" "${dg_name}" "${deploy_targets}") || true
+                else
+                    validation_results=$(run_predeploy_validation_urlcat "${cat_name}" "${deploy_targets}") || true
+                fi
+                
+                # Count ready fleet hosts
+                local ready_count
+                ready_count=$(echo "${validation_results}" | grep -c '|OK|' || echo "0")
+                
+                if [ "${ready_count}" -eq 0 ]; then
+                    log_warn "No fleet hosts passed validation. No changes have been made."
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                # User decision point - no changes have been made anywhere yet
+                echo ""
+                read -rp "  Proceed with deployment to ${ready_count} fleet host(s) + current device? (yes/no) [no]: " proceed_deploy
+                if [ "${proceed_deploy}" != "yes" ]; then
+                    log_info "Deploy cancelled. No changes have been made."
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                # =====================================================================
+                # STEP 2: Apply to current device
+                # =====================================================================
+                echo ""
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo -e "  ${WHITE}  STEP 2: APPLYING TO CURRENT DEVICE${NC}"
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
                 echo ""
                 
@@ -6145,7 +6342,7 @@ editor_submenu() {
                 if [ "${current_device_success}" != "true" ]; then
                     echo ""
                     log_error "Failed to apply changes to current device."
-                    read -rp "  Continue deploying to Big-IPs anyway? (yes/no) [no]: " cont_fleet
+                    read -rp "  Continue deploying to fleet anyway? (yes/no) [no]: " cont_fleet
                     if [ "${cont_fleet}" != "yes" ]; then
                         log_info "Deploy aborted."
                         press_enter_to_continue
@@ -6164,35 +6361,51 @@ editor_submenu() {
                 fi
                 
                 # =====================================================================
-                # STEP 2: Deploy to Big-IPs
+                # STEP 3: Deploy to fleet
                 # =====================================================================
                 echo ""
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
-                echo -e "  ${WHITE}  STEP 2: DEPLOYING TO BIG-IPS${NC}"
+                echo -e "  ${WHITE}  STEP 3: DEPLOYING TO FLEET${NC}"
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
                 
-                # Run pre-deploy validation
-                local validation_results
-                if [ "${edit_type}" == "datagroup" ]; then
-                    validation_results=$(run_predeploy_validation_datagroup "${partition}" "${dg_name}" "${deploy_targets}")
-                else
-                    validation_results=$(run_predeploy_validation_urlcat "${cat_name}" "${deploy_targets}")
-                fi
+                # Build merge data for deploy functions
+                local deploy_additions_json="[]"
+                local deploy_deletions_list=""
                 
-                # Count ready Big-IPs
-                local ready_count
-                ready_count=$(echo "${validation_results}" | grep -c '|OK|' || echo "0")
-                
-                if [ "${ready_count}" -eq 0 ]; then
-                    log_warn "No Big-IPs ready for deployment."
-                    if [ "${current_device_success}" == "true" ]; then
-                        log_ok "Changes were applied to current device (${REMOTE_HOST})."
+                if [ "${deploy_mode}" == "merge" ]; then
+                    echo -ne "  ${WHITE}[....] Building merge data...${NC}\r"
+                    
+                    if [ "${edit_type}" == "datagroup" ]; then
+                        # Build additions as JSON records
+                        if [ ${#deploy_additions[@]} -gt 0 ]; then
+                            deploy_additions_json=$(
+                                for add_key in "${deploy_additions[@]}"; do
+                                    # Find value for this key in working arrays
+                                    for ((i=0; i<${#working_keys[@]}; i++)); do
+                                        if [ "${working_keys[$i]}" == "${add_key}" ]; then
+                                            echo "${add_key}|${working_values[$i]:-}"
+                                            break
+                                        fi
+                                    done
+                                done | build_records_json_remote "${dg_type}"
+                            )
+                        fi
+                    else
+                        # Build additions as URL JSON
+                        if [ ${#deploy_additions[@]} -gt 0 ]; then
+                            deploy_additions_json=$(printf '%s\n' "${deploy_additions[@]}" | build_urls_json_remote)
+                        fi
                     fi
-                    press_enter_to_continue
-                    continue
+                    
+                    # Build deletions as newline-separated list
+                    if [ ${#deploy_deletions[@]} -gt 0 ]; then
+                        deploy_deletions_list=$(printf '%s\n' "${deploy_deletions[@]}")
+                    fi
+                    
+                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building merge data... done${NC}"
                 fi
                 
-                # Execute deploy to Big-IPs
+                # Execute deploy to fleet hosts
                 if [ "${edit_type}" == "datagroup" ]; then
                     echo -ne "  ${WHITE}[....] Building records for deployment...${NC}\r"
                     local deploy_records_json
@@ -6203,14 +6416,14 @@ editor_submenu() {
                     )
                     echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building records for deployment... done${NC}"
                     
-                    execute_deploy_datagroup "${partition}" "${dg_name}" "${dg_type}" "${deploy_records_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}"
+                    execute_deploy_datagroup "${partition}" "${dg_name}" "${dg_type}" "${deploy_records_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
                 else
                     echo -ne "  ${WHITE}[....] Building URL list for deployment...${NC}\r"
                     local deploy_urls_json
                     deploy_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
                     echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building URL list for deployment... done${NC}"
                     
-                    execute_deploy_urlcat "${cat_name}" "${deploy_urls_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}"
+                    execute_deploy_urlcat "${cat_name}" "${deploy_urls_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
                 fi
                 
                 press_enter_to_continue
@@ -6401,6 +6614,8 @@ main() {
         FLEET_SITES=()
         FLEET_HOSTS=()
         FLEET_UNIQUE_SITES=()
+        PARTITION_CACHE=()
+        URL_CATEGORY_DB_CACHED=""
         
         # Select operation mode first (before anything else)
         select_session_mode
