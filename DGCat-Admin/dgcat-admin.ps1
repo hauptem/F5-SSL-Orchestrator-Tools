@@ -1136,6 +1136,7 @@ function Invoke-PreDeployValidation {
         
         # Test connectivity
         if (-not (Test-HostConnection -HostName $hostName)) {
+            Write-Host "`r$(' ' * 80)" -NoNewline
             Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
             Write-Host " $hostName ($siteId) - Connection failed" -ForegroundColor White
             $results += @{ Host = $hostName; Site = $siteId; Status = "FAIL"; Message = "Connection failed" }
@@ -1151,6 +1152,7 @@ function Invoke-PreDeployValidation {
         }
         
         if (-not $exists) {
+            Write-Host "`r$(' ' * 80)" -NoNewline
             Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
             Write-Host " $hostName ($siteId) - Object not found" -ForegroundColor White
             $results += @{ Host = $hostName; Site = $siteId; Status = "FAIL"; Message = "Object not found" }
@@ -1166,12 +1168,14 @@ function Invoke-PreDeployValidation {
         }
         
         if ([string]::IsNullOrWhiteSpace($backupFile)) {
+            Write-Host "`r$(' ' * 80)" -NoNewline
             Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
             Write-Host " $hostName ($siteId) - Backup failed" -ForegroundColor White
             $results += @{ Host = $hostName; Site = $siteId; Status = "FAIL"; Message = "Backup failed" }
             continue
         }
         
+        Write-Host "`r$(' ' * 80)" -NoNewline
         Write-Host "`r  [ OK ]" -NoNewline -ForegroundColor Green
         Write-Host " $hostName ($siteId) - Ready" -ForegroundColor White
         $results += @{ Host = $hostName; Site = $siteId; Status = "OK"; Message = "Ready" }
@@ -1209,10 +1213,6 @@ function Invoke-FleetDeploy {
     }
     
     Write-Host ""
-    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-    Write-Host "    DEPLOYING TO FLEET" -ForegroundColor White
-    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-    Write-Host ""
     
     foreach ($vr in $ValidationResults) {
         if ($vr.Status -ne "OK") {
@@ -1227,6 +1227,7 @@ function Invoke-FleetDeploy {
         $success = & $DeployAction $vr.Host $vr.Site
         
         if ($success) {
+            Write-Host "`r$(' ' * 80)" -NoNewline
             Write-Host "`r  [ OK ]" -NoNewline -ForegroundColor Green
             Write-Host " $($vr.Host) ($($vr.Site))" -ForegroundColor White
             $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "OK"; Message = "Deployed and saved" }
@@ -1234,6 +1235,7 @@ function Invoke-FleetDeploy {
             $lastError = ""
             $consecutiveSameError = 0
         } else {
+            Write-Host "`r$(' ' * 80)" -NoNewline
             Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
             Write-Host " $($vr.Host) ($($vr.Site)) - $($script:DeployErrorMsg)" -ForegroundColor White
             $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "FAIL"; Message = $script:DeployErrorMsg }
