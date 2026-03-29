@@ -126,15 +126,14 @@ If you have a fleet configuration file, the tool loads it first and displays you
 ```
   Fleet hosts:
   ────────────────────────────────────────────────────────────
-     1) 10.251.0.171 (East)
-     2) 10.251.0.172 (East)
-     3) 10.251.1.171 (West)
-     4) 10.251.1.172 (West)
-     5) 10.251.2.171 (DR)
+     1) bigip01-mgmt.dc1.example.com (DC1)
+     2) bigip02-mgmt.dc1.example.com (DC1)
+     3) bigip01-mgmt.dc2.example.com (DC2)
+     4) bigip02-mgmt.dc2.example.com (DC2)
   ────────────────────────────────────────────────────────────
      0) Exit
 
-  Select [0-5] or enter hostname/IP:
+  Select [0-4] or enter hostname/IP:
 ```
 
 Type a number to select a fleet host, or type any hostname or IP address to connect to a device that isn't in your fleet. Type `0` to exit.
@@ -142,8 +141,8 @@ Type a number to select a fleet host, or type any hostname or IP address to conn
 After selecting a host, you're prompted for a username and password. 
 
 ```
-  [....]  Connecting to 10.251.0.171...
-  [ OK ]  Connected to BIG-IP: bigip1-east.company.com
+  [....]  Connecting to bigip01-mgmt.dc1.example.com...
+  [ OK ]  Connected to BIG-IP: bigip01.dc1.example.com
   [ OK ]  TMOS version 17.5.1.5
 ```
 
@@ -157,10 +156,10 @@ After a successful connection, you see the main menu:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v4.1                        ║
+  ║                    DGCAT-Admin v4.2                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
-    Connected: bigip1-east.company.com
+    Connected: bigip01.dc1.example.com
   ╠════════════════════════════════════════════════════════════╣
   ║                                                            ║
   ║   1)  Create Datagroup or URL Category                     ║
@@ -342,34 +341,23 @@ Fleet deployment lets you push the current state of a datagroup or URL category 
 A file called `fleet.conf` is created by the script in your backup directory at first execution if the script does not already exist. The format is one entry per line, with a site label and hostname or IP separated by a pipe character:
 
 ```
-# =============================================================================
-# DGCat-Admin Fleet Configuration
-# =============================================================================
+# DGCat-Admin Fleet Configuration File
+# This file defines BIG-IPs within an enterprise that will be managed by DGCat-Admin
+# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
-# Define BIG-IP devices for fleet deployment operations.
 # Format: SITE|HOSTNAME_OR_IP
 #
-# SITE     - A label for grouping devices (datacenter, environment, etc.)
-# HOSTNAME - Management IP or resolvable hostname of the BIG-IP
-#
 # Examples:
-# East|10.1.1.10
-# East|10.1.1.11
-# West|10.2.1.10
-# West|10.2.1.11
-# DR|10.3.1.10
+# DC1|bigip01-mgmt.dc1.example.com
+# DC1|bigip02-mgmt.dc1.example.com
+# DC2|bigip01-mgmt.dc2.example.com
+# DC2|bigip02-mgmt.dc2.example.com
 #
-# Notes:
-# - Lines starting with # are comments
-# - Site names must contain only letters, numbers, dashes, and underscores
-# - The device you connect to is automatically excluded from fleet targets
-# - Fleet deployment uses the same credentials as your active connection
-#
-# Add your BIG-IP devices below:
-# =============================================================================
-DC1|sslo-dc1-primary.example.com
-DC1|sslo-dc1-secondary.example.com
-DC2|sslo-dc2-primary.example.com
+# Site names: letters, numbers, dashes, underscores only
+DC1|bigip01-mgmt.dc1.example.com
+DC1|bigip02-mgmt.dc1.example.com
+DC2|bigip01-mgmt.dc2.example.com
+DC2|bigip02-mgmt.dc2.example.com
 ```
 
 Site labels are used for grouping in the deployment scope selection and in the deployment summary. Use datacenter names, environment names, or whatever labeling scheme makes sense for your topology.
@@ -377,7 +365,7 @@ Site labels are used for grouping in the deployment scope selection and in the d
 The fleet is loaded once at session start. The tool displays a summary during pre-flight checks:
 
 ```
-  [ OK ]  Fleet loaded: 3 hosts across 2 sites
+  [ OK ]  Fleet loaded: 4 hosts across 2 sites
 ```
 
 ### Initiating a Deploy
@@ -428,13 +416,12 @@ After all hosts have been processed, a summary table shows the status of every d
   ──────────────────────────────────────────────────────────────
   HOST                                SITE       STATUS   MESSAGE
   ──────────────────────────────────────────────────────────────
-  10.251.0.171                        (current)  OK       No changes needed
-  10.251.0.172                        East       OK       Deployed and saved
-  10.251.1.171                        West       OK       Deployed and saved
-  10.251.1.172                        West       SKIP     Connection failed
-  10.251.2.171                        DR         OK       Deployed and saved
+  bigip01-mgmt.dc1.example.com       (current)  OK       No changes needed
+  bigip02-mgmt.dc1.example.com       DC1        OK       Deployed and saved
+  bigip01-mgmt.dc2.example.com       DC2        OK       Deployed and saved
+  bigip02-mgmt.dc2.example.com       DC2        SKIP     Connection failed
   ──────────────────────────────────────────────────────────────
-  Total: 4 succeeded, 0 failed, 1 skipped
+  Total: 3 succeeded, 0 failed, 1 skipped
 ```
 
 Status meanings in the deploy summary: **OK** means the deployment succeeded. **SKIP** means the host was never attempted — it failed pre-deploy validation (unreachable, object not found, or backup failed). **FAIL** means the host passed validation but the actual deployment failed. This distinction lets you quickly identify hosts that need attention versus hosts that were simply unavailable.
@@ -527,7 +514,7 @@ DGCat-Admin creates automatic backups before any operation that modifies or dele
 Backups are stored in the configured backup directory with timestamped filenames. When the connected host is part of a fleet site, backups are organized into the site's subdirectory alongside fleet deployment backups:
 
 ```
-East/Common_bypass-domains_internal_20260327_143052.csv
+DC1/Common_bypass-domains_internal_20260327_143052.csv
 ```
 
 When connected to a host that is not part of any fleet site, backups go to the root backup directory:
@@ -539,7 +526,7 @@ Common_bypass-domains_internal_20260327_143052.csv
 Fleet deployment backups for remote hosts are always organized by site:
 
 ```
-East/10_251_0_172_Common_bypass-domains_20260327_143022.csv
+DC1/bigip02-mgmt_dc1_example_com_Common_bypass-domains_20260327_143022.csv
 ```
 
 ### Retention
@@ -560,7 +547,7 @@ To restore from a backup, use the Create/Update from CSV option (menu option 2) 
 |----------|-------------|-------------------|-------------|
 | `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | `$PSScriptRoot\dgcat-admin-backups` | Storage for backups, logs, and fleet config |
 | `MAX_BACKUPS` | `30` | `30` | Maximum backup files retained per object |
-| `LOGGING_ENABLED` | `1` | `1` | Set to `0` to disable session log file creation |
+| `LOGGING_ENABLED` | `0` | `0` | Set to `1` to enable session log file creation |
 | `PARTITIONS` | `Common` | `Common` | Comma-separated list of BIG-IP partitions to manage |
 | `PREVIEW_LINES` | `5` | `5` | Number of lines shown in CSV file previews |
 | `API_CONNECT_TIMEOUT` | `10` | — | TCP connection timeout in seconds |
