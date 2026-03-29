@@ -144,7 +144,7 @@ After a successful connection, you see the main menu:
   ║                    DGCAT-Admin v4.0                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
-    Connected: 10.251.0.171
+    Connected: bigip1-east.company.com
   ╠════════════════════════════════════════════════════════════╣
   ║                                                            ║
   ║   1)  View Datagroup                                       ║
