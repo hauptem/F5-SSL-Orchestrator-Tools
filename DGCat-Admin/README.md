@@ -139,8 +139,6 @@ When deploying changes to the fleet, two modes are available:
 ## Documentation
 
 - [User Guide](USERGUIDE.md) — Detailed user operating instructions
-- [Technical Specification (Bash)](specification_bash.md) — Internal architecture and API reference
-- [Technical Specification (PowerShell)](specification_powershell.md) — PowerShell-specific implementation details
 
 ## License
 
