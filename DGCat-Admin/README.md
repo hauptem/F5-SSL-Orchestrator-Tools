@@ -81,43 +81,10 @@ chmod +x /shared/scripts/dgcat-admin.sh
 
 No installation required for either version. Both are single-file scripts with no external modules or packages.
 
-## Configuration
-
-Edit the variables at the top of the script:
-
-| Variable | Bash Default | PowerShell Default | Description |
-|----------|-------------|-------------------|-------------|
-| `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | `$PSScriptRoot\dgcat-admin-backups` | Backup and log storage |
-| `MAX_BACKUPS` | `30` | `30` | Backups retained per object |
-| `PARTITIONS` | `Common` | `Common` | Partition list to manage |
-| `API_CONNECT_TIMEOUT` | `10` | — | TCP connection timeout (seconds) |
-| `API_REQUEST_TIMEOUT` | `30` | — | Total request timeout (seconds) |
-| `API_TIMEOUT` | — | `10` | Request timeout (seconds) |
-
-### Fleet Configuration
-
-For multi-device deployment, create `fleet.conf` in your backup directory:
-
-```
-# Format: SITE|HOSTNAME_OR_IP
-DC1|bigip01-mgmt.dc1.example.com
-DC1|bigip02-mgmt.dc1.example.com
-DC2|bigip01-mgmt.dc2.example.com
-DC2|bigip02-mgmt.dc2.example.com
-```
-
-When a fleet configuration is present, fleet hosts are displayed at the connection prompt for quick selection. You can select a fleet host by number or enter any hostname or IP manually to connect to a non-fleet device.
-
-### Fleet Deployment Modes
-
-When deploying changes to the fleet, two modes are available:
-
-- **Full Replace** — Overwrites the target object with the exact state from the current device. Guarantees parity across all devices.
-- **Merge** — Applies only additions and deletions to each target, preserving any entries that are specific to that device. Useful when sites have intentional differences such as local bypass lists or site-specific address ranges.
-
 ## Documentation
 
-- [User Guide](USERGUIDE.md) — Detailed operation instructions
+- [Release Notes](RELEASE_NOTES.md) — DGCat Release notes
+- [User Guide](USERGUIDE.md) — Detailed operating instructions
 
 ## License
 
