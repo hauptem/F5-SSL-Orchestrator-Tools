@@ -61,10 +61,6 @@ DGCat-Admin communicates with BIG-IP exclusively through the iControl REST API o
 
 When you connect, the tool authenticates with the credentials you provide and validates the connection by querying the BIG-IP system. All subsequent operations use the same authenticated session.
 
-### Session Caching
-
-At session start, the tool performs pre-flight checks that validate your configured partitions and check whether the URL category database is available on the target device. These results are cached for the duration of the session so that subsequent operations do not repeat these API calls. This is important on production BIG-IPs where the management plane is shared with health monitors, config sync, HA failover, and other automation.
-
 ### Fleet Model
 
 If you have multiple BIG-IPs, you can define them in a fleet configuration file organized by site. The tool uses the fleet list for two purposes: presenting hosts for quick selection at connection time, and as targets for fleet deployment operations.
