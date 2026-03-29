@@ -57,7 +57,7 @@ The tool handles the details that make these operations error-prone when done ma
 
 ### REST API Architecture
 
-DGCat-Admin communicates with BIG-IP exclusively through the iControl REST API over HTTPS (port 443). Every operation — listing datagroups, reading records, applying changes, saving configuration — is an API call. This means the tool can run from anywhere with network access to the BIG-IP management interface.
+DGCat-Admin communicates with BIG-IP exclusively through the iControl REST API over HTTPS. Every operation — listing datagroups, reading records, applying changes, saving configuration — is an API call. This means the tool can run from anywhere with network access to the BIG-IP management interface.
 
 When you connect, the tool authenticates with the credentials you provide and validates the connection by querying the BIG-IP system version. All subsequent operations use the same authenticated session.
 
