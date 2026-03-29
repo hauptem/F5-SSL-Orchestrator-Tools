@@ -2,13 +2,13 @@
 
 **Deploy**
 - Consistent three-step visibility for every host: Creating backup, Applying changes, Saving configuration
-- Current device and fleet hosts display identically
-- Backup file paths no longer shown in deploy output (still written to log)
-- Backups moved from pre-deploy validation to deploy execution
+- Current device and fleet hosts display their statuses identically during deployment
+- Backup file paths no longer shown in deploy output (but still written to log)
+- Backups moved from pre-deploy validation to deploy execution stage
 - Suppressed data preparation progress lines (Building records, Building URL list)
-- All hosts pass validation: proceeds directly to deployment without second prompt
-- Some hosts fail validation: prompts operator before continuing with partial deploy
-- SKIP entries no longer echo the pre-check reason — the reason was already shown during validation
+- If all hosts pass pre-deploy validation - proceed directly to deployment without second prompt
+- If some hosts fail pre-deploy validation - prompt operator before continuing with partial deploy
+- SKIP entries no longer echo the pre-check reason 
 
 **Backups**
 - Connected host backups now include hostname in filename, matching fleet backup naming convention
