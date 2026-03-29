@@ -419,9 +419,9 @@ After all hosts have been processed, a summary table shows the status of every d
 
 ### What Fleet Deploy Will Not Do
 
-Fleet deployment does not create objects that don't exist on target hosts. If you're deploying a datagroup and one of your fleet members doesn't have that datagroup, it is skipped with a status of `SKIP`. The assumption is that you're synchronizing existing objects across devices that are already configured, not bootstrapping new environments.
+Fleet deployment does not create objects that don't exist on target hosts. If you're deploying a datagroup and one of your fleet members doesn't have that datagroup, it is skipped with a status of `SKIP`. The assumption is that you're synchronizing existing objects across devices that are already configured, not bootstrapping new environments, but if you want to bootstrap new environments simply connect to each host directly, make the container datagroup or URL category, and then deploy content from your "source of truth" Big-IP.
 
-All fleet operations use the same credentials you used to connect to the primary device. If a fleet host requires different credentials, it will show as a connection failure during validation.
+Note: All fleet operations use the same cached credentials you used to connect to the initial Big-IP. If a fleet Big-IP requires different credentials, it will show as a connection failure during validation.
 
 ---
 
