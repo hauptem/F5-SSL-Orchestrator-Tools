@@ -66,7 +66,7 @@ Fleet deployment uses a validate-then-apply model. Before any changes are made t
 
 ### Editor Model
 
-The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes — adding entries, deleting entries, bulk-deleting by pattern — without touching the live object. All edits are staged. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you quit without applying, nothing changes.
+The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes — adding entries, deleting entries, bulk-deleting by pattern — without touching the live object. All edits are staged. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you quit without applying, nothing changes on your Big-IP's.
 
 ---
 
