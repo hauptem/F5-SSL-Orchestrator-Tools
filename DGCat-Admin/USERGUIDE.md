@@ -324,12 +324,34 @@ Fleet deployment lets you push the current state of a datagroup or URL category 
 A file called `fleet.conf` is created by the script in your backup directory at first execution if the script does not already exist. The format is one entry per line, with a site label and hostname or IP separated by a pipe character:
 
 ```
+# =============================================================================
+# DGCat-Admin Fleet Configuration
+# =============================================================================
+#
+# Define BIG-IP devices for fleet deployment operations.
 # Format: SITE|HOSTNAME_OR_IP
-East|10.251.0.171
-East|10.251.0.172
-West|10.251.1.171
-West|10.251.1.172
-DR|10.251.2.171
+#
+# SITE     - A label for grouping devices (datacenter, environment, etc.)
+# HOSTNAME - Management IP or resolvable hostname of the BIG-IP
+#
+# Examples:
+# East|10.1.1.10
+# East|10.1.1.11
+# West|10.2.1.10
+# West|10.2.1.11
+# DR|10.3.1.10
+#
+# Notes:
+# - Lines starting with # are comments
+# - Site names must contain only letters, numbers, dashes, and underscores
+# - The device you connect to is automatically excluded from fleet targets
+# - Fleet deployment uses the same credentials as your active connection
+#
+# Add your BIG-IP devices below:
+# =============================================================================
+DC1|sslo-dc1-primary.example.com
+DC1|sslo-dc1-secondary.example.com
+DC2|sslo-dc2-primary.example.com
 ```
 
 Site labels are used for grouping in the deployment scope selection and in the deployment summary. Use datacenter names, environment names, or whatever labeling scheme makes sense for your topology.
