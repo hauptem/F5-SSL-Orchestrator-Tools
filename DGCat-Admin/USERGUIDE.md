@@ -3,21 +3,20 @@
 ## Table of Contents
 
 1. [Introduction](#introduction)
-2. [Why This Tool Exists](#why-this-tool-exists)
-3. [How It Works](#how-it-works)
-4. [Getting Started](#getting-started)
-5. [Connecting to a BIG-IP](#connecting-to-a-big-ip)
-6. [The Main Menu](#the-main-menu)
-7. [Creating Datagroups and URL Categories](#creating-datagroups-and-url-categories)
-8. [Creating and Updating from CSV](#creating-and-updating-from-csv)
-9. [Deleting Datagroups and URL Categories](#deleting-datagroups-and-url-categories)
-10. [Exporting to CSV](#exporting-to-csv)
-11. [The Interactive Editor](#the-interactive-editor)
-12. [Fleet Deployment](#fleet-deployment)
-13. [CSV File Formats](#csv-file-formats)
-14. [Backup System](#backup-system)
-15. [Configuration Reference](#configuration-reference)
-16. [Troubleshooting](#troubleshooting)
+2. [How It Works](#how-it-works)
+3. [Getting Started](#getting-started)
+4. [Connecting to a BIG-IP](#connecting-to-a-big-ip)
+5. [The Main Menu](#the-main-menu)
+6. [Creating Datagroups and URL Categories](#creating-datagroups-and-url-categories)
+7. [Creating and Updating from CSV](#creating-and-updating-from-csv)
+8. [Deleting Datagroups and URL Categories](#deleting-datagroups-and-url-categories)
+9. [Exporting to CSV](#exporting-to-csv)
+10. [The Interactive Editor](#the-interactive-editor)
+11. [Fleet Deployment](#fleet-deployment)
+12. [CSV File Formats](#csv-file-formats)
+13. [Backup System](#backup-system)
+14. [Configuration Reference](#configuration-reference)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -33,6 +32,20 @@ Both versions require network access to the BIG-IP management interface on port 
 The tool was designed for environments running SSL Orchestrator (SSLO), where datagroups and URL categories are the primary mechanism for classifying traffic in security policies. However, it works equally well for any BIG-IP deployment that uses datagroups or custom URL categories.
 
 DGCat-Admin supports managing a single device or an entire fleet of BIG-IPs. Changes can be made interactively through a built-in editor and pushed to multiple devices in a single operation, with pre-deployment validation and automatic backups at every step.
+
+---
+
+### The Datagroup and URL Category Approach
+
+F5's recommended approach is to reference datagroups or custom URL categories in your SSLO security policy rules instead of adding entries directly. Datagroups and URL categories are optimized for fast lookups, can hold thousands of entries without impacting policy performance, and are independent objects that can be managed, exported, and replicated separately from the policies that reference them.
+
+The challenge is that BIG-IP provides limited tooling for bulk management of these objects when an orchestration tool such as Ansible is not available. Adding 500 domains to a datagroup through the GUI is tedious. Exporting a URL category to replicate it at another site requires manual work. Keeping six BIG-IP SSLO's in sync across three datacenters is operationally expensive.
+
+### What DGCat-Admin Solves
+
+DGCat-Admin provides a single interface for all of these operations. You can import thousands of entries from a CSV file in seconds, export existing objects for backup or replication, edit entries interactively with search and bulk operations, and push the result to every BIG-IP in your fleet with a single command.
+
+The tool handles the details that make these operations error-prone when done manually: type validation, backup before modification, format conversion between CSV and BIG-IP native formats, and atomic application of changes.
 
 ---
 
