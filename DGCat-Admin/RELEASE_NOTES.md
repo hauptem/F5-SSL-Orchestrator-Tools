@@ -21,6 +21,6 @@
 - Consistent display widths across all section headers and dividers
 
 **Bug Fixes**
-- Fixed PowerShell save config failure caused by BIG-IP closing connection after save
+- Fixed PowerShell save config failure false positive caused by BIG-IP closing connection after save
 - Fixed PowerShell single-result array unwrapping across all pipelines
 - Fixed PowerShell duplicate deploy header and carriage return display artifacts
