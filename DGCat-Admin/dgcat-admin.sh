@@ -69,6 +69,7 @@ declare -a PARTITION_LIST
 REMOTE_HOST=""
 REMOTE_USER=""
 REMOTE_PASS=""
+REMOTE_HOSTNAME=""
 
 # API response storage
 API_RESPONSE=""
@@ -484,10 +485,18 @@ setup_remote_connection() {
     if api_get "/mgmt/tm/sys/version"; then
         local version
         version=$(echo "${API_RESPONSE}" | jq -r '.entries[].nestedStats.entries.Version.description // empty' 2>/dev/null | head -1)
+        
+        # Retrieve system hostname for operator validation
+        if api_get "/mgmt/tm/sys/global-settings"; then
+            REMOTE_HOSTNAME=$(echo "${API_RESPONSE}" | jq -r '.hostname // empty' 2>/dev/null)
+        fi
+        if [ -z "${REMOTE_HOSTNAME}" ]; then
+            REMOTE_HOSTNAME="${REMOTE_HOST}"
+        fi
+        
+        log_ok "Connected to BIG-IP: ${REMOTE_HOSTNAME}"
         if [ -n "${version}" ]; then
-            log_ok "Connected to BIG-IP version ${version}"
-        else
-            log_ok "Connected to ${REMOTE_HOST}"
+            log_ok "TMOS version ${version}"
         fi
         return 0
     else
@@ -620,7 +629,7 @@ FLEET_TEMPLATE
     fi
     
     log ""
-    log_info "Connected to: ${REMOTE_HOST}"
+    log_info "Connected to: ${REMOTE_HOSTNAME}"
     log_info "Log file: ${LOGFILE}"
 }
 # -----------------------------------------------------------------------------
@@ -2311,7 +2320,7 @@ show_main_menu() {
     echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.0                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${GREEN}${REMOTE_HOST}${NC}"
+    echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${GREEN}${REMOTE_HOSTNAME}${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}View Datagroup${NC}                                       ${CYAN}║${NC}"
@@ -3937,13 +3946,18 @@ editor_submenu() {
         
         # Menu options
         echo ""
+        echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
+        echo ""
         echo -e "  ${YELLOW}n)${NC} Next page    ${YELLOW}p)${NC} Previous page    ${YELLOW}g)${NC} Go to page"
         echo -e "  ${YELLOW}f)${NC} Filter       ${YELLOW}c)${NC} Clear filter     ${YELLOW}s)${NC} Change sort"
+        echo ""
         echo -e "  ${YELLOW}a)${NC} Add entry    ${YELLOW}d)${NC} Delete entry     ${YELLOW}x)${NC} Delete by pattern"
+        echo ""
         echo -e "  ${YELLOW}w)${NC} Apply changes (write to current device)"
         if fleet_available; then
             echo -e "  ${YELLOW}D)${NC} Deploy to fleet"
         fi
+        echo ""
         echo -e "  ${YELLOW}q)${NC} Done (return to main menu)"
         echo ""
         read -rp "  Select option: " edit_choice
@@ -5010,6 +5024,7 @@ main() {
         REMOTE_HOST=""
         REMOTE_USER=""
         REMOTE_PASS=""
+        REMOTE_HOSTNAME=""
         FLEET_SITES=()
         FLEET_HOSTS=()
         FLEET_UNIQUE_SITES=()

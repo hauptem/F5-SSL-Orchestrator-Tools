@@ -55,6 +55,7 @@ $script:EDIT_PAGE_SIZE = 20
 $script:RemoteHost = ""
 $script:RemoteUser = ""
 $script:RemotePass = ""
+$script:RemoteHostname = ""
 $script:AuthHeader = ""
 
 # =============================================================================
@@ -395,10 +396,18 @@ function Initialize-RemoteConnection {
             }
         } catch {}
         
+        # Retrieve system hostname for operator validation
+        $hostnameResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/global-settings"
+        if ($hostnameResult.Success) {
+            try { $script:RemoteHostname = $hostnameResult.Response.hostname } catch {}
+        }
+        if ([string]::IsNullOrWhiteSpace($script:RemoteHostname)) {
+            $script:RemoteHostname = $script:RemoteHost
+        }
+        
+        Write-LogOk "Connected to BIG-IP: $($script:RemoteHostname)"
         if ($version) {
-            Write-LogOk "Connected to BIG-IP version $version"
-        } else {
-            Write-LogOk "Connected to $($script:RemoteHost)"
+            Write-LogOk "TMOS version $version"
         }
         return $true
     } else {
@@ -1246,7 +1255,7 @@ function Invoke-FleetDeploy {
                 if ($consecutiveSameError -ge 3) {
                     Write-Host ""
                     Write-LogWarn "Systemic failure detected: Same error on 3 consecutive hosts"
-                    $cont = Read-Host "  Continue deploying to remaining hosts? (yes/no) [no]"
+                    Write-Host "  Continue deploying to remaining hosts? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
                     if ($cont -ne "yes") {
                         Write-LogInfo "Deployment stopped by user."
                         break
@@ -1555,7 +1564,7 @@ function Invoke-PreFlightChecks {
     }
     
     Write-Log ""
-    Write-LogInfo "Connected to: $($script:RemoteHost)"
+    Write-LogInfo "Connected to: $($script:RemoteHostname)"
     Write-LogInfo "Log file: $($script:LogFile)"
 }
 
@@ -1575,7 +1584,7 @@ function Show-MainMenu {
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "    Connected: " -NoNewline -ForegroundColor White
-    Write-Host $script:RemoteHost -ForegroundColor Green
+    Write-Host $script:RemoteHostname -ForegroundColor Green
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
@@ -1741,7 +1750,7 @@ function Invoke-CreateDatagroup {
             Write-LogOk "Backup saved: $backupFile"
         } else {
             Write-LogWarn "Could not create backup."
-            $cont = Read-Host "  Continue without backup? (yes/no) [no]"
+            Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
             if ($cont -ne "yes") {
                 Write-LogInfo "Aborted."
                 Press-EnterToContinue
@@ -1840,7 +1849,7 @@ function Invoke-CreateDatagroup {
         Write-LogWarn "Type mismatch detected!"
         Write-LogWarn "Datagroup type is '$dgType' but $($mismatch.Count) entries ($($mismatch.Percent)%) appear to be '$($mismatch.Type)' format."
         Write-Host ""
-        $cont = Read-Host "  Continue anyway? (yes/no) [no]"
+        Write-Host "  Continue anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
         if ($cont -ne "yes") {
             Write-LogInfo "Aborted by user."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
@@ -2032,7 +2041,7 @@ function Invoke-CreateUrlCategory {
     if ($defaultAction) { Write-LogInfo "  Action: $defaultAction" }
     if ($restoreMode) { Write-LogInfo "  Mode: $restoreMode" }
     Write-Host ""
-    $confirm = Read-Host "  Proceed? (yes/no) [no]"
+    Write-Host "  Proceed? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirm = Read-Host
     if ($confirm -ne "yes") {
         Write-LogInfo "Aborted."
         if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
@@ -2138,7 +2147,7 @@ function Invoke-DeleteDatagroup {
         Write-LogOk "Backup saved: $backupFile"
     } else {
         Write-LogWarn "Could not create backup."
-        $cont = Read-Host "  Continue without backup? (yes/no) [no]"
+        Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
         if ($cont -ne "yes") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
     }
     
@@ -2240,7 +2249,7 @@ function Invoke-DeleteUrlCategory {
     if ($backupFile) { Write-LogOk "Backup saved: $backupFile" }
     else {
         Write-LogWarn "Could not create backup."
-        $cont = Read-Host "  Continue without backup? (yes/no) [no]"
+        Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
         if ($cont -ne "yes") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
     }
     
@@ -2707,14 +2716,25 @@ function Invoke-EditorSubmenu {
         
         # Menu options
         Write-Host ""
-        Write-Host "  n) Next page    p) Previous page    g) Go to page" -ForegroundColor Yellow
-        Write-Host "  f) Filter       c) Clear filter     s) Change sort" -ForegroundColor Yellow
-        Write-Host "  a) Add entry    d) Delete entry     x) Delete by pattern" -ForegroundColor Yellow
-        Write-Host "  w) Apply changes (write to current device)" -ForegroundColor Yellow
+        Write-Host "  ──────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  n) " -NoNewline -ForegroundColor Yellow; Write-Host "Next page    " -NoNewline -ForegroundColor Green
+        Write-Host "p) " -NoNewline -ForegroundColor Yellow; Write-Host "Previous page    " -NoNewline -ForegroundColor Green
+        Write-Host "g) " -NoNewline -ForegroundColor Yellow; Write-Host "Go to page" -ForegroundColor Green
+        Write-Host "  f) " -NoNewline -ForegroundColor Yellow; Write-Host "Filter       " -NoNewline -ForegroundColor Green
+        Write-Host "c) " -NoNewline -ForegroundColor Yellow; Write-Host "Clear filter     " -NoNewline -ForegroundColor Green
+        Write-Host "s) " -NoNewline -ForegroundColor Yellow; Write-Host "Change sort" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  a) " -NoNewline -ForegroundColor Yellow; Write-Host "Add entry    " -NoNewline -ForegroundColor Green
+        Write-Host "d) " -NoNewline -ForegroundColor Yellow; Write-Host "Delete entry     " -NoNewline -ForegroundColor Green
+        Write-Host "x) " -NoNewline -ForegroundColor Yellow; Write-Host "Delete by pattern" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  w) " -NoNewline -ForegroundColor Yellow; Write-Host "Apply changes (write to current device)" -ForegroundColor Green
         if (Test-FleetAvailable) {
-            Write-Host "  D) Deploy to fleet" -ForegroundColor Yellow
+            Write-Host "  D) " -NoNewline -ForegroundColor Yellow; Write-Host "Deploy to fleet" -ForegroundColor Green
         }
-        Write-Host "  q) Done (return to main menu)" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  q) " -NoNewline -ForegroundColor Yellow; Write-Host "Done (return to main menu)" -ForegroundColor Green
         Write-Host ""
         $editChoice = Read-Host "  Select option"
         
@@ -2796,7 +2816,7 @@ function Invoke-EditorSubmenu {
                 
                 Write-Host ""
                 Write-LogWarn "Delete entry: $delKey"
-                $confirmDel = Read-Host "  Confirm? (yes/no) [no]"
+                Write-Host "  Confirm? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirmDel = Read-Host
                 if ($confirmDel -ne "yes") { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
                 
                 $workingKeys.RemoveAt($foundIdx)
@@ -2829,7 +2849,7 @@ function Invoke-EditorSubmenu {
                 Write-Host "  ──────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
                 
                 Write-Host ""
-                $confirmDel = Read-Host "  Delete all $($matchIndices.Count) matching entries? (yes/no) [no]"
+                Write-Host "  Delete all $($matchIndices.Count) matching entries? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirmDel = Read-Host
                 if ($confirmDel -ne "yes") { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
                 
                 # Remove in reverse order to preserve indices
@@ -2862,7 +2882,7 @@ function Invoke-EditorSubmenu {
                 Write-Host "  ──────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
                 Write-Host "  Final count: $($workingKeys.Count) entries" -ForegroundColor White
                 Write-Host ""
-                $confirmApply = Read-Host "  Apply these changes? (yes/no) [no]"
+                Write-Host "  Apply these changes? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirmApply = Read-Host
                 if ($confirmApply -ne "yes") { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
                 
                 # Create backup
@@ -2876,7 +2896,7 @@ function Invoke-EditorSubmenu {
                 if ($backupFile) { Write-LogOk "Backup saved: $backupFile" }
                 else {
                     Write-LogWarn "Could not create backup."
-                    $cont = Read-Host "  Continue without backup? (yes/no) [no]"
+                    Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
                     if ($cont -ne "yes") { continue }
                 }
                 
@@ -2927,7 +2947,7 @@ function Invoke-EditorSubmenu {
                 if (-not $hasPending) {
                     Write-Host ""
                     Write-LogInfo "No pending changes detected."
-                    $deployAnyway = Read-Host "  Deploy current state to fleet anyway? (yes/no) [no]"
+                    Write-Host "  Deploy current state to fleet anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $deployAnyway = Read-Host
                     if ($deployAnyway -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
                 }
                 
@@ -2956,7 +2976,7 @@ function Invoke-EditorSubmenu {
                     Write-Host "  Final entry count: $($workingKeys.Count)" -ForegroundColor White
                     Write-Host ""
                     
-                    $contDeploy = Read-Host "  Continue to deployment options? (yes/no) [no]"
+                    Write-Host "  Continue to deployment options? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $contDeploy = Read-Host
                     if ($contDeploy -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
                     
                     # Select deploy mode
@@ -3052,8 +3072,13 @@ function Invoke-EditorSubmenu {
                 }
                 
                 Write-Host ""
-                $deployPrompt = $(if ($hasPending) { "  Proceed with deployment to $readyCount fleet host(s) + current device? (yes/no) [no]" } else { "  Proceed with deployment to $readyCount fleet host(s)? (yes/no) [no]" })
-                $proceedDeploy = Read-Host $deployPrompt
+                if ($hasPending) {
+                    Write-Host "  Proceed with deployment to $readyCount fleet host(s) + current device? (yes/no) " -NoNewline
+                } else {
+                    Write-Host "  Proceed with deployment to $readyCount fleet host(s)? (yes/no) " -NoNewline
+                }
+                Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline
+                $proceedDeploy = Read-Host
                 if ($proceedDeploy -ne "yes") {
                     Write-LogInfo "Deploy cancelled. No changes have been made."
                     Press-EnterToContinue
@@ -3081,7 +3106,7 @@ function Invoke-EditorSubmenu {
                     if ($currentBackup) { Write-LogOk "Backup saved: $currentBackup" }
                     else {
                         Write-LogWarn "Could not create backup for current device."
-                        $cont = Read-Host "  Continue without backup? (yes/no) [no]"
+                        Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
                         if ($cont -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
                     }
                     
@@ -3110,7 +3135,7 @@ function Invoke-EditorSubmenu {
                     if (-not $currentSuccess) {
                         Write-Host ""
                         Write-LogError "Failed to apply changes to current device."
-                        $contFleet = Read-Host "  Continue deploying to fleet anyway? (yes/no) [no]"
+                        Write-Host "  Continue deploying to fleet anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $contFleet = Read-Host
                         if ($contFleet -ne "yes") { Write-LogInfo "Deploy aborted."; Press-EnterToContinue; continue }
                     }
                     
@@ -3178,7 +3203,7 @@ function Invoke-EditorSubmenu {
                 if (Test-PendingChanges) {
                     Write-Host ""
                     Write-LogWarn "You have unapplied changes that will be discarded."
-                    $confirmExit = Read-Host "  Discard changes and exit? (yes/no) [no]"
+                    Write-Host "  Discard changes and exit? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirmExit = Read-Host
                     if ($confirmExit -ne "yes") { continue }
                     Write-LogInfo "Changes discarded."
                 }
@@ -3201,6 +3226,7 @@ function Main {
         $script:RemoteHost = ""
         $script:RemoteUser = ""
         $script:RemotePass = ""
+        $script:RemoteHostname = ""
         $script:AuthHeader = ""
         $script:FleetSites = @()
         $script:FleetHosts = @()
