@@ -23,8 +23,6 @@ DGCat-Admin provides a single interface for all of these operations. You can imp
 
 The tool handles the details that make these operations error-prone when done manually: type validation, backup before modification, format conversion between CSV and BIG-IP native formats, and atomic application of changes.
 
-**The recommended approach:** Use datagroups or URL categories for SSLO security policy rules. They're optimized for fast lookups, keep policies clean and are operationally easier to maintain.
-
 DGCat-Admin makes managing those site lists very easy.
 
 - Need to export a few massive datagroups or custom URL categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
