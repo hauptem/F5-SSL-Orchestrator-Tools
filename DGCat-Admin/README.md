@@ -79,6 +79,7 @@ chmod +x /shared/scripts/dgcat-admin.sh
 
 ## Documentation
 
+- [Release Notes](RELEASE_NOTES.md) — Release notes for DGCat-Admin
 - [User Guide](USERGUIDE.md) — Detailed user operating instructions
 
 ## License
