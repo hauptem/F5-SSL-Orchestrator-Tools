@@ -1,14 +1,14 @@
 # DGCat-Admin v4.2 Release Notes - March 29 2026
 
-**Deploy**
-- Consistent three-step visibility for every host: Creating backup, Applying changes, Saving configuration
+**Deployment**
+- Implemented consistent three-step visibility for every host: Creating backup, Applying changes, Saving configuration
 - Current device and fleet hosts display their statuses identically during deployment
-- Backup file paths no longer shown in deploy output (but still written to log)
-- Backups moved from pre-deploy validation to deploy execution stage
+- Backup file paths are no longer shown in deploy output (but still written to log)
+- Backups moved from pre-deploy validation to deploy execution stage since deployments can be cancelled by the user following pre-deployment failures
 - Suppressed data preparation progress lines (Building records, Building URL list)
-- If all hosts pass pre-deploy validation - proceed directly to deployment without second prompt
-- If some hosts fail pre-deploy validation - prompt operator before continuing with partial deploy
-- SKIP entries no longer echo the pre-check reason 
+- If all hosts pass a pre-deploy validation then proceed directly to deployment without a second confirmation prompt
+- If some hosts fail pre-deploy validation  then prompt operator before continuing with a partial deployment
+- SKIP entries no longer echo the pre-check reason in the deployment summary since it was shown in the pre-deploy summary
 
 **Backups**
 - Connected host backups now include hostname in filename, matching fleet backup naming convention
@@ -16,14 +16,13 @@
 # DGCat-Admin v4.1 Release Notes - March 28 2026
 
 **New Features**
-- Create Empty Datagroup or URL Category menu option
-- Logging toggle (LOGGING_ENABLED)
+- Create an Empty Datagroup or URL Category menu option
+- Logging toggle to disable/enable tool logging 
 
-**Deploy**
-- Skips current device when no pending changes exist
+**Deployment**
+- Skips current device when no pending changes exist on that device (if a user used the write feature prior to deployment)
 - Step numbering adjusts dynamically
-- Prompt and preview reflect actual scope
-- Pre-check failures show as SKIP in summary; FAIL reserved for actual deploy failures
+- Pre-check failures now show as SKIP in summary; FAIL status is reserved for actual deploy failures
 - Connected host backups are saved within a site subfolder when the host is in a fleet
 
 **UI**
