@@ -359,7 +359,7 @@ Site labels are used for grouping in the deployment scope selection and in the d
 The fleet is loaded once at session start. The tool displays a summary during pre-flight checks:
 
 ```
-  [ OK ]  Fleet loaded: 5 hosts across 3 sites
+  [ OK ]  Fleet loaded: 3 hosts across 2 sites
 ```
 
 ### Initiating a Deploy
