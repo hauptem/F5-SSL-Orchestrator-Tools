@@ -13,7 +13,7 @@
 - Step numbering adjusts dynamically
 - Prompt and preview reflect actual scope
 - Pre-check failures show as SKIP in summary; FAIL reserved for actual deploy failures
-- Connected host backups route to site subfolder when host is in fleet
+- Connected host backups are saved within a site subfolder when the host is in a fleet
 
 **UI**
 - Menu restructured: View removed, Edit renamed to View/Edit
