@@ -3,6 +3,11 @@
 - Initial public release
 
 # DGCat-Admin v4.1 Release Notes - March 29 2026
+
+**New Features**
+- Create Empty Datagroup or URL Category menu option
+- Logging toggle (LOGGING_ENABLED)
+
 **Deploy**
 - Skips current device when no pending changes exist
 - Step numbering adjusts dynamically
@@ -10,18 +15,12 @@
 - Pre-check failures show as SKIP in summary; FAIL reserved for actual deploy failures
 - Connected host backups route to site subfolder when host is in fleet
 
-**Bug Fixes**
-- Fixed PowerShell save config failure caused by BIG-IP closing connection after save
-- Fixed PowerShell single-result array unwrapping across all pipelines
-- Fixed duplicate deploy header and carriage return display artifacts
-
-**New Features**
-- Create Empty Datagroup or URL Category menu option
-- System hostname retrieved on connect for operator validation
-- Boilerplate fleet.conf auto-generated on first run
-- Logging toggle (LOGGING_ENABLED)
-
 **UI**
 - Menu restructured: View removed, Edit renamed to View/Edit
 - Editor commands spaced into visual groups with matched colors across both versions
 - Consistent display widths across all section headers and dividers
+
+- **Bug Fixes**
+- Fixed PowerShell save config failure caused by BIG-IP closing connection after save
+- Fixed PowerShell single-result array unwrapping across all pipelines
+- Fixed duplicate deploy header and carriage return display artifacts
