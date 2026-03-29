@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.0
+# Version: 4.1
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -28,6 +28,9 @@
 # Backup settings
 $script:BACKUP_DIR = Join-Path $PSScriptRoot "dgcat-admin-backups"
 $script:MAX_BACKUPS = 30
+
+# Session logging (set to 0 to disable log file creation)
+$script:LOGGING_ENABLED = 0
 
 # API timeout (seconds)
 # Max time for any single API request including connection
@@ -118,9 +121,9 @@ function Write-Log {
 function Write-LogSection {
     param([string]$Title)
     Write-Log ""
-    Write-Host "  ════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
     Write-Host "    $Title" -ForegroundColor White
-    Write-Host "  ════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
 }
 
 function Write-LogInfo {
@@ -344,6 +347,7 @@ function Initialize-RemoteConnection {
     if ($hostInput -eq "0") {
         Write-Host ""
         Write-Host "  Exiting." -ForegroundColor White
+        Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
         Write-Host ""
         exit 0
     }
@@ -853,6 +857,17 @@ function Confirm-SiteLogDir {
     return $true
 }
 
+# Get the correct backup directory for the connected host
+# Fleet hosts use site subfolder, non-fleet hosts use root backup directory
+function Get-ConnectedBackupDir {
+    $hostSite = Get-HostSite -Hostname $script:RemoteHost
+    if ($hostSite) {
+        Confirm-SiteLogDir -SiteId $hostSite | Out-Null
+        return Join-Path $script:BACKUP_DIR $hostSite
+    }
+    return $script:BACKUP_DIR
+}
+
 # =============================================================================
 # DEPLOY VALIDATION FUNCTIONS
 # =============================================================================
@@ -1310,7 +1325,8 @@ function Backup-Datagroup {
     param([string]$Partition, [string]$Name)
     
     $safePartition = $Partition -replace '/', '_'
-    $backupFile = Join-Path $script:BACKUP_DIR "${safePartition}_${Name}_internal_$($script:Timestamp).csv"
+    $backupPath = Get-ConnectedBackupDir
+    $backupFile = Join-Path $backupPath "${safePartition}_${Name}_internal_$($script:Timestamp).csv"
     
     $dgType = Get-DatagroupTypeRemote -Partition $Partition -Name $Name
     $records = Get-DatagroupRecordsRemote -Partition $Partition -Name $Name
@@ -1339,7 +1355,8 @@ function Backup-UrlCategory {
     param([string]$CatName)
     
     $safeName = $CatName -replace '[^a-zA-Z0-9_-]', '_'
-    $backupFile = Join-Path $script:BACKUP_DIR "urlcat_${safeName}_$($script:Timestamp).csv"
+    $backupPath = Get-ConnectedBackupDir
+    $backupFile = Join-Path $backupPath "urlcat_${safeName}_$($script:Timestamp).csv"
     
     $entries = Get-UrlCategoryEntriesRemote -Name $CatName
     
@@ -1529,6 +1546,7 @@ function Invoke-PreFlightChecks {
         if ([string]::IsNullOrWhiteSpace($retry)) { $retry = "yes" }
         if ($retry -ne "yes") {
             Write-LogInfo "Exiting."
+            Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
             exit 0
         }
     }
@@ -1565,7 +1583,9 @@ function Invoke-PreFlightChecks {
     
     Write-Log ""
     Write-LogInfo "Connected to: $($script:RemoteHostname)"
-    Write-LogInfo "Log file: $($script:LogFile)"
+    if ($script:LOGGING_ENABLED -eq 1) {
+        Write-LogInfo "Log file: $($script:LogFile)"
+    }
 }
 
 # =============================================================================
@@ -1577,7 +1597,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v4.0                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v4.1                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -1588,7 +1608,7 @@ function Show-MainMenu {
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "   1)  View Datagroup                                       " -NoNewline -ForegroundColor White
+    Write-Host "   1)  Create Datagroup or URL Category                     " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   2)  Create/Update Datagroup or URL Category from CSV     " -NoNewline -ForegroundColor White
@@ -1600,7 +1620,7 @@ function Show-MainMenu {
     Write-Host "   4)  Export Datagroup or URL Category to CSV              " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "   5)  Edit a Datagroup or URL Category                     " -NoNewline -ForegroundColor White
+    Write-Host "   5)  View/Edit a Datagroup or URL Category                " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
@@ -1611,55 +1631,180 @@ function Show-MainMenu {
     Write-Host ""
 }
 
-# Option 1: View Datagroup
-function Invoke-ViewDatagroup {
-    Write-LogSection "View Datagroup Contents"
+# Option 1: Create Datagroup or URL Category
+function Invoke-CreateEmpty {
+    Write-LogSection "Create Datagroup or URL Category"
     
-    $partition = Select-Partition -Prompt "Select partition to view from"
+    Write-Host ""
+    Write-Host "  What would you like to create?" -ForegroundColor White
+    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "Datagroup" -ForegroundColor White
+    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "URL Category" -ForegroundColor White
+    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "Cancel" -ForegroundColor White
+    Write-Host ""
+    $choice = Read-Host "  Select [0-2]"
+    
+    switch ($choice) {
+        "1" { Invoke-CreateEmptyDatagroup }
+        "2" { Invoke-CreateEmptyUrlCategory }
+        default {
+            Write-LogInfo "Cancelled."
+            Press-EnterToContinue
+        }
+    }
+}
+
+function Invoke-CreateEmptyDatagroup {
+    Write-LogSection "Create Empty Datagroup"
+    
+    $partition = Select-Partition -Prompt "Select partition"
     if ([string]::IsNullOrWhiteSpace($partition)) {
         Write-LogInfo "Cancelled."
         Press-EnterToContinue
         return
     }
     
-    $selection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name"
-    if ($null -eq $selection) {
+    Write-Host ""
+    $dgName = Read-Host "  Enter datagroup name (or 'q' to cancel)"
+    if ([string]::IsNullOrWhiteSpace($dgName) -or $dgName -eq 'q') {
+        Write-LogInfo "Cancelled."
         Press-EnterToContinue
         return
     }
     
-    $dgName = $selection.Name
-    $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName
+    $dgName = Remove-PartitionPrefix -Name $dgName
     
+    if (Test-ProtectedDatagroup -Name $dgName) {
+        Write-LogError "The name '$dgName' is reserved for a BIG-IP system datagroup."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Check if already exists
+    if (Test-DatagroupExistsRemote -Partition $partition -Name $dgName) {
+        Write-LogError "Datagroup '$dgName' already exists in partition '$partition'."
+        Write-LogInfo "Use the editor (option 5) to modify existing datagroups."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Select type
     Write-Host ""
-    Write-LogInfo "Datagroup: /${partition}/${dgName}"
-    Write-LogInfo "Type: $dgType"
-    Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    Write-Host "  Select datagroup type:" -ForegroundColor White
+    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "string  - For domains, hostnames, URLs" -ForegroundColor White
+    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "address - For IP addresses, subnets (CIDR)" -ForegroundColor White
+    Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "integer - For port numbers, numeric values" -ForegroundColor White
+    Write-Host ""
+    $typeChoice = Read-Host "  Select [1-3]"
     
-    $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName
+    $dgType = switch ($typeChoice) { "1" { "string" }; "2" { "ip" }; "3" { "integer" }; default { "" } }
+    if ([string]::IsNullOrWhiteSpace($dgType)) {
+        Write-LogWarn "Invalid selection."
+        Press-EnterToContinue
+        return
+    }
     
-    if ($records.Count -eq 0) {
-        Write-LogInfo "(empty - no records)"
+    $displayType = $(if ($dgType -eq "ip") { "address" } else { $dgType })
+    
+    # Confirm
+    Write-Host ""
+    Write-LogInfo "Ready to create:"
+    Write-LogInfo "  Path: /${partition}/${dgName}"
+    Write-LogInfo "  Type: $displayType"
+    Write-Host ""
+    Write-Host "  Create this datagroup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirm = Read-Host
+    if ($confirm -ne "yes") {
+        Write-LogInfo "Cancelled."
+        Press-EnterToContinue
+        return
+    }
+    
+    Write-LogStep "Creating datagroup '/${partition}/${dgName}'..."
+    if (New-DatagroupRemote -Partition $partition -Name $dgName -Type $dgType) {
+        Write-LogOk "Datagroup '/${partition}/${dgName}' created successfully (empty)."
+        Invoke-PromptSaveConfig
     } else {
-        Write-Host ""
-        Write-Host ("  {0,-45} {1}" -f "KEY", "VALUE") -ForegroundColor White
-        Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-        foreach ($rec in $records) {
-            if ($rec.Value) {
-                Write-Host ("  {0,-45} {1}" -f $rec.Key, $rec.Value) -ForegroundColor White
-            } else {
-                Write-Host ("  {0,-45} " -f $rec.Key) -NoNewline -ForegroundColor White
-                Write-Host "(no value)" -ForegroundColor Yellow
-            }
-        }
-        Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-        Write-LogInfo "Total: $($records.Count) record(s)"
+        Write-LogError "Failed to create datagroup."
     }
     
     Press-EnterToContinue
 }
 
-# Option 2: Create/Update from CSV
+function Invoke-CreateEmptyUrlCategory {
+    Write-LogSection "Create Empty URL Category"
+    
+    if (-not (Test-UrlCategoryDbAvailable)) {
+        Write-LogError "URL database not available or accessible."
+        Write-LogInfo "This feature requires the URL filtering module."
+        Press-EnterToContinue
+        return
+    }
+    
+    Write-Host ""
+    $catName = Read-Host "  Enter URL category name (or 'q' to cancel)"
+    if ([string]::IsNullOrWhiteSpace($catName) -or $catName -eq 'q') {
+        Write-LogInfo "Cancelled."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Sanitize name
+    $originalName = $catName
+    $catName = $catName -replace '[^a-zA-Z0-9_-]', '_'
+    if ($catName -ne $originalName) { Write-LogInfo "Category name sanitized to: $catName" }
+    
+    # Check if already exists
+    if (Test-UrlCategoryExistsRemote -Name $catName) {
+        Write-LogError "URL category '$catName' already exists."
+        Write-LogInfo "Use the editor (option 5) to modify existing URL categories."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Select default action
+    Write-Host ""
+    Write-Host "  Select default action for this category:" -ForegroundColor White
+    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "allow   - Allow traffic (use for bypass lists)" -ForegroundColor White
+    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "block   - Block traffic" -ForegroundColor White
+    Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "confirm - Prompt user for confirmation" -ForegroundColor White
+    Write-Host ""
+    $actionChoice = Read-Host "  Select [1-3] [1]"
+    if ([string]::IsNullOrWhiteSpace($actionChoice)) { $actionChoice = "1" }
+    $defaultAction = switch ($actionChoice) { "1" { "allow" }; "2" { "block" }; "3" { "confirm" }; default { "allow" } }
+    
+    # Confirm
+    Write-Host ""
+    Write-LogInfo "Ready to create:"
+    Write-LogInfo "  Category: $catName"
+    Write-LogInfo "  Action:   $defaultAction"
+    Write-Host ""
+    Write-Host "  Create this URL category? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirm = Read-Host
+    if ($confirm -ne "yes") {
+        Write-LogInfo "Cancelled."
+        Press-EnterToContinue
+        return
+    }
+    
+    Write-LogStep "Creating URL category '$catName'..."
+    if (New-UrlCategoryRemote -Name $catName -DefaultAction $defaultAction -Urls @()) {
+        Write-LogOk "URL category '$catName' created successfully (empty)."
+        Invoke-PromptSaveConfig
+    } else {
+        Write-LogError "Failed to create URL category."
+    }
+    
+    Press-EnterToContinue
+}
+
+# Option 3: Create/Update from CSV
 function Invoke-CreateFromCsv {
     Write-LogSection "Create/Restore from CSV"
     
@@ -3239,7 +3384,7 @@ function Main {
         Write-Host ""
         Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-        Write-Host "                    DGCAT-Admin v4.0                        " -NoNewline -ForegroundColor White
+        Write-Host "                    DGCAT-Admin v4.1                        " -NoNewline -ForegroundColor White
         Write-Host "║" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
         Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -3254,6 +3399,7 @@ function Main {
         if ($startChoice -eq "0") {
             Write-Host ""
             Write-Host "  Exiting." -ForegroundColor White
+            Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
             Write-Host ""
             exit 0
         }
@@ -3265,23 +3411,29 @@ function Main {
         
         $script:FLEET_CONFIG_FILE = Join-Path $script:BACKUP_DIR "fleet.conf"
         $script:Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $script:LogFile = Join-Path $script:BACKUP_DIR "dgcat-admin-$($script:Timestamp).log"
         
-        # Initialize log
-        try {
-            @(
-                "DGCat-Admin - F5 BIG-IP Administration Tool",
-                "Started: $(Get-Date)",
-                "Mode: REST API",
-                "Target: (pending connection)"
-            ) | Out-File -FilePath $script:LogFile -Encoding UTF8
-        } catch {}
+        # Initialize log (if logging enabled)
+        if ($script:LOGGING_ENABLED -eq 1) {
+            $script:LogFile = Join-Path $script:BACKUP_DIR "dgcat-admin-$($script:Timestamp).log"
+            try {
+                @(
+                    "DGCat-Admin - F5 BIG-IP Administration Tool",
+                    "Started: $(Get-Date)",
+                    "Mode: REST API",
+                    "Target: (pending connection)"
+                ) | Out-File -FilePath $script:LogFile -Encoding UTF8
+            } catch {}
+        } else {
+            $script:LogFile = ""
+        }
         
         # Run pre-flight checks
         Invoke-PreFlightChecks
         
         # Update log with target
-        try { "Target: $($script:RemoteHost)" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 } catch {}
+        if ($script:LogFile) {
+            try { "Target: $($script:RemoteHost)" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 } catch {}
+        }
         
         Press-EnterToContinue
         
@@ -3293,7 +3445,7 @@ function Main {
             $choice = Read-Host "  Select option [0-5]"
             
             switch ($choice) {
-                "1" { Invoke-ViewDatagroup }
+                "1" { Invoke-CreateEmpty }
                 "2" { Invoke-CreateFromCsv }
                 "3" { Invoke-DeleteMenu }
                 "4" { Invoke-ExportToCsv }
@@ -3301,7 +3453,9 @@ function Main {
                 "0" {
                     Write-LogSection "Session End"
                     Write-LogInfo "Session ended: $(Get-Date)"
-                    Write-LogInfo "Log file: $($script:LogFile)"
+                    if ($script:LOGGING_ENABLED -eq 1) {
+                        Write-LogInfo "Log file: $($script:LogFile)"
+                    }
                     Write-Host ""
                     $returnToStart = $true
                     break

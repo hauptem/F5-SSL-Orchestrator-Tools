@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.0
+# Version: 4.1
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -30,6 +30,9 @@ set -euo pipefail
 # Backup settings
 BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
 MAX_BACKUPS=30
+
+# Session logging (set to 0 to disable log file creation)
+LOGGING_ENABLED=0
 
 # API timeout settings (seconds)
 # Connect timeout: max time to establish TCP connection to a BIG-IP
@@ -109,14 +112,18 @@ NC='\033[0m'
 # =============================================================================
 
 log() {
-    echo -e "$1" | tee -a "${LOGFILE}" 2>/dev/null
+    if [ "${LOGGING_ENABLED}" -eq 1 ]; then
+        echo -e "$1" | tee -a "${LOGFILE}" 2>/dev/null
+    else
+        echo -e "$1"
+    fi
 }
 
 log_section() {
     log ""
-    log "${CYAN}════════════════════════════════════════════════════════════════${NC}"
-    log "${WHITE}  $1${NC}"
-    log "${CYAN}════════════════════════════════════════════════════════════════${NC}"
+    log "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    log "    ${WHITE}$1${NC}"
+    log "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
 }
 
 log_info() {
@@ -448,6 +455,7 @@ setup_remote_connection() {
     if [ "${host_input}" == "0" ]; then
         echo ""
         echo -e "  ${WHITE}Exiting.${NC}"
+        echo -e "  ${CYAN}Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools${NC}"
         echo ""
         exit 0
     fi
@@ -593,6 +601,7 @@ FLEET_TEMPLATE
         retry="${retry:-yes}"
         if [ "${retry}" != "yes" ]; then
             log_info "Exiting."
+            echo -e "  ${CYAN}Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools${NC}"
             exit 0
         fi
     done
@@ -630,7 +639,9 @@ FLEET_TEMPLATE
     
     log ""
     log_info "Connected to: ${REMOTE_HOSTNAME}"
-    log_info "Log file: ${LOGFILE}"
+    if [ "${LOGGING_ENABLED}" -eq 1 ]; then
+        log_info "Log file: ${LOGFILE}"
+    fi
 }
 # -----------------------------------------------------------------------------
 # System Functions
@@ -1122,6 +1133,21 @@ ensure_site_log_dir() {
         mkdir -p "${site_dir}" 2>/dev/null || return 1
     fi
     return 0
+}
+
+# Get the correct backup directory for the connected host
+# If the connected host is part of a fleet site, returns the site subfolder
+# Otherwise returns the root backup directory
+# Outputs: backup directory path
+get_connected_backup_dir() {
+    local host_site
+    host_site=$(get_host_site "${REMOTE_HOST}" 2>/dev/null) || true
+    if [ -n "${host_site}" ]; then
+        ensure_site_log_dir "${host_site}" 2>/dev/null || true
+        echo "${BACKUP_DIR}/${host_site}"
+    else
+        echo "${BACKUP_DIR}"
+    fi
 }
 
 # Get log file path for a host
@@ -2086,7 +2112,12 @@ backup_datagroup() {
     # Include partition and class in backup filename to avoid collisions
     local safe_partition
     safe_partition=$(echo "${partition}" | sed 's/\//_/g')
-    local backup_file="${BACKUP_DIR}/${safe_partition}_${dg_name}_${dg_class}_${TIMESTAMP}.csv"
+    
+    # Determine backup path: fleet hosts go in site subfolder
+    local backup_path
+    backup_path=$(get_connected_backup_dir)
+    
+    local backup_file="${backup_path}/${safe_partition}_${dg_name}_${dg_class}_${TIMESTAMP}.csv"
     local dg_type
     
     dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
@@ -2317,75 +2348,208 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.0                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.1                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${GREEN}${REMOTE_HOSTNAME}${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}View Datagroup${NC}                                       ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}Create Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}Create/Update Datagroup or URL Category from CSV${NC}     ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Delete Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}Edit a Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}View/Edit a Datagroup or URL Category${NC}                ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
-# Option 2: View datagroup contents
-menu_view_datagroup() {
-    log_section "View Datagroup Contents"
+
+# Option 1: Create empty Datagroup or URL Category
+menu_create_empty() {
+    log_section "Create Datagroup or URL Category"
     
-    # Select partition
+    echo ""
+    echo -e "  ${WHITE}What would you like to create?${NC}"
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo ""
+    local choice
+    read -rp "  Select [0-2]: " choice
+    
+    case "${choice}" in
+        1) menu_create_empty_datagroup ;;
+        2) menu_create_empty_url_category ;;
+        *)
+            log_info "Cancelled."
+            press_enter_to_continue
+            ;;
+    esac
+}
+
+menu_create_empty_datagroup() {
+    log_section "Create Empty Datagroup"
+    
     local partition
-    partition=$(select_partition "Select partition to view from")
+    partition=$(select_partition "Select partition")
     if [ -z "${partition}" ]; then
         log_info "Cancelled."
         press_enter_to_continue
         return
     fi
     
-    # Select datagroup
-    local selection dg_name dg_class
-    selection=$(select_datagroup "${partition}" "Enter datagroup name") || true
-    if [ -z "${selection}" ]; then
+    echo ""
+    local dg_name
+    read -rp "  Enter datagroup name (or 'q' to cancel): " dg_name
+    if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ]; then
+        log_info "Cancelled."
         press_enter_to_continue
         return
     fi
-    IFS='|' read -r dg_name dg_class <<< "${selection}"
     
-    local dg_type
-    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
+    dg_name=$(strip_partition_prefix "${dg_name}")
+    
+    if is_protected_datagroup "${dg_name}"; then
+        log_error "The name '${dg_name}' is reserved for a BIG-IP system datagroup."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Check if already exists
+    local existing_class
+    existing_class=$(datagroup_exists "${partition}" "${dg_name}")
+    if [ -n "${existing_class}" ]; then
+        log_error "Datagroup '${dg_name}' already exists in partition '${partition}'."
+        log_info "Use the editor (option 5) to modify existing datagroups."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Select type
+    echo ""
+    echo -e "  ${WHITE}Select datagroup type:${NC}"
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}string  - For domains, hostnames, URLs${NC}"
+    echo -e "    ${YELLOW}2)${NC} ${WHITE}address - For IP addresses, subnets (CIDR)${NC}"
+    echo -e "    ${YELLOW}3)${NC} ${WHITE}integer - For port numbers, numeric values${NC}"
+    echo ""
+    local type_choice
+    read -rp "  Select [1-3]: " type_choice
+    
+    local dg_type=""
+    case "${type_choice}" in
+        1) dg_type="string" ;;
+        2) dg_type="ip" ;;
+        3) dg_type="integer" ;;
+        *)
+            log_warn "Invalid selection."
+            press_enter_to_continue
+            return
+            ;;
+    esac
+    
+    local display_type="${dg_type}"
+    [ "${dg_type}" == "ip" ] && display_type="address"
+    
+    # Confirm
+    echo ""
+    log_info "Ready to create:"
+    log_info "  Path: /${partition}/${dg_name}"
+    log_info "  Type: ${display_type}"
+    echo ""
+    local confirm
+    read -rp "  Create this datagroup? (yes/no) [no]: " confirm
+    if [ "${confirm}" != "yes" ]; then
+        log_info "Cancelled."
+        press_enter_to_continue
+        return
+    fi
+    
+    log_step "Creating datagroup '/${partition}/${dg_name}'..."
+    if create_internal_datagroup "${partition}" "${dg_name}" "${dg_type}"; then
+        log_ok "Datagroup '/${partition}/${dg_name}' created successfully (empty)."
+        prompt_save_config
+    else
+        log_error "Failed to create datagroup. HTTP ${API_HTTP_CODE}"
+    fi
+    
+    press_enter_to_continue
+}
+
+menu_create_empty_url_category() {
+    log_section "Create Empty URL Category"
+    
+    if ! url_category_db_available; then
+        log_error "URL database not available or accessible."
+        log_info "This feature requires the URL filtering module."
+        press_enter_to_continue
+        return
+    fi
     
     echo ""
-    log_info "Datagroup: /${partition}/${dg_name}"
-    log_info "Class: ${dg_class}"
-    log_info "Type: ${dg_type}"
+    local cat_name
+    read -rp "  Enter URL category name (or 'q' to cancel): " cat_name
+    if [ -z "${cat_name}" ] || [ "${cat_name}" == "q" ]; then
+        log_info "Cancelled."
+        press_enter_to_continue
+        return
+    fi
     
+    # Sanitize name
+    local original_name="${cat_name}"
+    cat_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    if [ "${cat_name}" != "${original_name}" ]; then
+        log_info "Category name sanitized to: ${cat_name}"
+    fi
     
-    echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}"
+    # Check if already exists
+    if url_category_exists "${cat_name}"; then
+        log_error "URL category '${cat_name}' already exists."
+        log_info "Use the editor (option 5) to modify existing URL categories."
+        press_enter_to_continue
+        return
+    fi
     
-    local records
-    records=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}")
+    # Select default action
+    echo ""
+    echo -e "  ${WHITE}Select default action for this category:${NC}"
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}allow   - Allow traffic (use for bypass lists)${NC}"
+    echo -e "    ${YELLOW}2)${NC} ${WHITE}block   - Block traffic${NC}"
+    echo -e "    ${YELLOW}3)${NC} ${WHITE}confirm - Prompt user for confirmation${NC}"
+    echo ""
+    local action_choice
+    read -rp "  Select [1-3] [1]: " action_choice
+    action_choice="${action_choice:-1}"
     
-    if [ -z "${records}" ]; then
-        log_info "(empty - no records)"
+    local default_action=""
+    case "${action_choice}" in
+        1) default_action="allow" ;;
+        2) default_action="block" ;;
+        3) default_action="confirm" ;;
+        *) default_action="allow" ;;
+    esac
+    
+    # Confirm
+    echo ""
+    log_info "Ready to create:"
+    log_info "  Category: ${cat_name}"
+    log_info "  Action:   ${default_action}"
+    echo ""
+    local confirm
+    read -rp "  Create this URL category? (yes/no) [no]: " confirm
+    if [ "${confirm}" != "yes" ]; then
+        log_info "Cancelled."
+        press_enter_to_continue
+        return
+    fi
+    
+    log_step "Creating URL category '${cat_name}'..."
+    if create_url_category_remote "${cat_name}" "${default_action}" "[]"; then
+        log_ok "URL category '${cat_name}' created successfully (empty)."
+        prompt_save_config
     else
-        local count=0
-        printf "\n  ${WHITE}%-45s %s${NC}\n" "KEY" "VALUE"
-        echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}"
-        while IFS='|' read -r key value; do
-            if [ -n "${value}" ]; then
-                printf "  ${WHITE}%-45s %s${NC}\n" "${key}" "${value}"
-            else
-                printf "  ${WHITE}%-45s ${NC}${YELLOW}%s${NC}\n" "${key}" "(no value)"
-            fi
-            count=$((count + 1))
-        done <<< "${records}"
-        echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}"
-        log_info "Total: ${count} record(s)"
+        log_error "Failed to create URL category. HTTP ${API_HTTP_CODE}"
     fi
     
     press_enter_to_continue
@@ -3019,7 +3183,7 @@ menu_delete_url_category() {
     log_step "Creating backup before deletion..."
     local safe_name
     safe_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    local backup_file="${BACKUP_DIR}/urlcat_${safe_name}_${TIMESTAMP}.csv"
+    local backup_file="$(get_connected_backup_dir)/urlcat_${safe_name}_${TIMESTAMP}.csv"
     
     {
         echo "# URL Category Backup: ${selected_category}"
@@ -4321,7 +4485,7 @@ editor_submenu() {
                     # For URL categories, create a simple backup
                     local safe_name
                     safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-                    backup_file="${BACKUP_DIR}/urlcat_${safe_name}_${TIMESTAMP}.csv"
+                    backup_file="$(get_connected_backup_dir)/urlcat_${safe_name}_${TIMESTAMP}.csv"
                     {
                         echo "# URL Category Backup: ${cat_name}"
                         echo "# Created: $(date)"
@@ -4676,7 +4840,7 @@ editor_submenu() {
                 else
                     local safe_name
                     safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-                    current_backup="${BACKUP_DIR}/urlcat_${safe_name}_${TIMESTAMP}.csv"
+                    current_backup="$(get_connected_backup_dir)/urlcat_${safe_name}_${TIMESTAMP}.csv"
                     {
                         echo "# URL Category Backup: ${cat_name}"
                         echo "# Host: ${REMOTE_HOST}"
@@ -5037,7 +5201,7 @@ main() {
         # Welcome banner
         echo ""
         echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.0                        ${NC}${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.1                        ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
@@ -5051,6 +5215,7 @@ main() {
         if [ "${start_choice}" == "0" ]; then
             echo ""
             echo -e "  ${WHITE}Exiting.${NC}"
+            echo -e "  ${CYAN}Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools${NC}"
             echo ""
             exit 0
         fi
@@ -5062,19 +5227,21 @@ main() {
         TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
         LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
         
-        # Initialize log (if directory is writable)
-        if touch "${LOGFILE}" 2>/dev/null; then
-            echo "DGCat-Admin - F5 BIG-IP Administration Tool" > "${LOGFILE}"
-            echo "Started: $(date)" >> "${LOGFILE}"
-            echo "Mode: REST API" >> "${LOGFILE}"
-            echo "Target: (pending connection)" >> "${LOGFILE}"
+        # Initialize log (if logging enabled and directory is writable)
+        if [ "${LOGGING_ENABLED}" -eq 1 ]; then
+            if touch "${LOGFILE}" 2>/dev/null; then
+                echo "DGCat-Admin - F5 BIG-IP Administration Tool" > "${LOGFILE}"
+                echo "Started: $(date)" >> "${LOGFILE}"
+                echo "Mode: REST API" >> "${LOGFILE}"
+                echo "Target: (pending connection)" >> "${LOGFILE}"
+            fi
         fi
         
         # Run pre-flight checks (mode-specific)
         preflight_checks
         
         # Update log with target host if applicable
-        if [ -n "${REMOTE_HOST}" ]; then
+        if [ "${LOGGING_ENABLED}" -eq 1 ] && [ -n "${REMOTE_HOST}" ]; then
             echo "Target: ${REMOTE_HOST}" >> "${LOGFILE}" 2>/dev/null
         fi
         
@@ -5089,7 +5256,7 @@ main() {
             read -rp "  Select option [0-5]: " choice
             
             case "${choice}" in
-                1) menu_view_datagroup ;;
+                1) menu_create_empty ;;
                 2) menu_create_from_csv ;;
                 3) menu_delete_datagroup ;;
                 4) menu_export_to_csv ;;
@@ -5097,7 +5264,9 @@ main() {
                 0)
                     log_section "Session End"
                     log_info "Session ended: $(date)"
-                    log_info "Log file: ${LOGFILE}"
+                    if [ "${LOGGING_ENABLED}" -eq 1 ]; then
+                        log_info "Log file: ${LOGFILE}"
+                    fi
                     echo ""
                     return_to_session_start=true
                     break
