@@ -287,9 +287,7 @@ The editor displays a full paginated view with all available commands:
   ──────────────────────────────────────────────────────────────────────────
   Showing 1-20 of 247 entries (Page 1/13)
   Sort: Original
-
   ──────────────────────────────────────────────────────────────────────────
-
   n) Next page    p) Previous page    g) Go to page
   f) Filter       c) Clear filter     s) Change sort
 
