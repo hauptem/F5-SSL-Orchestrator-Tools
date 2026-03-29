@@ -32,17 +32,6 @@ DGCat-Admin makes managing those site lists very easy.
 
 **This tool was designed specifically for those purposes.**
 
-## Features
-
-- **REST API Driven** — Connects to any BIG-IP via iControl REST from any machine
-- **Datagroup Management** — Create, view, edit, delete, import/export
-- **URL Category Management** — Create, view, edit, delete, import/export
-- **Fleet Deployment** — Push changes to multiple BIG-IPs with pre-deploy validation, backup, and full replace or merge modes
-- **Interactive Editor** — Staged editing with add, delete, pattern delete, filter, sort, and paginated browsing
-- **Automatic Backups** — Pre-change backups with configurable retention
-- **CSV Import/Export** — Bulk operations via standard CSV files
-- **API Efficiency** — Partition and URL category DB availability are cached at session start to minimize management plane impact
-
 ## Requirements
 
 ### Bash Version
@@ -80,8 +69,6 @@ chmod +x /shared/scripts/dgcat-admin.sh
 # Run
 .\dgcat-admin.ps1
 ```
-
-No installation required for either version. Both are single-file scripts with no external modules or packages.
 
 ## Documentation
 
