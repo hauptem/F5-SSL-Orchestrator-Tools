@@ -50,7 +50,7 @@ DGCat-Admin makes managing those site lists very easy.
 
 ### PowerShell Version
 
-- PowerShell 5.1 or later (ships with Windows 10/11)
+- PowerShell 5.1 or later
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
 
