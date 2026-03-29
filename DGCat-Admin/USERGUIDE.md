@@ -31,14 +31,6 @@ DGCat-Admin supports managing a single device or an entire fleet of BIG-IPs. Cha
 
 ---
 
-## Why This Tool Exists
-
-### The Problem with Direct Policy Entries
-
-SSL Orchestrator uses iAppLX to generate APM per-request policies behind the scenes. When you add hosts or sites directly to an SSLO security policy rule, each entry becomes an individual expression in the generated APM policy. This works for a handful of entries, but it doesn't scale.
-
-Large lists embedded directly in SSLO policies can degrade policy evaluation performance, are difficult to audit, and are painful to replicate across multiple devices. There is no built-in mechanism to export those entries or synchronize them between BIG-IPs.
-
 ### The Datagroup and URL Category Approach
 
 F5's recommended approach is to reference datagroups or custom URL categories in your SSLO security policy rules instead of adding entries directly. Datagroups and URL categories are optimized for fast lookups, can hold thousands of entries without impacting policy performance, and are independent objects that can be managed, exported, and replicated separately from the policies that reference them.
