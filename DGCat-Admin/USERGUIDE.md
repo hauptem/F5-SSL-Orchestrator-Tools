@@ -25,7 +25,7 @@
 DGCat-Admin is a menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. It connects to BIG-IP devices via the iControl REST API and is available in two versions with identical functionality:
 
 - **Bash** (`dgcat-admin.sh`) — Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or Big-IQ.
-- **PowerShell** (`dgcat-admin.ps1`) — Requires PowerShell 5.1 or later (ships with Windows 10/11). Runs from any Windows workstation.
+- **PowerShell** (`dgcat-admin.ps1`) — Requires PowerShell 5.1 or later. Runs from any Windows workstation.
 
 Both versions require network access to the BIG-IP management interface on port 443 and an account with administrative API access.
 
@@ -61,7 +61,7 @@ When you connect, the tool authenticates with the credentials you provide and va
 
 If you have multiple BIG-IPs, you can define them in a fleet configuration file organized by site. The tool uses the fleet list for two purposes: presenting hosts for quick selection at connection time, and as targets for fleet deployment operations.
 
-Fleet deployment uses a validate-then-apply model. Before any changes are made to any device, the tool validates connectivity and object existence on every target host, creates backups, and presents the results for your approval. Only after you confirm does the tool begin applying changes — first to the device you're connected to, then to each fleet member in sequence.
+Fleet deployment uses a validate-then-apply model. Before any changes are made to any device, the tool validates connectivity and object existence on every target host during pre-deploy checks. If all pre-deploy checks pass, the tool begins sequentially deploying first to the device you're connected to, then to each fleet member defined in the deployment scope i.e. full topology or specific site deployment.
 
 ### Editor Model
 
