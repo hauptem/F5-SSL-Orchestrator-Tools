@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.1 - March 29 2026
+# Version: 4.2
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -559,31 +559,19 @@ preflight_checks_rest_api() {
         # Create boilerplate fleet.conf for the user
         if [ ! -f "${FLEET_CONFIG_FILE}" ] && [ -d "${BACKUP_DIR}" ]; then
             cat > "${FLEET_CONFIG_FILE}" 2>/dev/null << 'FLEET_TEMPLATE'
-# =============================================================================
-# DGCat-Admin Fleet Configuration
-# =============================================================================
+# DGCat-Admin Fleet Configuration File
+# This file defines BIG-IPs within an enterprise that will be managed by DGCat-Admin
+# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
-# Define BIG-IP devices for fleet deployment operations.
 # Format: SITE|HOSTNAME_OR_IP
 #
-# SITE     - A label for grouping devices (datacenter, environment, etc.)
-# HOSTNAME - Management IP or resolvable hostname of the BIG-IP
-#
 # Examples:
-# East|10.1.1.10
-# East|10.1.1.11
-# West|10.2.1.10
-# West|10.2.1.11
-# DR|10.3.1.10
+# DC1|bigip01-mgmt.dc1.example.com
+# DC1|bigip02-mgmt.dc1.example.com
+# DC2|bigip01-mgmt.dc2.example.com
+# DC2|bigip02-mgmt.dc2.example.com
 #
-# Notes:
-# - Lines starting with # are comments
-# - Site names must contain only letters, numbers, dashes, and underscores
-# - The device you connect to is automatically excluded from fleet targets
-# - Fleet deployment uses the same credentials as your active connection
-#
-# Add your BIG-IP devices below:
-# =============================================================================
+# Site names: letters, numbers, dashes, underscores only
 FLEET_TEMPLATE
             log_info "Fleet config template created: ${FLEET_CONFIG_FILE}"
         else
@@ -1337,24 +1325,16 @@ select_deploy_scope() {
     echo -e "  ${WHITE}Select deployment scope:${NC}" >&2
     echo "" >&2
     
-    # Option 1: Entire topology
+    # Option 1: Entire topology (show true counts, connected host excluded at deploy time)
     local total_hosts=${#FLEET_HOSTS[@]}
-    local skipped=0
-    for host in "${FLEET_HOSTS[@]}"; do
-        if [ "${host}" == "${REMOTE_HOST}" ]; then
-            skipped=1
-            break
-        fi
-    done
-    local deploy_count=$((total_hosts - skipped))
     
     # Pluralization for topology
     local topo_host_word="hosts"
     local topo_site_word="sites"
-    [ ${deploy_count} -eq 1 ] && topo_host_word="host"
+    [ ${total_hosts} -eq 1 ] && topo_host_word="host"
     [ ${#FLEET_UNIQUE_SITES[@]} -eq 1 ] && topo_site_word="site"
     
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Entire topology${NC} (${deploy_count} ${topo_host_word} across ${#FLEET_UNIQUE_SITES[@]} ${topo_site_word})" >&2
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}Entire topology${NC} (${total_hosts} ${topo_host_word} across ${#FLEET_UNIQUE_SITES[@]} ${topo_site_word})" >&2
     
     # Options 2+: Individual sites
     local option_num=2
@@ -1362,20 +1342,11 @@ select_deploy_scope() {
         local site_count
         site_count=$(count_site_hosts "${site}")
         
-        # Check if current host is in this site
-        local site_skipped=0
-        local current_site
-        current_site=$(get_host_site "${REMOTE_HOST}")
-        if [ "${current_site}" == "${site}" ]; then
-            site_skipped=1
-        fi
-        local site_deploy_count=$((site_count - site_skipped))
-        
         # Pluralization for site
         local site_host_word="hosts"
-        [ ${site_deploy_count} -eq 1 ] && site_host_word="host"
+        [ ${site_count} -eq 1 ] && site_host_word="host"
         
-        echo -e "    ${YELLOW}${option_num})${NC} ${WHITE}Site: ${site}${NC} (${site_deploy_count} ${site_host_word})" >&2
+        echo -e "    ${YELLOW}${option_num})${NC} ${WHITE}Site: ${site}${NC} (${site_count} ${site_host_word})" >&2
         option_num=$((option_num + 1))
     done
     
@@ -1471,17 +1442,21 @@ deploy_internal_datagroup_to_host() {
     
     # Apply records
     if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${final_records_json}"; then
+        echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
         DEPLOY_ERROR_MSG="Failed to apply records (HTTP ${API_HTTP_CODE})"
         REMOTE_HOST="${orig_host}"
         return 1
     fi
+    echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
     
     # Save config
     if ! save_config_remote; then
+        echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Saving configuration${NC}"
         DEPLOY_ERROR_MSG="Applied but failed to save config (HTTP ${API_HTTP_CODE})"
         REMOTE_HOST="${orig_host}"
         return 1
     fi
+    echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Saving configuration${NC}"
     
     REMOTE_HOST="${orig_host}"
     return 0
@@ -1526,25 +1501,31 @@ deploy_url_category_to_host() {
         fi
         
         if [ ${merge_errors} -gt 0 ]; then
+            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
             DEPLOY_ERROR_MSG="Merge completed with ${merge_errors} error(s) (HTTP ${API_HTTP_CODE})"
             REMOTE_HOST="${orig_host}"
             return 1
         fi
+        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
     else
         # Replace mode: overwrite all URLs
         if ! modify_url_category_replace_remote "${cat_name}" "${urls_json}"; then
+            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
             DEPLOY_ERROR_MSG="Failed to apply URLs (HTTP ${API_HTTP_CODE})"
             REMOTE_HOST="${orig_host}"
             return 1
         fi
+        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
     fi
     
     # Save config
     if ! save_config_remote; then
+        echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Saving configuration${NC}"
         DEPLOY_ERROR_MSG="Applied but failed to save config (HTTP ${API_HTTP_CODE})"
         REMOTE_HOST="${orig_host}"
         return 1
     fi
+    echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Saving configuration${NC}"
     
     REMOTE_HOST="${orig_host}"
     return 0
@@ -1584,16 +1565,6 @@ run_predeploy_validation_datagroup() {
         if ! verify_remote_internal_datagroup "${host}" "${partition}" "${dg_name}"; then
             echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Datagroup not found" >&2
             validation_results+=("${host}|${site_id}|FAIL|Datagroup not found")
-            continue
-        fi
-        
-        # Create backup
-        local backup_file
-        backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${site_id}")
-        if [ -z "${backup_file}" ]; then
-            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Backup failed" >&2
-            validation_results+=("${host}|${site_id}|FAIL|Backup failed")
-            all_passed=false
             continue
         fi
         
@@ -1664,16 +1635,6 @@ run_predeploy_validation_urlcat() {
             continue
         fi
         
-        # Create backup
-        local backup_file
-        backup_file=$(backup_remote_url_category "${host}" "${cat_name}" "${site_id}")
-        if [ -z "${backup_file}" ]; then
-            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Backup failed" >&2
-            validation_results+=("${host}|${site_id}|FAIL|Backup failed")
-            all_passed=false
-            continue
-        fi
-        
         echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC} - Ready" >&2
         validation_results+=("${host}|${site_id}|OK|Ready")
     done <<< "${targets}"
@@ -1738,29 +1699,49 @@ execute_deploy_datagroup() {
         fi
     fi
     
-    echo ""
-    
     while IFS='|' read -r host site_id status message; do
         [ -z "${host}" ] && continue
         
         # Pre-check failures are skips in deploy - FAIL is reserved for actual deploy failures
         if [ "${status}" != "OK" ]; then
-            deploy_results+=("${host}|${site_id}|SKIP|${message}")
+            deploy_results+=("${host}|${site_id}|SKIP|")
             skip_count=$((skip_count + 1))
             continue
         fi
         
-        echo -ne "  ${WHITE}[....] Deploying to ${host} (${site_id})${NC}\r"
+        echo ""
+        echo -ne "  ${WHITE}Deploying to ${host} (${site_id})...${NC}\n"
         
-        # Deploy to host
+        # Backup
+        local backup_file
+        backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${site_id}")
+        if [ -z "${backup_file}" ]; then
+            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
+            deploy_results+=("${host}|${site_id}|FAIL|Backup failed")
+            fail_count=$((fail_count + 1))
+            last_error="Backup failed"
+            consecutive_same_error=$((consecutive_same_error + 1))
+            if [ ${consecutive_same_error} -ge 3 ]; then
+                echo ""
+                log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
+                read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                if [ "${cont_deploy}" != "yes" ]; then
+                    log_info "Deployment stopped by user."
+                    break
+                fi
+                consecutive_same_error=0
+            fi
+            continue
+        fi
+        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
+        
+        # Deploy (apply + save with verbose output)
         if deploy_internal_datagroup_to_host "${host}" "${partition}" "${dg_name}" "${dg_type}" "${records_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
-            echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
             deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
             success_count=$((success_count + 1))
             last_error=""
             consecutive_same_error=0
         else
-            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - ${DEPLOY_ERROR_MSG}"
             deploy_results+=("${host}|${site_id}|FAIL|${DEPLOY_ERROR_MSG}")
             fail_count=$((fail_count + 1))
             
@@ -1855,29 +1836,49 @@ execute_deploy_urlcat() {
         fi
     fi
     
-    echo ""
-    
     while IFS='|' read -r host site_id status message; do
         [ -z "${host}" ] && continue
         
         # Pre-check failures are skips in deploy - FAIL is reserved for actual deploy failures
         if [ "${status}" != "OK" ]; then
-            deploy_results+=("${host}|${site_id}|SKIP|${message}")
+            deploy_results+=("${host}|${site_id}|SKIP|")
             skip_count=$((skip_count + 1))
             continue
         fi
         
-        echo -ne "  ${WHITE}[....] Deploying to ${host} (${site_id})${NC}\r"
+        echo ""
+        echo -ne "  ${WHITE}Deploying to ${host} (${site_id})...${NC}\n"
         
-        # Deploy to host
+        # Backup
+        local backup_file
+        backup_file=$(backup_remote_url_category "${host}" "${cat_name}" "${site_id}")
+        if [ -z "${backup_file}" ]; then
+            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
+            deploy_results+=("${host}|${site_id}|FAIL|Backup failed")
+            fail_count=$((fail_count + 1))
+            last_error="Backup failed"
+            consecutive_same_error=$((consecutive_same_error + 1))
+            if [ ${consecutive_same_error} -ge 3 ]; then
+                echo ""
+                log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
+                read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                if [ "${cont_deploy}" != "yes" ]; then
+                    log_info "Deployment stopped by user."
+                    break
+                fi
+                consecutive_same_error=0
+            fi
+            continue
+        fi
+        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
+        
+        # Deploy (apply + save with verbose output)
         if deploy_url_category_to_host "${host}" "${cat_name}" "${urls_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
-            echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site_id})${NC}"
             deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
             success_count=$((success_count + 1))
             last_error=""
             consecutive_same_error=0
         else
-            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - ${DEPLOY_ERROR_MSG}"
             deploy_results+=("${host}|${site_id}|FAIL|${DEPLOY_ERROR_MSG}")
             fail_count=$((fail_count + 1))
             
@@ -2112,12 +2113,14 @@ backup_datagroup() {
     # Include partition and class in backup filename to avoid collisions
     local safe_partition
     safe_partition=$(echo "${partition}" | sed 's/\//_/g')
+    local safe_hostname
+    safe_hostname=$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')
     
     # Determine backup path: fleet hosts go in site subfolder
     local backup_path
     backup_path=$(get_connected_backup_dir)
     
-    local backup_file="${backup_path}/${safe_partition}_${dg_name}_${dg_class}_${TIMESTAMP}.csv"
+    local backup_file="${backup_path}/${safe_hostname}_${safe_partition}_${dg_name}_${dg_class}_${TIMESTAMP}.csv"
     local dg_type
     
     dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
@@ -2348,7 +2351,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.1                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.2                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${GREEN}${REMOTE_HOSTNAME}${NC}"
@@ -3183,7 +3186,7 @@ menu_delete_url_category() {
     log_step "Creating backup before deletion..."
     local safe_name
     safe_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    local backup_file="$(get_connected_backup_dir)/urlcat_${safe_name}_${TIMESTAMP}.csv"
+    local backup_file="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
     
     {
         echo "# URL Category Backup: ${selected_category}"
@@ -4485,7 +4488,7 @@ editor_submenu() {
                     # For URL categories, create a simple backup
                     local safe_name
                     safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-                    backup_file="$(get_connected_backup_dir)/urlcat_${safe_name}_${TIMESTAMP}.csv"
+                    backup_file="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
                     {
                         echo "# URL Category Backup: ${cat_name}"
                         echo "# Created: $(date)"
@@ -4805,18 +4808,21 @@ editor_submenu() {
                 fi
                 
                 # User decision point - no changes have been made anywhere yet
-                echo ""
-                local deploy_prompt=""
-                if [ "${deploy_has_local_changes}" == "true" ]; then
-                    deploy_prompt="  Proceed with deployment to ${ready_count} fleet host(s) + current device? (yes/no) [no]: "
-                else
-                    deploy_prompt="  Proceed with deployment to ${ready_count} fleet host(s)? (yes/no) [no]: "
-                fi
-                read -rp "${deploy_prompt}" proceed_deploy
-                if [ "${proceed_deploy}" != "yes" ]; then
-                    log_info "Deploy cancelled. No changes have been made."
-                    press_enter_to_continue
-                    continue
+                # Only prompt if some hosts failed - user already typed DEPLOY
+                if [ "${ready_count}" -lt "${target_count}" ]; then
+                    echo ""
+                    local deploy_prompt=""
+                    if [ "${deploy_has_local_changes}" == "true" ]; then
+                        deploy_prompt="  Proceed with deployment to ${ready_count} fleet host(s) + current device? (yes/no) [no]: "
+                    else
+                        deploy_prompt="  Proceed with deployment to ${ready_count} fleet host(s)? (yes/no) [no]: "
+                    fi
+                    read -rp "${deploy_prompt}" proceed_deploy
+                    if [ "${proceed_deploy}" != "yes" ]; then
+                        log_info "Deploy cancelled. No changes have been made."
+                        press_enter_to_continue
+                        continue
+                    fi
                 fi
                 
                 # =====================================================================
@@ -4831,16 +4837,16 @@ editor_submenu() {
                 echo -e "  ${WHITE}  STEP 2: APPLYING TO CURRENT DEVICE${NC}"
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
                 echo ""
+                echo -e "  ${WHITE}Deploying to ${REMOTE_HOST}...${NC}"
                 
                 # Create backup of current device
-                log_step "Creating backup on ${REMOTE_HOST}..."
                 local current_backup=""
                 if [ "${edit_type}" == "datagroup" ]; then
                     current_backup=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
                 else
                     local safe_name
                     safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-                    current_backup="$(get_connected_backup_dir)/urlcat_${safe_name}_${TIMESTAMP}.csv"
+                    current_backup="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
                     {
                         echo "# URL Category Backup: ${cat_name}"
                         echo "# Host: ${REMOTE_HOST}"
@@ -4853,9 +4859,9 @@ editor_submenu() {
                 fi
                 
                 if [ -n "${current_backup}" ] && [ -f "${current_backup}" ]; then
-                    log_ok "Backup saved: ${current_backup}"
+                    echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
                 else
-                    log_warn "Could not create backup for current device."
+                    echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
                     read -rp "  Continue without backup? (yes/no) [no]: " cont
                     if [ "${cont}" != "yes" ]; then
                         log_info "Deploy cancelled."
@@ -4867,48 +4873,38 @@ editor_submenu() {
                 # Apply to current device
                 local current_device_success=false
                 if [ "${edit_type}" == "datagroup" ]; then
-                    log_step "Applying changes to ${REMOTE_HOST}..."
-                    
-                    echo -ne "  ${WHITE}[....] Building records...${NC}\r"
                     local current_records_json
                     current_records_json=$(
                         for ((i=0; i<${#working_keys[@]}; i++)); do
                             echo "${working_keys[$i]}|${working_values[$i]:-}"
                         done | build_records_json_remote "${dg_type}"
                     )
-                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building records... done${NC}"
                     
                     if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${current_records_json}"; then
-                        log_ok "Changes applied to ${REMOTE_HOST}"
-                        log_step "Saving configuration on ${REMOTE_HOST}..."
+                        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
                         if save_config_remote; then
-                            log_ok "Configuration saved on ${REMOTE_HOST}"
+                            echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Saving configuration${NC}"
                             current_device_success=true
                         else
-                            log_error "Failed to save configuration on ${REMOTE_HOST}"
+                            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Saving configuration${NC}"
                         fi
                     else
-                        log_error "Failed to apply changes to ${REMOTE_HOST} (HTTP ${API_HTTP_CODE})"
+                        echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
                     fi
                 else
-                    log_step "Applying changes to ${REMOTE_HOST}..."
-                    
-                    echo -ne "  ${WHITE}[....] Building URL list...${NC}\r"
                     local current_urls_json
                     current_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
-                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building URL list... done${NC}"
                     
                     if modify_url_category_replace_remote "${cat_name}" "${current_urls_json}"; then
-                        log_ok "Changes applied to ${REMOTE_HOST}"
-                        log_step "Saving configuration on ${REMOTE_HOST}..."
+                        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
                         if save_config_remote; then
-                            log_ok "Configuration saved on ${REMOTE_HOST}"
+                            echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Saving configuration${NC}"
                             current_device_success=true
                         else
-                            log_error "Failed to save configuration on ${REMOTE_HOST}"
+                            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Saving configuration${NC}"
                         fi
                     else
-                        log_error "Failed to apply changes to ${REMOTE_HOST} (HTTP ${API_HTTP_CODE})"
+                        echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
                     fi
                 fi
                 
@@ -4951,7 +4947,6 @@ editor_submenu() {
                 local deploy_deletions_list=""
                 
                 if [ "${deploy_mode}" == "merge" ]; then
-                    echo -ne "  ${WHITE}[....] Building merge data...${NC}\r"
                     
                     if [ "${edit_type}" == "datagroup" ]; then
                         # Build additions as JSON records
@@ -4980,26 +4975,21 @@ editor_submenu() {
                         deploy_deletions_list=$(printf '%s\n' "${deploy_deletions[@]}")
                     fi
                     
-                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building merge data... done${NC}"
                 fi
                 
                 # Execute deploy to fleet hosts
                 if [ "${edit_type}" == "datagroup" ]; then
-                    echo -ne "  ${WHITE}[....] Building records for deployment...${NC}\r"
                     local deploy_records_json
                     deploy_records_json=$(
                         for ((i=0; i<${#working_keys[@]}; i++)); do
                             echo "${working_keys[$i]}|${working_values[$i]:-}"
                         done | build_records_json_remote "${dg_type}"
                     )
-                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building records for deployment... done${NC}"
                     
                     execute_deploy_datagroup "${partition}" "${dg_name}" "${dg_type}" "${deploy_records_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
                 else
-                    echo -ne "  ${WHITE}[....] Building URL list for deployment...${NC}\r"
                     local deploy_urls_json
                     deploy_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
-                    echo -e "  ${GREEN}[ OK ]${NC} ${WHITE}Building URL list for deployment... done${NC}"
                     
                     execute_deploy_urlcat "${cat_name}" "${deploy_urls_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
                 fi
@@ -5201,7 +5191,7 @@ main() {
         # Welcome banner
         echo ""
         echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.1                        ${NC}${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.2                        ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
@@ -5245,8 +5235,8 @@ main() {
             echo "Target: ${REMOTE_HOST}" >> "${LOGFILE}" 2>/dev/null
         fi
         
-        # Pause after preflight checks
-        press_enter_to_continue
+        # Brief pause after preflight checks
+        sleep 2
         
         # Main menu loop
         local return_to_session_start=false

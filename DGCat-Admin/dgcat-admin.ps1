@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.1 - March 29 2026
+# Version: 4.2
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -984,24 +984,21 @@ function Select-DeployScope {
     Write-Host "  Select deployment scope:" -ForegroundColor White
     Write-Host ""
     
-    # Count deployable hosts (exclude current)
-    $deployCount = @($script:FleetHosts | Where-Object { $_ -ne $script:RemoteHost }).Count
-    $hostWord = $(if ($deployCount -eq 1) { "host" } else { "hosts" })
+    # Show true topology counts (connected host excluded at deploy time, not in display)
+    $totalCount = $script:FleetHosts.Count
+    $hostWord = $(if ($totalCount -eq 1) { "host" } else { "hosts" })
     $siteWord = $(if ($script:FleetUniqueSites.Count -eq 1) { "site" } else { "sites" })
     
     Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
-    Write-Host "Entire topology ($deployCount $hostWord across $($script:FleetUniqueSites.Count) $siteWord)" -ForegroundColor White
+    Write-Host "Entire topology ($totalCount $hostWord across $($script:FleetUniqueSites.Count) $siteWord)" -ForegroundColor White
     
     $optionNum = 2
     foreach ($site in $script:FleetUniqueSites) {
         $siteCount = Get-SiteHostCount -SiteId $site
-        $currentSite = Get-HostSite -Hostname $script:RemoteHost
-        $siteSkipped = $(if ($currentSite -eq $site) { 1 } else { 0 })
-        $siteDeployCount = $siteCount - $siteSkipped
-        $siteHostWord = $(if ($siteDeployCount -eq 1) { "host" } else { "hosts" })
+        $siteHostWord = $(if ($siteCount -eq 1) { "host" } else { "hosts" })
         
         Write-Host ("    $optionNum) ") -NoNewline -ForegroundColor Yellow
-        Write-Host "Site: $site ($siteDeployCount $siteHostWord)" -ForegroundColor White
+        Write-Host "Site: $site ($siteCount $siteHostWord)" -ForegroundColor White
         $optionNum++
     }
     
@@ -1081,17 +1078,21 @@ function Deploy-DatagroupToHost {
     # Apply records
     $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $finalRecords
     if (-not $result.Success) {
+        Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
         $script:DeployErrorMsg = "Failed to apply records (HTTP $($result.StatusCode))"
         $script:RemoteHost = $origHost
         return $false
     }
+    Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
     
     # Save config
     if (-not (Save-F5Config)) {
+        Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Saving configuration" -ForegroundColor White
         $script:DeployErrorMsg = "Applied but failed to save config"
         $script:RemoteHost = $origHost
         return $false
     }
+    Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Saving configuration" -ForegroundColor White
     
     $script:RemoteHost = $origHost
     return $true
@@ -1123,23 +1124,29 @@ function Deploy-UrlCategoryToHost {
         }
         
         if ($mergeErrors -gt 0) {
+            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
             $script:DeployErrorMsg = "Merge completed with $mergeErrors error(s)"
             $script:RemoteHost = $origHost
             return $false
         }
+        Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
     } else {
         if (-not (Set-UrlCategoryEntriesRemote -Name $CatName -Urls $UrlsJson)) {
+            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
             $script:DeployErrorMsg = "Failed to apply URLs"
             $script:RemoteHost = $origHost
             return $false
         }
+        Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
     }
     
     if (-not (Save-F5Config)) {
+        Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Saving configuration" -ForegroundColor White
         $script:DeployErrorMsg = "Applied but failed to save config"
         $script:RemoteHost = $origHost
         return $false
     }
+    Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Saving configuration" -ForegroundColor White
     
     $script:RemoteHost = $origHost
     return $true
@@ -1183,22 +1190,6 @@ function Invoke-PreDeployValidation {
             continue
         }
         
-        # Create backup
-        $backupFile = ""
-        if ($ObjectType -eq "datagroup") {
-            $backupFile = Backup-RemoteDatagroup -HostName $hostName -Partition $Partition -Name $ObjectName -SiteId $siteId
-        } else {
-            $backupFile = Backup-RemoteUrlCategory -HostName $hostName -CatName $ObjectName -SiteId $siteId
-        }
-        
-        if ([string]::IsNullOrWhiteSpace($backupFile)) {
-            Write-Host "`r$(' ' * 80)" -NoNewline
-            Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
-            Write-Host " $hostName ($siteId) - Backup failed" -ForegroundColor White
-            $results += @{ Host = $hostName; Site = $siteId; Status = "FAIL"; Message = "Backup failed" }
-            continue
-        }
-        
         Write-Host "`r$(' ' * 80)" -NoNewline
         Write-Host "`r  [ OK ]" -NoNewline -ForegroundColor Green
         Write-Host " $hostName ($siteId) - Ready" -ForegroundColor White
@@ -1220,7 +1211,8 @@ function Invoke-PreDeployValidation {
 
 function Invoke-FleetDeploy {
     param(
-        [string]$ObjectType, [array]$ValidationResults, [scriptblock]$DeployAction,
+        [string]$ObjectType, [string]$ObjectName, [string]$Partition,
+        [array]$ValidationResults, [scriptblock]$DeployAction,
         [string]$CurrentHost = "", [string]$CurrentStatus = "", [string]$CurrentMessage = ""
     )
     
@@ -1236,32 +1228,55 @@ function Invoke-FleetDeploy {
         if ($CurrentStatus -eq "OK") { $successCount++ } else { $failCount++ }
     }
     
-    Write-Host ""
     
     foreach ($vr in $ValidationResults) {
         if ($vr.Status -ne "OK") {
             # Pre-check failures are skips in deploy - FAIL is reserved for actual deploy failures
-            $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "SKIP"; Message = $vr.Message }
+            $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "SKIP"; Message = "" }
             $skipCount++
             continue
         }
         
-        Write-Host "`r  [....] Deploying to $($vr.Host) ($($vr.Site))" -NoNewline -ForegroundColor White
+        Write-Host ""
+        Write-Host "  Deploying to $($vr.Host) ($($vr.Site))..." -ForegroundColor White
         
+        # Backup
+        $backupFile = ""
+        if ($ObjectType -eq "datagroup") {
+            $backupFile = Backup-RemoteDatagroup -HostName $vr.Host -Partition $Partition -Name $ObjectName -SiteId $vr.Site
+        } else {
+            $backupFile = Backup-RemoteUrlCategory -HostName $vr.Host -CatName $ObjectName -SiteId $vr.Site
+        }
+        
+        if ([string]::IsNullOrWhiteSpace($backupFile)) {
+            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
+            $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "FAIL"; Message = "Backup failed" }
+            $failCount++
+            $consecutiveSameError++
+            $lastError = "Backup failed"
+            if ($consecutiveSameError -ge 3) {
+                Write-Host ""
+                Write-LogWarn "Systemic failure detected: Same error on 3 consecutive hosts"
+                Write-Host "  Continue deploying to remaining hosts? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+                if ($cont -ne "yes") {
+                    Write-LogInfo "Deployment stopped by user."
+                    break
+                }
+                $consecutiveSameError = 0
+            }
+            continue
+        }
+        Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Creating backup" -ForegroundColor White
+        
+        # Deploy (apply + save with verbose output from deploy functions)
         $success = & $DeployAction $vr.Host $vr.Site
         
         if ($success) {
-            Write-Host "`r$(' ' * 80)" -NoNewline
-            Write-Host "`r  [ OK ]" -NoNewline -ForegroundColor Green
-            Write-Host " $($vr.Host) ($($vr.Site))" -ForegroundColor White
             $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "OK"; Message = "Deployed and saved" }
             $successCount++
             $lastError = ""
             $consecutiveSameError = 0
         } else {
-            Write-Host "`r$(' ' * 80)" -NoNewline
-            Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
-            Write-Host " $($vr.Host) ($($vr.Site)) - $($script:DeployErrorMsg)" -ForegroundColor White
             $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "FAIL"; Message = $script:DeployErrorMsg }
             $failCount++
             
@@ -1325,8 +1340,9 @@ function Backup-Datagroup {
     param([string]$Partition, [string]$Name)
     
     $safePartition = $Partition -replace '/', '_'
+    $safeHostname = $script:RemoteHost -replace '[^a-zA-Z0-9_-]', '_'
     $backupPath = Get-ConnectedBackupDir
-    $backupFile = Join-Path $backupPath "${safePartition}_${Name}_internal_$($script:Timestamp).csv"
+    $backupFile = Join-Path $backupPath "${safeHostname}_${safePartition}_${Name}_internal_$($script:Timestamp).csv"
     
     $dgType = Get-DatagroupTypeRemote -Partition $Partition -Name $Name
     $records = Get-DatagroupRecordsRemote -Partition $Partition -Name $Name
@@ -1355,8 +1371,9 @@ function Backup-UrlCategory {
     param([string]$CatName)
     
     $safeName = $CatName -replace '[^a-zA-Z0-9_-]', '_'
+    $safeHostname = $script:RemoteHost -replace '[^a-zA-Z0-9_-]', '_'
     $backupPath = Get-ConnectedBackupDir
-    $backupFile = Join-Path $backupPath "urlcat_${safeName}_$($script:Timestamp).csv"
+    $backupFile = Join-Path $backupPath "${safeHostname}_urlcat_${safeName}_$($script:Timestamp).csv"
     
     $entries = Get-UrlCategoryEntriesRemote -Name $CatName
     
@@ -1501,31 +1518,19 @@ function Invoke-PreFlightChecks {
         # Create boilerplate fleet.conf for the user
         if (-not (Test-Path $script:FLEET_CONFIG_FILE) -and (Test-Path $script:BACKUP_DIR)) {
             $template = @(
-                "# =============================================================================",
-                "# DGCat-Admin Fleet Configuration",
-                "# =============================================================================",
+                "# DGCat-Admin Fleet Configuration File",
+                "# This file defines BIG-IPs within an enterprise that will be managed by DGCat-Admin",
+                "# https://github.com/hauptem/F5-SSL-Orchestrator-Tools",
                 "#",
-                "# Define BIG-IP devices for fleet deployment operations.",
                 "# Format: SITE|HOSTNAME_OR_IP",
                 "#",
-                "# SITE     - A label for grouping devices (datacenter, environment, etc.)",
-                "# HOSTNAME - Management IP or resolvable hostname of the BIG-IP",
-                "#",
                 "# Examples:",
-                "# East|10.1.1.10",
-                "# East|10.1.1.11",
-                "# West|10.2.1.10",
-                "# West|10.2.1.11",
-                "# DR|10.3.1.10",
+                "# DC1|bigip01-mgmt.dc1.example.com",
+                "# DC1|bigip02-mgmt.dc1.example.com",
+                "# DC2|bigip01-mgmt.dc2.example.com",
+                "# DC2|bigip02-mgmt.dc2.example.com",
                 "#",
-                "# Notes:",
-                "# - Lines starting with # are comments",
-                "# - Site names must contain only letters, numbers, dashes, and underscores",
-                "# - The device you connect to is automatically excluded from fleet targets",
-                "# - Fleet deployment uses the same credentials as your active connection",
-                "#",
-                "# Add your BIG-IP devices below:",
-                "# ============================================================================="
+                "# Site names: letters, numbers, dashes, underscores only"
             )
             try {
                 $template | Out-File -FilePath $script:FLEET_CONFIG_FILE -Encoding UTF8
@@ -1597,7 +1602,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v4.1                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v4.2                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -3216,18 +3221,21 @@ function Invoke-EditorSubmenu {
                     continue
                 }
                 
-                Write-Host ""
-                if ($hasPending) {
-                    Write-Host "  Proceed with deployment to $readyCount fleet host(s) + current device? (yes/no) " -NoNewline
-                } else {
-                    Write-Host "  Proceed with deployment to $readyCount fleet host(s)? (yes/no) " -NoNewline
-                }
-                Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline
-                $proceedDeploy = Read-Host
-                if ($proceedDeploy -ne "yes") {
-                    Write-LogInfo "Deploy cancelled. No changes have been made."
-                    Press-EnterToContinue
-                    continue
+                # Only prompt if some hosts failed - user already typed DEPLOY
+                if ($readyCount -lt $targetCount) {
+                    Write-Host ""
+                    if ($hasPending) {
+                        Write-Host "  Proceed with deployment to $readyCount fleet host(s) + current device? (yes/no) " -NoNewline
+                    } else {
+                        Write-Host "  Proceed with deployment to $readyCount fleet host(s)? (yes/no) " -NoNewline
+                    }
+                    Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline
+                    $proceedDeploy = Read-Host
+                    if ($proceedDeploy -ne "yes") {
+                        Write-LogInfo "Deploy cancelled. No changes have been made."
+                        Press-EnterToContinue
+                        continue
+                    }
                 }
                 
                 # ── Step 2: Apply to current device (only if pending changes) ──
@@ -3240,41 +3248,52 @@ function Invoke-EditorSubmenu {
                     Write-Host "    STEP 2: APPLYING TO CURRENT DEVICE" -ForegroundColor White
                     Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
                     Write-Host ""
+                    Write-Host "  Deploying to $($script:RemoteHost)..." -ForegroundColor White
                     
-                    Write-LogStep "Creating backup on $($script:RemoteHost)..."
+                    # Backup
                     $currentBackup = ""
                     if ($EditType -eq "datagroup") {
                         $currentBackup = Backup-Datagroup -Partition $Partition -Name $DgName
                     } else {
                         $currentBackup = Backup-UrlCategory -CatName $CatName
                     }
-                    if ($currentBackup) { Write-LogOk "Backup saved: $currentBackup" }
-                    else {
-                        Write-LogWarn "Could not create backup for current device."
+                    if ($currentBackup) {
+                        Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Creating backup" -ForegroundColor White
+                    } else {
+                        Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
                         Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
                         if ($cont -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
                     }
                     
+                    # Apply
                     $currentSuccess = $false
                     if ($EditType -eq "datagroup") {
-                        Write-LogStep "Applying changes to $($script:RemoteHost)..."
                         $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
                         $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $records
                         if ($result.Success) {
-                            Write-LogOk "Changes applied to $($script:RemoteHost)"
-                            Write-LogStep "Saving configuration..."
-                            if (Save-F5Config) { Write-LogOk "Configuration saved."; $currentSuccess = $true }
-                            else { Write-LogError "Failed to save configuration." }
-                        } else { Write-LogError "Failed to apply changes. HTTP $($result.StatusCode)" }
+                            Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
+                            if (Save-F5Config) {
+                                Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Saving configuration" -ForegroundColor White
+                                $currentSuccess = $true
+                            } else {
+                                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Saving configuration" -ForegroundColor White
+                            }
+                        } else {
+                            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
+                        }
                     } else {
-                        Write-LogStep "Applying changes to $($script:RemoteHost)..."
                         $urlObjects = ConvertTo-UrlObjects -Urls @($workingKeys)
                         if (Set-UrlCategoryEntriesRemote -Name $CatName -Urls $urlObjects) {
-                            Write-LogOk "Changes applied to $($script:RemoteHost)"
-                            Write-LogStep "Saving configuration..."
-                            if (Save-F5Config) { Write-LogOk "Configuration saved."; $currentSuccess = $true }
-                            else { Write-LogError "Failed to save configuration." }
-                        } else { Write-LogError "Failed to apply changes." }
+                            Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
+                            if (Save-F5Config) {
+                                Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Saving configuration" -ForegroundColor White
+                                $currentSuccess = $true
+                            } else {
+                                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Saving configuration" -ForegroundColor White
+                            }
+                        } else {
+                            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
+                        }
                     }
                     
                     if (-not $currentSuccess) {
@@ -3338,7 +3357,9 @@ function Invoke-EditorSubmenu {
                     }
                 }
                 
-                Invoke-FleetDeploy -ObjectType $EditType -ValidationResults $validationResults `
+                $objectName = $(if ($EditType -eq "datagroup") { $DgName } else { $CatName })
+                Invoke-FleetDeploy -ObjectType $EditType -ObjectName $objectName -Partition $Partition `
+                    -ValidationResults $validationResults `
                     -DeployAction $deployAction -CurrentHost $script:RemoteHost `
                     -CurrentStatus $currentStatus -CurrentMessage $currentMessage
                 
@@ -3384,7 +3405,7 @@ function Main {
         Write-Host ""
         Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-        Write-Host "                    DGCAT-Admin v4.1                        " -NoNewline -ForegroundColor White
+        Write-Host "                    DGCAT-Admin v4.2                        " -NoNewline -ForegroundColor White
         Write-Host "║" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
         Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -3435,7 +3456,8 @@ function Main {
             try { "Target: $($script:RemoteHost)" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 } catch {}
         }
         
-        Press-EnterToContinue
+        # Brief pause after preflight checks
+        Start-Sleep -Seconds 2
         
         # Main menu loop
         $returnToStart = $false
