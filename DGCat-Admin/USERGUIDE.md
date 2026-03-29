@@ -141,17 +141,17 @@ After a successful connection, you see the main menu:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v4.0                        ║
+  ║                    DGCAT-Admin v4.1                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
     Connected: bigip1-east.company.com
   ╠════════════════════════════════════════════════════════════╣
   ║                                                            ║
-  ║   1)  View Datagroup                                       ║
+  ║   1)  Create/Update Datagroup or URL Category              ║
   ║   2)  Create/Update Datagroup or URL Category from CSV     ║
   ║   3)  Delete Datagroup or URL Category                     ║
   ║   4)  Export Datagroup or URL Category to CSV              ║
-  ║   5)  Edit a Datagroup or URL Category                     ║
+  ║   5)  View/Edit a Datagroup or URL Category                ║
   ║                                                            ║
   ╠════════════════════════════════════════════════════════════╣
   ║   0)  Exit                                                 ║
