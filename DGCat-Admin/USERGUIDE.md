@@ -8,7 +8,7 @@
 4. [Getting Started](#getting-started)
 5. [Connecting to a BIG-IP](#connecting-to-a-big-ip)
 6. [The Main Menu](#the-main-menu)
-7. [Viewing Datagroups](#viewing-datagroups)
+7. [Creating Datagroups and URL Categories](#creating-datagroups-and-url-categories)
 8. [Creating and Updating from CSV](#creating-and-updating-from-csv)
 9. [Deleting Datagroups and URL Categories](#deleting-datagroups-and-url-categories)
 10. [Exporting to CSV](#exporting-to-csv)
@@ -23,7 +23,12 @@
 
 ## Introduction
 
-DGCat-Admin is a menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. It connects to BIG-IP devices via the iControl REST API and can run from any machine with `curl` and `jq` — a laptop, a jump box, a BIG-IP itself, or a CI/CD runner.
+DGCat-Admin is a menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. It connects to BIG-IP devices via the iControl REST API and is available in two versions with identical functionality:
+
+- **Bash** (`dgcat-admin.sh`) — Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or Big-IQ.
+- **PowerShell** (`dgcat-admin.ps1`) — Requires PowerShell 5.1 or later (ships with Windows 10/11). Runs from any Windows workstation.
+
+Both versions require network access to the BIG-IP management interface on port 443 and an account with administrative API access.
 
 The tool was designed for environments running SSL Orchestrator (SSLO), where datagroups and URL categories are the primary mechanism for classifying traffic in security policies. However, it works equally well for any BIG-IP deployment that uses datagroups or custom URL categories.
 
@@ -69,25 +74,30 @@ The interactive editor loads the current state of a datagroup or URL category in
 
 ### Requirements
 
-You need two utilities available on the machine where you run DGCat-Admin:
+**Bash version:** `curl` and `jq` must be available on the machine where you run the script. Both are available in the default package repositories for most Linux distributions and macOS. The tool checks for these at startup and will not proceed without them.
 
-- **curl** — for making REST API calls to BIG-IP
-- **jq** — for parsing JSON responses
-
-Both are available in the default package repositories for most Linux distributions and macOS. The tool checks for these at startup and will not proceed without them.
+**PowerShell version:** PowerShell 5.1 or later, which ships with Windows 10 and 11. No additional modules or packages are required.
 
 On the BIG-IP side, you need a user account with administrative API access (typically the `admin` role) and network reachability to the management interface on port 443.
 
 ### Installation
 
-Copy the script to any location and make it executable:
+**Bash:**
 
 ```bash
 chmod +x dgcat-admin.sh
 ./dgcat-admin.sh
 ```
 
-There is no installation process, no dependencies beyond curl and jq, and no configuration files required to get started. The tool creates its backup directory automatically on first run.
+**PowerShell:**
+
+```powershell
+.\dgcat-admin.ps1
+```
+
+Or double-click the included `dgcat-admin.bat` launcher, which opens a native PowerShell window with proper color rendering.
+
+There is no installation process, no dependencies beyond the above, and no configuration files required to get started. The tool creates its backup directory automatically on first run.
 
 ### Initial Configuration
 
@@ -129,7 +139,15 @@ If you have a fleet configuration file, the tool loads it first and displays you
 
 Type a number to select a fleet host, or type any hostname or IP address to connect to a device that isn't in your fleet. Type `0` to exit.
 
-After selecting a host, you're prompted for a username and password. The tool tests the connection and displays the BIG-IP version on success.
+After selecting a host, you're prompted for a username and password. The tool tests the connection and retrieves the system hostname from the BIG-IP for operator validation:
+
+```
+  [....]  Connecting to 10.251.0.171...
+  [ OK ]  Connected to BIG-IP: bigip1-east.company.com
+  [ OK ]  TMOS version 17.5.1.5
+```
+
+The retrieved hostname is displayed in the main menu throughout the session, regardless of whether you connected by IP, FQDN, or fleet number. This confirms you are on the device you intended to connect to.
 
 If the connection fails, you're given the option to retry or exit. Common failure causes are incorrect credentials (HTTP 401), unreachable host (connection timeout), or a hostname that doesn't resolve.
 
@@ -147,7 +165,7 @@ After a successful connection, you see the main menu:
     Connected: bigip1-east.company.com
   ╠════════════════════════════════════════════════════════════╣
   ║                                                            ║
-  ║   1)  Create/Update Datagroup or URL Category              ║
+  ║   1)  Create Datagroup or URL Category                     ║
   ║   2)  Create/Update Datagroup or URL Category from CSV     ║
   ║   3)  Delete Datagroup or URL Category                     ║
   ║   4)  Export Datagroup or URL Category to CSV              ║
@@ -162,26 +180,15 @@ Each option is described in detail in the following sections. Selecting `0` ends
 
 ---
 
-## Viewing Datagroups
+## Creating Datagroups and URL Categories
 
-**Menu option 1** displays the contents of a datagroup. You select a partition (if more than one is configured), then pick a datagroup from the list. The tool shows the datagroup's type and all its records:
+**Menu option 1** creates an empty datagroup or URL category on the BIG-IP. This is useful for preparing objects that will be populated later through the editor, CSV import, or fleet deployment.
 
-```
-  [INFO]  Datagroup: /Common/bypass-domains
-  [INFO]  Type: string
-  ────────────────────────────────────────────────────────────
-  KEY                                           VALUE
-  ────────────────────────────────────────────────────────────
-  .microsoft.com                                (no value)
-  .office365.com                                (no value)
-  .windowsupdate.com                            (no value)
-  ────────────────────────────────────────────────────────────
-  [INFO]  Total: 3 record(s)
-```
+For datagroups, you select a partition, provide a name, and choose a type (string, address, or integer). The tool checks that the name doesn't already exist and isn't a protected system datagroup.
 
-This is a read-only view. To modify entries, use the editor (option 5).
+For URL categories, you provide a name and select a default action (allow, block, or confirm). The tool sanitizes the name to remove characters that aren't valid in F5 object names.
 
-Protected system datagroups (such as `private_net`, `images`, and `aol`) are marked with a `[SYSTEM]` label in the datagroup list and cannot be modified or deleted.
+After creation, the tool offers to save the BIG-IP configuration.
 
 ---
 
@@ -220,7 +227,7 @@ If the category already exists, you choose overwrite or merge, just like datagro
 
 **Menu option 3** deletes a datagroup or URL category. The tool shows the object's details (type, record count) and creates a backup before deletion. You must type `DELETE` (case-sensitive) to confirm.
 
-Deletion is permanent. The backup file can be used to recreate the object using the Create/Update option if needed.
+Deletion is permanent. The backup file can be used to recreate the object using the Create/Update from CSV option if needed.
 
 Protected system datagroups cannot be deleted. The tool blocks the operation and explains why.
 
@@ -240,7 +247,7 @@ Exported files can be used directly as input for the Create/Update option, makin
 
 ## The Interactive Editor
 
-**Menu option 5** opens the interactive editor for a datagroup or URL category. This is the most powerful feature of the tool and where you'll spend most of your time for anything beyond simple imports.
+**Menu option 5** opens the interactive editor for a datagroup or URL category. This is where you view contents and make changes. The editor supports browsing, searching, and modifying entries with full pagination.
 
 ### How It Works
 
@@ -381,13 +388,15 @@ Before anything changes, the tool displays a deployment preview showing the obje
 
 ### Deployment Execution
 
-Deployment proceeds in three steps:
+Deployment proceeds in up to three steps:
 
 **Step 1: Pre-deploy validation.** The tool connects to every target host using the same credentials, verifies the object exists, and creates a backup. Hosts that fail connectivity or don't have the object are flagged. The tool shows the validation results and asks whether you want to proceed. If too many hosts are unreachable, you can abort here — nothing has changed on any device.
 
-**Step 2: Apply to current device.** The tool applies changes to the device you're connected to first. If this fails, you're asked whether to continue to the fleet or abort.
+**Step 2: Apply to current device.** If there are pending changes, the tool applies them to the connected device first. If there are no pending changes (replication deploy), this step is skipped entirely — the current device already has the correct state.
 
 **Step 3: Deploy to fleet.** The tool applies changes to each validated host in sequence. Each host's result is shown in real time. If the same error occurs on three consecutive hosts (indicating a systemic problem rather than an isolated failure), the tool warns you and asks whether to continue or stop.
+
+Step numbering adjusts automatically. A replication deploy with no local changes shows Step 1 and Step 2 only (validation then fleet). A deploy with pending changes shows all three steps.
 
 After all hosts have been processed, a summary table shows the status of every device:
 
@@ -396,14 +405,16 @@ After all hosts have been processed, a summary table shows the status of every d
   ──────────────────────────────────────────────────────────────
   HOST                                SITE       STATUS   MESSAGE
   ──────────────────────────────────────────────────────────────
-  10.251.0.171                        (current)  OK       Deployed and saved
+  10.251.0.171                        (current)  OK       No changes needed
   10.251.0.172                        East       OK       Deployed and saved
   10.251.1.171                        West       OK       Deployed and saved
-  10.251.1.172                        West       OK       Deployed and saved
+  10.251.1.172                        West       SKIP     Connection failed
   10.251.2.171                        DR         OK       Deployed and saved
   ──────────────────────────────────────────────────────────────
-  Total: 5 succeeded, 0 failed, 0 skipped
+  Total: 4 succeeded, 0 failed, 1 skipped
 ```
+
+Status meanings in the deploy summary: **OK** means the deployment succeeded. **SKIP** means the host was never attempted — it failed pre-deploy validation (unreachable, object not found, or backup failed). **FAIL** means the host passed validation but the actual deployment failed. This distinction lets you quickly identify hosts that need attention versus hosts that were simply unavailable.
 
 ### What Fleet Deploy Will Not Do
 
@@ -490,22 +501,22 @@ DGCat-Admin creates automatic backups before any operation that modifies or dele
 
 ### Backup Location and Naming
 
-Backups are stored in the configured backup directory with timestamped filenames:
+Backups are stored in the configured backup directory with timestamped filenames. When the connected host is part of a fleet site, backups are organized into the site's subdirectory alongside fleet deployment backups:
+
+```
+East/Common_bypass-domains_internal_20260327_143052.csv
+```
+
+When connected to a host that is not part of any fleet site, backups go to the root backup directory:
 
 ```
 Common_bypass-domains_internal_20260327_143052.csv
 ```
 
-Fleet deployment backups are organized into subdirectories by site:
+Fleet deployment backups for remote hosts are always organized by site:
 
 ```
 East/10_251_0_172_Common_bypass-domains_20260327_143022.csv
-```
-
-URL category backups follow the same pattern:
-
-```
-urlcat_sslo-urlCatMyCategory_20260327_143052.csv
 ```
 
 ### Retention
@@ -522,12 +533,16 @@ To restore from a backup, use the Create/Update from CSV option (menu option 2) 
 
 ### Script Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | Storage for backups, logs, and fleet config |
-| `MAX_BACKUPS` | `30` | Maximum backup files retained per object |
-| `PARTITIONS` | `Common` | Comma-separated list of BIG-IP partitions to manage |
-| `PREVIEW_LINES` | `5` | Number of lines shown in CSV file previews |
+| Variable | Bash Default | PowerShell Default | Description |
+|----------|-------------|-------------------|-------------|
+| `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | `$PSScriptRoot\dgcat-admin-backups` | Storage for backups, logs, and fleet config |
+| `MAX_BACKUPS` | `30` | `30` | Maximum backup files retained per object |
+| `LOGGING_ENABLED` | `1` | `1` | Set to `0` to disable session log file creation |
+| `PARTITIONS` | `Common` | `Common` | Comma-separated list of BIG-IP partitions to manage |
+| `PREVIEW_LINES` | `5` | `5` | Number of lines shown in CSV file previews |
+| `API_CONNECT_TIMEOUT` | `10` | — | TCP connection timeout in seconds |
+| `API_REQUEST_TIMEOUT` | `30` | — | Total request timeout in seconds |
+| `API_TIMEOUT` | — | `10` | Request timeout in seconds |
 
 ### Protected Datagroups
 
@@ -541,7 +556,7 @@ These are pre-configured BIG-IP datagroups that the system depends on. Attemptin
 
 ### Fleet Configuration File
 
-The fleet configuration file is located at `${BACKUP_DIR}/fleet.conf`. It is a plain text file with one entry per line:
+The fleet configuration file is located at `${BACKUP_DIR}/fleet.conf`. If no fleet configuration exists on first run, the tool creates a boilerplate template with format documentation and examples. It is a plain text file with one entry per line:
 
 ```
 SITE|HOSTNAME_OR_IP
@@ -558,6 +573,8 @@ dgcat-admin-20260327_143052.log
 ```
 
 The log captures all operations performed during the session, including timestamps, success/failure status, and error details. Log files are useful for auditing changes and troubleshooting issues that occurred during a session.
+
+To disable log file creation, set `LOGGING_ENABLED` to `0` in the script configuration.
 
 ---
 
@@ -582,7 +599,7 @@ The partition listed in your `PARTITIONS` configuration does not exist on the BI
 Every target host either failed to connect or didn't have the target object. Verify network connectivity and credentials. Remember that fleet deployment uses the same credentials you used to connect to the primary device.
 
 **Hosts showing as SKIP in the deploy summary.**
-The target object (datagroup or URL category) does not exist on that host. This is expected if not all fleet members have the same objects configured. Create the object on the target host first, then redeploy.
+The host failed pre-deploy validation — either it was unreachable, the target object doesn't exist, or the backup failed. SKIP means deployment was never attempted on that host. Verify network connectivity and that the object exists on the target. Create the object on the target host first if needed, then redeploy.
 
 
 ### Editor Issues
