@@ -1,7 +1,3 @@
-# DGCat-Admin v4.0 Release Notes - March 27 2026
-
-- Initial public release
-
 # DGCat-Admin v4.1 Release Notes - March 29 2026
 
 **New Features**
@@ -24,3 +20,8 @@
 - Fixed PowerShell save config failure false positive caused by BIG-IP closing connection after save
 - Fixed PowerShell single-result array unwrapping across all pipelines
 - Fixed PowerShell duplicate deploy header and carriage return display artifacts
+
+# DGCat-Admin v4.0 Release Notes - March 27 2026
+
+- Initial public release
+
