@@ -21,7 +21,7 @@ SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories f
 
 **The recommended approach:** Use datagroups or URL categories for SSLO security policy rules. They're optimized for fast lookups, keep policies clean and are operationally easier to maintain.
 
-DGCat-Admin makes managing those site lists very easy.
+DGCat-Admin makes managing those site lists very easy when an orchestration tool like Ansible isn't available.
 
 - Need to export a few massive datagroups or custom URL categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
 - Need to ingest a large number of subnets or hosts from an Excel spreadsheet into a datagroup for SSLO security policy use?
