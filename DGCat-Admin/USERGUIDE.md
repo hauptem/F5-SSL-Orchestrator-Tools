@@ -139,15 +139,13 @@ If you have a fleet configuration file, the tool loads it first and displays you
 
 Type a number to select a fleet host, or type any hostname or IP address to connect to a device that isn't in your fleet. Type `0` to exit.
 
-After selecting a host, you're prompted for a username and password. The tool tests the connection and retrieves the system hostname from the BIG-IP for operator validation:
+After selecting a host, you're prompted for a username and password. 
 
 ```
   [....]  Connecting to 10.251.0.171...
   [ OK ]  Connected to BIG-IP: bigip1-east.company.com
   [ OK ]  TMOS version 17.5.1.5
 ```
-
-The retrieved hostname is displayed in the main menu throughout the session, regardless of whether you connected by IP, FQDN, or fleet number. This confirms you are on the device you intended to connect to.
 
 If the connection fails, you're given the option to retry or exit. Common failure causes are incorrect credentials (HTTP 401), unreachable host (connection timeout), or a hostname that doesn't resolve.
 
