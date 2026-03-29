@@ -9,7 +9,7 @@ A menu-driven administration tool for managing LTM datagroups and custom URL cat
 Available in two versions with identical functionality:
 
 - **Bash** (`dgcat-admin.sh`) — For Linux, macOS, or directly on BIG-IP/Big-IQ
-- **PowerShell** (`dgcat-admin.ps1`) — For Windows (PowerShell 5.1+)
+- **PowerShell** (`dgcat-admin.ps1`) — For Windows (PowerShell 5.1+, ships with Windows 10/11)
 
 ## Why This Tool?
 
@@ -21,7 +21,7 @@ SSL Orchestrator (SSLO) policies rely heavily on datagroups and URL categories f
 
 **The recommended approach:** Use datagroups or URL categories for SSLO security policy rules. They're optimized for fast lookups, keep policies clean and are operationally easier to maintain.
 
-DGCat-Admin makes managing those site lists very easy when an orchestration tool like Ansible isn't available.
+DGCat-Admin makes managing those site lists very easy.
 
 - Need to export a few massive datagroups or custom URL categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
 - Need to ingest a large number of subnets or hosts from an Excel spreadsheet into a datagroup for SSLO security policy use?
@@ -32,12 +32,14 @@ DGCat-Admin makes managing those site lists very easy when an orchestration tool
 
 ## Features
 
+- **REST API Driven** — Connects to any BIG-IP via iControl REST from any machine
 - **Datagroup Management** — Create, view, edit, delete, import/export
 - **URL Category Management** — Create, view, edit, delete, import/export
 - **Fleet Deployment** — Push changes to multiple BIG-IPs with pre-deploy validation, backup, and full replace or merge modes
 - **Interactive Editor** — Staged editing with add, delete, pattern delete, filter, sort, and paginated browsing
 - **Automatic Backups** — Pre-change backups with configurable retention
 - **CSV Import/Export** — Bulk operations via standard CSV files
+- **API Efficiency** — Partition and URL category DB availability are cached at session start to minimize management plane impact
 
 ## Requirements
 
@@ -50,7 +52,7 @@ DGCat-Admin makes managing those site lists very easy when an orchestration tool
 
 ### PowerShell Version
 
-- PowerShell 5.1 or later
+- PowerShell 5.1 or later (ships with Windows 10/11)
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
 
@@ -77,10 +79,45 @@ chmod +x /shared/scripts/dgcat-admin.sh
 .\dgcat-admin.ps1
 ```
 
+No installation required for either version. Both are single-file scripts with no external modules or packages.
+
+## Configuration
+
+Edit the variables at the top of the script:
+
+| Variable | Bash Default | PowerShell Default | Description |
+|----------|-------------|-------------------|-------------|
+| `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | `$PSScriptRoot\dgcat-admin-backups` | Backup and log storage |
+| `MAX_BACKUPS` | `30` | `30` | Backups retained per object |
+| `PARTITIONS` | `Common` | `Common` | Partition list to manage |
+| `API_CONNECT_TIMEOUT` | `10` | — | TCP connection timeout (seconds) |
+| `API_REQUEST_TIMEOUT` | `30` | — | Total request timeout (seconds) |
+| `API_TIMEOUT` | — | `10` | Request timeout (seconds) |
+
+### Fleet Configuration
+
+For multi-device deployment, create `fleet.conf` in your backup directory:
+
+```
+# Format: SITE|HOSTNAME_OR_IP
+DC1|bigip01-mgmt.dc1.example.com
+DC1|bigip02-mgmt.dc1.example.com
+DC2|bigip01-mgmt.dc2.example.com
+DC2|bigip02-mgmt.dc2.example.com
+```
+
+When a fleet configuration is present, fleet hosts are displayed at the connection prompt for quick selection. You can select a fleet host by number or enter any hostname or IP manually to connect to a non-fleet device.
+
+### Fleet Deployment Modes
+
+When deploying changes to the fleet, two modes are available:
+
+- **Full Replace** — Overwrites the target object with the exact state from the current device. Guarantees parity across all devices.
+- **Merge** — Applies only additions and deletions to each target, preserving any entries that are specific to that device. Useful when sites have intentional differences such as local bypass lists or site-specific address ranges.
+
 ## Documentation
 
-- [Release Notes](RELEASE_NOTES.md) — Release notes for DGCat-Admin
-- [User Guide](USERGUIDE.md) — Detailed user operating instructions
+- [User Guide](USERGUIDE.md) — Detailed operation instructions
 
 ## License
 
