@@ -32,14 +32,12 @@ DGCat-Admin makes managing those site lists very easy.
 
 ## Features
 
-- **REST API Driven** — Connects to any BIG-IP via iControl REST from any machine
 - **Datagroup Management** — Create, view, edit, delete, import/export
 - **URL Category Management** — Create, view, edit, delete, import/export
 - **Fleet Deployment** — Push changes to multiple BIG-IPs with pre-deploy validation, backup, and full replace or merge modes
 - **Interactive Editor** — Staged editing with add, delete, pattern delete, filter, sort, and paginated browsing
 - **Automatic Backups** — Pre-change backups with configurable retention
 - **CSV Import/Export** — Bulk operations via standard CSV files
-- **API Efficiency** — Partition and URL category DB availability are cached at session start to minimize management plane impact
 
 ## Requirements
 
