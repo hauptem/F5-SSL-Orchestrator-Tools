@@ -321,7 +321,7 @@ Fleet deployment lets you push the current state of a datagroup or URL category 
 
 ### Fleet Configuration
 
-Create a file called `fleet.conf` in your backup directory. The format is one entry per line, with a site label and hostname or IP separated by a pipe character:
+A file called `fleet.conf` is created by the script in your backup directory at first execution if the script does not already exist. The format is one entry per line, with a site label and hostname or IP separated by a pipe character:
 
 ```
 # Format: SITE|HOSTNAME_OR_IP
