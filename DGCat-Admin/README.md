@@ -32,6 +32,8 @@ DGCat-Admin makes managing those site lists very easy.
 
 **This tool was designed specifically for those purposes.**
 
+<img width="643" height="388" alt="Image" src="https://github.com/user-attachments/assets/1108fc0b-5ca1-4d6d-9ced-dbf0a0580c18" />
+
 ## Requirements
 
 ### Bash Version
