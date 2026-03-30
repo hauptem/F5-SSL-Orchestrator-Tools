@@ -525,6 +525,7 @@ The log captures all operations performed during the session, including timestam
 To disable log file creation, set `LOGGING_ENABLED` to `0` in the script configuration.
 
 ---
+## Troubleshooting
 
 ### Connection Issues
 
