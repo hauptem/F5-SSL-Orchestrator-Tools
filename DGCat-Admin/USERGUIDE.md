@@ -547,7 +547,7 @@ One or more CIDR entries in your CSV have non-zero host bits for their prefix le
 Your CSV contained duplicate keys or URLs. The tool automatically removes duplicates before applying. The reported count reflects what will land in the datagroup or URL category. No action needed.
 
 **"Failed to populate URL category"**
-The URL category was created but the API timed out while applying URLs. This can happen with very large URL categories (5,000+ entries). The category likely contains the data — verify in the GUI or by viewing it in the tool. If it is empty, retry using overwrite mode. If timeouts persist, increase `API_REQUEST_TIMEOUT` (bash) or `$script:API_TIMEOUT` (PowerShell) in the script header. Default is 60 seconds.
+The URL category was created but the API timed out while applying URLs. This can happen with very large URL categories (>10000 records). The category likely contains the data — verify in the GUI or by viewing it in the tool. If it is empty, retry using overwrite mode. If timeouts persist, increase `API_REQUEST_TIMEOUT` (bash) or `$script:API_TIMEOUT` (PowerShell) in the script header. The default is 60 seconds.
 
 ### Partition Issues
 
