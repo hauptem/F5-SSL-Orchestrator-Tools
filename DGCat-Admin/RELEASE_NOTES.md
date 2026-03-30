@@ -11,7 +11,7 @@
 - CSV duplicates removed before applying with reported count corrected
 
 **Performance**
-- Bash CSV parsing and URL conversion rewritten with shell builtins (~2s vs 10-20s)
+- Bash CSV parsing and URL conversion rewritten with shell builtins (large dataset processing now ~2s vs 10-20s)
 - Editor apply path optimized from O(n²) to O(n)
 
 **Cleanup**
