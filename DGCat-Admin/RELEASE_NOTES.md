@@ -12,7 +12,7 @@
 - Fixed a few more minor color discrepancies between powershell and bash UI
 
 **Import Validation**
-- CIDR alignment check prevents HTTP 400 if trying to install misaligned subnets via API
+- CIDR alignment check prevents HTTP 400 response if trying to install entries with misaligned subnets via API
 - CSV duplicates removed via dedup function before applying with reported count corrected
 
 **Performance**
