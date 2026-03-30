@@ -38,7 +38,7 @@ LOGGING_ENABLED=0
 # Connect timeout: max time to establish TCP connection to a BIG-IP
 # Request timeout: max total time for any single API request
 API_CONNECT_TIMEOUT=10
-API_REQUEST_TIMEOUT=30
+API_REQUEST_TIMEOUT=60
 
 # Logging
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -4168,6 +4168,22 @@ editor_submenu() {
         done < <(get_url_category_entries "${cat_name}")
     fi
     log_ok "Loaded ${#working_keys[@]} entries"
+    
+    # Warn about bash performance with large datasets
+    if [ ${#working_keys[@]} -gt 8000 ]; then
+        echo ""
+        log_warn "This dataset has ${#working_keys[@]} entries."
+        log_warn "The bash editor will be very slow at this scale."
+        log_info "Consider using the PowerShell version for large dataset editing."
+        echo ""
+        read -rp "  Continue to editor? (yes/no) [no]: " continue_choice
+        if [ "${continue_choice}" != "yes" ]; then
+            log_info "Exiting editor."
+            press_enter_to_continue
+            return
+        fi
+    fi
+    
     sleep 1
     
     # Session state
