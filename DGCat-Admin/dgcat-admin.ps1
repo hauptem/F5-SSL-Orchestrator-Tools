@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.2 - March 29 2026
+# Version: 4.3
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -29,12 +29,12 @@
 $script:BACKUP_DIR = Join-Path $PSScriptRoot "dgcat-admin-backups"
 $script:MAX_BACKUPS = 30
 
-# Session logging (set to 0 to disable log file creation)
+# Session logging (set to 1 to enable log file creation)
 $script:LOGGING_ENABLED = 0
 
 # API timeout (seconds)
 # Max time for any single API request including connection
-$script:API_TIMEOUT = 10
+$script:API_TIMEOUT = 30
 
 # Partitions to manage (array)
 # Add additional partitions as needed
@@ -179,6 +179,38 @@ function Test-AddressFormat {
     if ($Entry -match '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$') { return $true }
     if ($Entry -match '^[0-9a-fA-F:]+(/[0-9]{1,3})?$' -and $Entry.Contains(':')) { return $true }
     return $false
+}
+
+function Test-CidrAlignment {
+    param([string[]]$Keys)
+    
+    $errors = @()
+    
+    foreach ($entry in $Keys) {
+        if ($entry -notmatch '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})$') { continue }
+        
+        $a = [int]$Matches[1]; $b = [int]$Matches[2]; $c = [int]$Matches[3]; $d = [int]$Matches[4]
+        $prefix = [int]$Matches[5]
+        
+        if ($prefix -lt 1 -or $prefix -gt 32) { continue }
+        
+        $ipInt = ($a -shl 24) + ($b -shl 16) + ($c -shl 8) + $d
+        $mask = ([uint32]::MaxValue -shl (32 - $prefix)) -band [uint32]::MaxValue
+        $netInt = $ipInt -band $mask
+        
+        $netA = ($netInt -shr 24) -band 0xFF
+        $netB = ($netInt -shr 16) -band 0xFF
+        $netC = ($netInt -shr 8) -band 0xFF
+        $netD = $netInt -band 0xFF
+        
+        $correct = "${netA}.${netB}.${netC}.${netD}/${prefix}"
+        
+        if ($entry -ne $correct) {
+            $errors += @{ Original = $entry; Correct = $correct }
+        }
+    }
+    
+    return $errors
 }
 
 function Test-ProtectedDatagroup {
@@ -1602,7 +1634,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v4.2                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v4.3                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -2008,10 +2040,30 @@ function Invoke-CreateDatagroup {
         }
     }
     
-    # Prepare final arrays
-    $finalKeys = $parsed.Keys
-    $finalValues = $parsed.Values
+    # Check for CIDR alignment errors (address type only)
+    if ($dgType -eq "address") {
+        $cidrErrors = Test-CidrAlignment -Keys $parsed.Keys
+        if ($cidrErrors.Count -gt 0) {
+            Write-Host ""
+            Write-LogWarn "CIDR alignment errors detected"
+            Write-LogWarn "$($cidrErrors.Count) entries have non-zero host bits that BIG-IP will reject"
+            Write-Host ""
+            $showCount = [Math]::Min($cidrErrors.Count, 5)
+            for ($i = 0; $i -lt $showCount; $i++) {
+                Write-Host "          $($cidrErrors[$i].Original) -> $($cidrErrors[$i].Correct)" -ForegroundColor White
+            }
+            if ($cidrErrors.Count -gt 5) {
+                Write-Host "          ... and $($cidrErrors.Count - 5) more" -ForegroundColor White
+            }
+            Write-Host ""
+            Write-LogError "Correct these entries in your CSV and reimport."
+            if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
+            Press-EnterToContinue
+            return
+        }
+    }
     
+    # Prepare final arrays
     if ($restoreMode -eq "merge") {
         Write-LogStep "Reading existing entries for merge..."
         $existing = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName
@@ -2024,6 +2076,18 @@ function Invoke-CreateDatagroup {
         
         $finalKeys = @($merged.Keys)
         $finalValues = @($merged.Values)
+    } else {
+        # Overwrite or new: Deduplicate CSV entries
+        $dedup = @{}
+        for ($i = 0; $i -lt $parsed.Keys.Count; $i++) {
+            $dedup[$parsed.Keys[$i]] = $parsed.Values[$i]
+        }
+        $dedupRemoved = $parsed.Keys.Count - $dedup.Count
+        if ($dedupRemoved -gt 0) {
+            Write-LogInfo "$dedupRemoved duplicate entries removed, $($dedup.Count) unique entries"
+        }
+        $finalKeys = @($dedup.Keys)
+        $finalValues = @($dedup.Values)
     }
     
     # Build records and apply
@@ -2143,6 +2207,14 @@ function Invoke-CreateUrlCategory {
         $convertedUrls += Format-DomainForUrlCategory -Domain $domain
     }
     
+    # Deduplicate converted URLs
+    $uniqueUrls = @($convertedUrls | Select-Object -Unique)
+    $urlDedupRemoved = $convertedUrls.Count - $uniqueUrls.Count
+    if ($urlDedupRemoved -gt 0) {
+        Write-LogInfo "$urlDedupRemoved duplicate URLs removed, $($uniqueUrls.Count) unique URLs"
+    }
+    $convertedUrls = $uniqueUrls
+    
     # Build URL objects
     $urlObjects = ConvertTo-UrlObjects -Urls $convertedUrls
     
@@ -2209,9 +2281,19 @@ function Invoke-CreateUrlCategory {
             return
         }
     } elseif ([string]::IsNullOrWhiteSpace($restoreMode)) {
+        # Create new category (empty first, then populate)
         Write-LogStep "Creating URL category '$catName'..."
-        if (-not (New-UrlCategoryRemote -Name $catName -DefaultAction $defaultAction -Urls $urlObjects)) {
+        if (-not (New-UrlCategoryRemote -Name $catName -DefaultAction $defaultAction -Urls @())) {
             Write-LogError "Failed to create URL category."
+            if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
+            Press-EnterToContinue
+            return
+        }
+        Write-LogOk "URL category created"
+        Write-LogStep "Populating $($urlObjects.Count) URLs..."
+        if (-not (Set-UrlCategoryEntriesRemote -Name $catName -Urls $urlObjects)) {
+            Write-LogError "Failed to populate URL category."
+            Write-LogWarn "Category '$catName' exists but is empty. Retry with overwrite."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
             Press-EnterToContinue
             return
@@ -3405,7 +3487,7 @@ function Main {
         Write-Host ""
         Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-        Write-Host "                    DGCAT-Admin v4.2                        " -NoNewline -ForegroundColor White
+        Write-Host "                    DGCAT-Admin v4.3                        " -NoNewline -ForegroundColor White
         Write-Host "║" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
         Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White

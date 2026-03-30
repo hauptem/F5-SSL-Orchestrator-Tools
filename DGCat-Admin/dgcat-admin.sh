@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.2 - March 29 2026
+# Version: 4.3
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -31,7 +31,7 @@ set -euo pipefail
 BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
 MAX_BACKUPS=30
 
-# Session logging (set to 0 to disable log file creation)
+# Session logging (set to 1 to enable log file creation)
 LOGGING_ENABLED=0
 
 # API timeout settings (seconds)
@@ -177,6 +177,61 @@ is_address_format() {
         return 0
     fi
     return 1
+}
+
+# Validate CIDR entries have properly zeroed host bits
+# BIG-IP rejects CIDR addresses where host bits are non-zero (e.g., 10.159.55.0/16)
+# Args: keys_array_name
+# Outputs: error_count|example1|example2|... (pipe-delimited, max 5 examples)
+validate_cidr_alignment() {
+    local keys_name=$1
+    eval "local total=\${#${keys_name}[@]}"
+    
+    local error_count=0
+    local examples=""
+    
+    for ((i=0; i<total; i++)); do
+        eval "local entry=\"\${${keys_name}[$i]}\""
+        
+        # Only check entries with a prefix length (CIDR notation)
+        if [[ "${entry}" != *"/"* ]]; then
+            continue
+        fi
+        
+        # Only check IPv4 CIDR
+        if ! [[ "${entry}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]]; then
+            continue
+        fi
+        
+        local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}"
+        local prefix="${BASH_REMATCH[5]}"
+        
+        # Skip invalid prefix lengths
+        if [ "${prefix}" -lt 1 ] || [ "${prefix}" -gt 32 ]; then
+            continue
+        fi
+        
+        # Calculate network address by zeroing host bits
+        local ip_int=$(( (a << 24) + (b << 16) + (c << 8) + d ))
+        local mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+        local net_int=$(( ip_int & mask ))
+        
+        local net_a=$(( (net_int >> 24) & 0xFF ))
+        local net_b=$(( (net_int >> 16) & 0xFF ))
+        local net_c=$(( (net_int >> 8) & 0xFF ))
+        local net_d=$(( net_int & 0xFF ))
+        
+        local correct="${net_a}.${net_b}.${net_c}.${net_d}/${prefix}"
+        
+        if [ "${entry}" != "${correct}" ]; then
+            error_count=$((error_count + 1))
+            if [ ${error_count} -le 5 ]; then
+                examples="${examples}|${entry} -> ${correct}"
+            fi
+        fi
+    done
+    
+    echo "${error_count}${examples}"
 }
 
 # Check if a datagroup is a protected system datagroup
@@ -367,16 +422,20 @@ api_request() {
         --max-time "${API_REQUEST_TIMEOUT}"
     )
     
-    if [ -n "${data}" ]; then
-        curl_opts+=(-d "${data}")
-    fi
-    
     local response
-    response=$(curl "${curl_opts[@]}" "${url}" 2>/dev/null) || {
-        API_RESPONSE=""
-        API_HTTP_CODE="000"
-        return 1
-    }
+    if [ -n "${data}" ]; then
+        response=$(printf '%s' "${data}" | curl "${curl_opts[@]}" -d @- "${url}" 2>/dev/null) || {
+            API_RESPONSE=""
+            API_HTTP_CODE="000"
+            return 1
+        }
+    else
+        response=$(curl "${curl_opts[@]}" "${url}" 2>/dev/null) || {
+            API_RESPONSE=""
+            API_HTTP_CODE="000"
+            return 1
+        }
+    fi
     
     # Split response body and HTTP code
     API_HTTP_CODE=$(echo "${response}" | tail -1)
@@ -753,7 +812,7 @@ apply_internal_datagroup_records_remote() {
     local records_json="$3"
     
     local data
-    data=$(jq -n --argjson records "${records_json}" '{records: $records}')
+    data=$(printf '%s' "${records_json}" | jq '{records: .}')
     
     if api_patch "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}" "${data}"; then
         return 0
@@ -833,12 +892,11 @@ create_url_category_remote() {
     local urls_json="$3"
     
     local data
-    data=$(jq -n \
+    data=$(printf '%s' "${urls_json}" | jq \
         --arg name "${cat_name}" \
         --arg displayName "${cat_name}" \
         --arg defaultAction "${default_action}" \
-        --argjson urls "${urls_json}" \
-        '{name: $name, displayName: $displayName, defaultAction: $defaultAction, urls: $urls}')
+        '{name: $name, displayName: $displayName, defaultAction: $defaultAction, urls: .}')
     
     if api_post "/mgmt/tm/sys/url-db/url-category" "${data}"; then
         return 0
@@ -862,10 +920,10 @@ modify_url_category_add_remote() {
     
     # Merge existing and new URLs, deduplicate by name
     local merged_urls
-    merged_urls=$(jq -nc --argjson existing "${existing_urls}" --argjson new "${urls_json}" '$existing + $new | unique_by(.name)')
+    merged_urls=$(printf '%s\n%s' "${existing_urls}" "${urls_json}" | jq -sc '.[0] + .[1] | unique_by(.name)')
     
     local data
-    data=$(jq -n --argjson urls "${merged_urls}" '{urls: $urls}')
+    data=$(printf '%s' "${merged_urls}" | jq '{urls: .}')
     
     if api_patch "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}" "${data}"; then
         return 0
@@ -893,12 +951,13 @@ modify_url_category_delete_remote() {
     
     # Filter out deleted URLs
     local remaining_urls
-    remaining_urls=$(jq -nc --argjson existing "${existing_urls}" --argjson delete "${delete_array}" '
+    remaining_urls=$(printf '%s\n%s' "${existing_urls}" "${delete_array}" | jq -sc '
+        .[0] as $existing | .[1] as $delete |
         $existing | map(select(.name as $n | $delete | index($n) | not))
     ')
     
     local data
-    data=$(jq -n --argjson urls "${remaining_urls}" '{urls: $urls}')
+    data=$(printf '%s' "${remaining_urls}" | jq '{urls: .}')
     
     if api_patch "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}" "${data}"; then
         return 0
@@ -913,7 +972,7 @@ modify_url_category_replace_remote() {
     local urls_json="$2"
     
     local data
-    data=$(jq -n --argjson urls "${urls_json}" '{urls: $urls}')
+    data=$(printf '%s' "${urls_json}" | jq '{urls: .}')
     
     if api_patch "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}" "${data}"; then
         return 0
@@ -1038,23 +1097,6 @@ load_fleet_config() {
     fi
     
     return 0
-}
-
-# Save fleet configuration to file
-# Returns: 0 on success, 1 on failure
-save_fleet_config() {
-    {
-        echo "# DGCat-Admin Fleet Configuration"
-        echo "# Format: SITE|HOSTNAME_OR_IP"
-        echo "# Site IDs: alphanumeric, dashes, underscores (no spaces)"
-        echo "# Generated: $(date)"
-        echo "#"
-        for i in "${!FLEET_HOSTS[@]}"; do
-            echo "${FLEET_SITES[$i]}|${FLEET_HOSTS[$i]}"
-        done
-    } > "${FLEET_CONFIG_FILE}" 2>/dev/null
-    
-    return $?
 }
 
 # Get hosts for a specific site
@@ -1433,11 +1475,9 @@ deploy_internal_datagroup_to_host() {
         local target_json
         target_json=$(echo "${target_records}" | build_records_json_remote "${dg_type}")
         
-        final_records_json=$(jq -nc \
-            --argjson target "${target_json}" \
-            --argjson additions "${additions_json}" \
-            --argjson deletions "${delete_array}" \
-            '($target | map(select(.name as $n | $deletions | index($n) | not))) + $additions | unique_by(.name)')
+        final_records_json=$(printf '%s\n%s\n%s' "${target_json}" "${additions_json}" "${delete_array}" | jq -sc '
+            .[0] as $target | .[1] as $additions | .[2] as $deletions |
+            ($target | map(select(.name as $n | $deletions | index($n) | not))) + $additions | unique_by(.name)')
     fi
     
     # Apply records
@@ -2208,8 +2248,9 @@ parse_csv_file() {
         # Skip comment lines
         [[ "${line}" =~ ^[[:space:]]*# ]] && continue
         
-        # Trim whitespace
-        line=$(echo "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        # Trim whitespace (bash builtins - no subprocess)
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
         
         # Skip if still empty after trim
         [ -z "${line}" ] && continue
@@ -2217,8 +2258,9 @@ parse_csv_file() {
         # Parse based on format
         if [ "${format}" == "keys_only" ]; then
             # Take first column only, ignore the rest
-            local key
-            key=$(echo "${line}" | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            local key="${line%%,*}"
+            key="${key#"${key%%[![:space:]]*}"}"
+            key="${key%"${key##*[![:space:]]}"}"
             
             if [ -z "${key}" ]; then
                 log_warn "Line ${line_num}: Empty key, skipping"
@@ -2229,9 +2271,16 @@ parse_csv_file() {
             CSV_VALUES+=("")
         else
             # Keys and values format
-            local key value
-            key=$(echo "${line}" | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            value=$(echo "${line}" | cut -d',' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            local key="${line%%,*}"
+            key="${key#"${key%%[![:space:]]*}"}"
+            key="${key%"${key##*[![:space:]]}"}"
+            
+            local value=""
+            if [[ "${line}" == *","* ]]; then
+                value="${line#*,}"
+                value="${value#"${value%%[![:space:]]*}"}"
+                value="${value%"${value##*[![:space:]]}"}"
+            fi
             
             if [ -z "${key}" ]; then
                 log_warn "Line ${line_num}: Empty key, skipping"
@@ -2351,7 +2400,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.2                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.3                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${GREEN}${REMOTE_HOSTNAME}${NC}"
@@ -2749,9 +2798,10 @@ menu_create_datagroup() {
     while IFS= read -r line; do
         [ -z "${line}" ] && continue
         [[ "${line}" =~ ^[[:space:]]*# ]] && continue
-        # Get first column only
-        local first_col
-        first_col=$(echo "${line}" | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        # Get first column only (bash builtins - no subprocess)
+        local first_col="${line%%,*}"
+        first_col="${first_col#"${first_col%%[![:space:]]*}"}"
+        first_col="${first_col%"${first_col##*[![:space:]]}"}"
         [ -z "${first_col}" ] && continue
         
         if is_integer_format "${first_col}"; then
@@ -2841,6 +2891,34 @@ menu_create_datagroup() {
         fi
     fi
     
+    # Check for CIDR alignment errors (address type only)
+    if [ "${dg_type}" == "address" ]; then
+        local cidr_result
+        cidr_result=$(validate_cidr_alignment CSV_KEYS)
+        local cidr_error_count
+        cidr_error_count=$(echo "${cidr_result}" | cut -d'|' -f1)
+        
+        if [ "${cidr_error_count}" -gt 0 ]; then
+            echo ""
+            log_warn "CIDR alignment errors detected"
+            log_warn "${cidr_error_count} entries have non-zero host bits that BIG-IP will reject"
+            echo ""
+            # Display examples
+            IFS='|' read -ra cidr_parts <<< "${cidr_result}"
+            for ((idx=1; idx<${#cidr_parts[@]}; idx++)); do
+                echo -e "          ${WHITE}${cidr_parts[$idx]}${NC}"
+            done
+            if [ "${cidr_error_count}" -gt 5 ]; then
+                echo -e "          ${WHITE}... and $((cidr_error_count - 5)) more${NC}"
+            fi
+            echo ""
+            log_error "Correct these entries in your CSV and reimport."
+            [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+            press_enter_to_continue
+            return
+        fi
+    fi
+    
     # Prepare final key/value arrays
     declare -a FINAL_KEYS
     declare -a FINAL_VALUES
@@ -2876,9 +2954,21 @@ menu_create_datagroup() {
             FINAL_VALUES+=("${merged_data[$key]}")
         done
     else
-        # Overwrite or new: Use CSV entries directly
-        FINAL_KEYS=("${CSV_KEYS[@]}")
-        FINAL_VALUES=("${CSV_VALUES[@]}")
+        # Overwrite or new: Deduplicate CSV entries
+        declare -A dedup_data
+        for i in "${!CSV_KEYS[@]}"; do
+            dedup_data["${CSV_KEYS[$i]}"]="${CSV_VALUES[$i]}"
+        done
+        
+        local dedup_removed=$((${#CSV_KEYS[@]} - ${#dedup_data[@]}))
+        if [ ${dedup_removed} -gt 0 ]; then
+            log_info "${dedup_removed} duplicate entries removed, ${#dedup_data[@]} unique entries"
+        fi
+        
+        for key in "${!dedup_data[@]}"; do
+            FINAL_KEYS+=("${key}")
+            FINAL_VALUES+=("${dedup_data[$key]}")
+        done
     fi
     
     # Apply records
@@ -3503,9 +3593,16 @@ menu_export_url_category() {
         while IFS= read -r url; do
             [ -z "${url}" ] && continue
             if [ "${strip_protocol}" == "true" ]; then
-                # Convert to domain format - strip protocol and path
-                # Convert wildcard prefix (\*. or *.) to leading dot for reimport compatibility
-                echo "${url}" | sed -E 's|^https?://||; s|/.*$||; s|^\\\*\.|.|; s|^\*\.|.|'
+                # Convert to domain format using bash builtins (no subprocess)
+                local domain="${url#http://}"
+                domain="${domain#https://}"
+                domain="${domain%%/*}"
+                domain="${domain#\\*}"
+                domain="${domain#\*}"
+                if [[ "${domain}" != .* && "${url}" == *"*"* ]]; then
+                    domain=".${domain}"
+                fi
+                echo "${domain}"
             else
                 echo "${url}"
             fi
@@ -3577,19 +3674,26 @@ format_url_for_sslo() {
     local domain
     
     # Remove protocol
-    domain=$(echo "${url}" | sed -E 's|^https?://||')
+    domain="${url#http://}"
+    domain="${domain#https://}"
     
-    # Handle wildcards: \* at start becomes leading dot (for wildcard matching)
-    domain=$(echo "${domain}" | sed -E 's|^\\\*\.?|.|')
+    # Handle wildcards: \* or * at start becomes leading dot
+    domain="${domain#\\*}"
+    domain="${domain#\*}"
+    if [[ "${domain}" != .* && "${url}" == *"*"* ]]; then
+        domain=".${domain}"
+    fi
     
     # Remove path (everything after first /)
-    domain=$(echo "${domain}" | sed -E 's|/.*$||')
+    domain="${domain%%/*}"
     
     # Remove port if present
-    domain=$(echo "${domain}" | sed -E 's|:[0-9]+$||')
+    if [[ "${domain}" =~ ^(.+):[0-9]+$ ]]; then
+        domain="${BASH_REMATCH[1]}"
+    fi
     
     # Remove any trailing dots
-    domain=$(echo "${domain}" | sed 's/\.$//')
+    domain="${domain%.}"
     
     echo "${domain}"
 }
@@ -3601,10 +3705,11 @@ format_domain_for_url_category() {
     local domain="$1"
     
     # Remove any existing protocol
-    domain=$(echo "${domain}" | sed -E 's|^https?://||')
+    domain="${domain#http://}"
+    domain="${domain#https://}"
     
-    # Remove trailing slashes
-    domain=$(echo "${domain}" | sed 's|/.*$||')
+    # Remove path (everything after first /)
+    domain="${domain%%/*}"
     
     # Handle leading dot (wildcard) - convert to *. format
     if [[ "${domain}" == .* ]]; then
@@ -3744,6 +3849,21 @@ menu_create_url_category() {
     done
     echo -e "  ${CYAN}─────────────────────────────────────────────────────────────${NC}"
     
+    # Deduplicate converted URLs
+    declare -A url_dedup
+    local -a unique_urls=()
+    for url in "${converted_urls[@]}"; do
+        if [ -z "${url_dedup[${url}]+x}" ]; then
+            url_dedup["${url}"]=1
+            unique_urls+=("${url}")
+        fi
+    done
+    local url_dedup_removed=$(( ${#converted_urls[@]} - ${#unique_urls[@]} ))
+    if [ ${url_dedup_removed} -gt 0 ]; then
+        log_info "${url_dedup_removed} duplicate URLs removed, ${#unique_urls[@]} unique URLs"
+    fi
+    converted_urls=("${unique_urls[@]}")
+    
     # Handle merge mode - get existing URLs
     if [ "${restore_mode}" == "merge" ]; then
         log_step "Reading existing URLs for merge..."
@@ -3847,10 +3967,19 @@ menu_create_url_category() {
             return
         fi
     elif [ -z "${restore_mode}" ]; then
-        # Create new category
+        # Create new category (empty first, then populate)
         log_step "Creating URL category '${cat_name}'..."
-        if ! create_url_category_remote "${cat_name}" "${default_action}" "${urls_json}"; then
+        if ! create_url_category_remote "${cat_name}" "${default_action}" "[]"; then
             log_error "Failed to create URL category. HTTP ${API_HTTP_CODE}"
+            [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+            press_enter_to_continue
+            return
+        fi
+        log_ok "URL category created"
+        log_step "Populating ${#converted_urls[@]} URLs..."
+        if ! modify_url_category_replace_remote "${cat_name}" "${urls_json}"; then
+            log_error "Failed to populate URL category. HTTP ${API_HTTP_CODE}"
+            log_warn "Category '${cat_name}' exists but is empty. Retry with overwrite."
             [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
             press_enter_to_continue
             return
@@ -4414,34 +4543,30 @@ editor_submenu() {
                     continue
                 fi
                 
-                # Build lists of additions and deletions
+                # Build lookup tables for O(n) comparison
+                local -A orig_lookup=()
+                local -A work_lookup=()
                 local -a additions=()
                 local -a deletions=()
                 
+                for key in "${original_keys[@]}"; do
+                    orig_lookup["${key}"]=1
+                done
+                
+                for key in "${working_keys[@]}"; do
+                    work_lookup["${key}"]=1
+                done
+                
                 # Deleted = in original but not in working
                 for orig_key in "${original_keys[@]}"; do
-                    local found=false
-                    for work_key in "${working_keys[@]}"; do
-                        if [ "${orig_key}" == "${work_key}" ]; then
-                            found=true
-                            break
-                        fi
-                    done
-                    if [ "${found}" == "false" ]; then
+                    if [ -z "${work_lookup[${orig_key}]+x}" ]; then
                         deletions+=("${orig_key}")
                     fi
                 done
                 
                 # Added = in working but not in original
                 for work_key in "${working_keys[@]}"; do
-                    local found=false
-                    for orig_key in "${original_keys[@]}"; do
-                        if [ "${work_key}" == "${orig_key}" ]; then
-                            found=true
-                            break
-                        fi
-                    done
-                    if [ "${found}" == "false" ]; then
+                    if [ -z "${orig_lookup[${work_key}]+x}" ]; then
                         additions+=("${work_key}")
                     fi
                 done
@@ -5191,7 +5316,7 @@ main() {
         # Welcome banner
         echo ""
         echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.2                        ${NC}${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.3                        ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
