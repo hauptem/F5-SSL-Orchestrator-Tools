@@ -592,7 +592,7 @@ To disable log file creation, set `LOGGING_ENABLED` to `0` in the script configu
 ### Connection Issues
 
 **"Connection failed. Check hostname and network connectivity."**
-The tool could not reach the BIG-IP management interface. Verify that the hostname or IP is correct, that port 443 is open between your machine and the BIG-IP, and that the management interface is configured and accessible.
+The tool could not reach the BIG-IP management interface. Verify that the hostname or IP is correct, that port 443 is open between your machine and the BIG-IP, and that the management interface is configured and accessible. You will also get this indication if restjavad on the remote system is unavailable and needs to be restarted.
 
 **"Authentication failed. Check username/password."**
 The BIG-IP rejected the credentials. Verify the username and password. The account needs administrative API access — typically the `admin` role. Accounts with limited roles may not have permission to query or modify datagroups.
