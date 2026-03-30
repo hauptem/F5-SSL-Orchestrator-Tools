@@ -2,7 +2,7 @@
 
 **Large Dataset Support**
 - Tested with 20000-entry URL categories and 1000-entry address datagroups
-- Bash appears to have a limit of 6000-7000 URL records before the editor gets really slow - added a warning and confirmation to continue
+- Bash appears to have a limit of 6000-7000 URL records before the editor gets really slow due to the arrays - added a warning and confirmation to continue when records are pulled
 - Powershell is fast even with 20k records in the editor - though needs a longer API_TIMEOUT set in the configuration but this will vary by environment
 - set API timeout to 60s default or more to accomodate large dataset publishing
 - URL category creation split into create-then-populate sequence to avoid ghost objects
