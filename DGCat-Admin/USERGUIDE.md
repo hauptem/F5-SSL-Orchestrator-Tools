@@ -155,7 +155,7 @@ After a successful connection, you see the main menu:
 
 ```
   ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v4.2                        ║
+  ║                    DGCAT-Admin v4.3                        ║
   ║               F5 BIG-IP Administration Tool                ║
   ╠════════════════════════════════════════════════════════════╣
     Connected: bigip01.dc1.example.com
