@@ -218,7 +218,7 @@ Protected system datagroups cannot be deleted. The tool blocks the operation and
 
 For datagroups, the export includes a comment header with metadata (partition, type, export date) followed by `key,value` lines. The default export path is in the backup directory with a timestamped filename, but you can specify any path.
 
-For URL categories, you choose between domain-only format (stripped of protocol and path) or full URL format (as stored by BIG-IP). Domain-only format is the most useful for reimport, as it matches the CSV input format.
+For URL categories, you choose between domain-only format (stripped of protocol and path) or full URL format (as stored by BIG-IP). 
 
 Exported files can be used directly as input for the Create/Update option, making it easy to replicate objects between BIG-IPs that aren't in the same fleet.
 
