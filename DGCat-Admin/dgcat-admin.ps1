@@ -34,7 +34,7 @@ $script:LOGGING_ENABLED = 0
 
 # API timeout (seconds)
 # Max time for any single API request including connection
-$script:API_TIMEOUT = 30
+$script:API_TIMEOUT = 60
 
 # Partitions to manage (array)
 # Add additional partitions as needed
