@@ -1641,28 +1641,40 @@ function Show-MainMenu {
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "    Connected: " -NoNewline -ForegroundColor White
-    Write-Host $script:RemoteHostname -ForegroundColor Green
+    Write-Host $script:RemoteHostname -ForegroundColor Yellow
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "   1)  Create Datagroup or URL Category                     " -NoNewline -ForegroundColor White
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "1)" -NoNewline -ForegroundColor Yellow
+    Write-Host "  Create Datagroup or URL Category                     " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "   2)  Create/Update Datagroup or URL Category from CSV     " -NoNewline -ForegroundColor White
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "2)" -NoNewline -ForegroundColor Yellow
+    Write-Host "  Create/Update Datagroup or URL Category from CSV     " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "   3)  Delete Datagroup or URL Category                     " -NoNewline -ForegroundColor White
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "3)" -NoNewline -ForegroundColor Yellow
+    Write-Host "  Delete Datagroup or URL Category                     " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "   4)  Export Datagroup or URL Category to CSV              " -NoNewline -ForegroundColor White
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "4)" -NoNewline -ForegroundColor Yellow
+    Write-Host "  Export Datagroup or URL Category to CSV              " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "   5)  View/Edit a Datagroup or URL Category                " -NoNewline -ForegroundColor White
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "5)" -NoNewline -ForegroundColor Yellow
+    Write-Host "  View/Edit a Datagroup or URL Category                " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "   0)  Exit                                                 " -NoNewline -ForegroundColor White
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "0)" -NoNewline -ForegroundColor Yellow
+    Write-Host "  Exit                                                 " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
@@ -2384,7 +2396,8 @@ function Invoke-DeleteDatagroup {
     }
     
     Write-Host ""
-    $confirm = Read-Host "  Type DELETE to confirm"
+    Write-Host "  Type DELETE to confirm: " -NoNewline -ForegroundColor Red
+    $confirm = Read-Host
     if ($confirm -cne "DELETE") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
     
     Write-LogStep "Deleting datagroup '/${partition}/${dgName}'..."
@@ -2486,7 +2499,8 @@ function Invoke-DeleteUrlCategory {
     }
     
     Write-Host ""
-    $confirm = Read-Host "  Type DELETE to confirm"
+    Write-Host "  Type DELETE to confirm: " -NoNewline -ForegroundColor Red
+    $confirm = Read-Host
     if ($confirm -cne "DELETE") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
     
     Write-LogStep "Deleting URL category '$selectedCategory'..."

@@ -2403,7 +2403,7 @@ show_main_menu() {
     echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.3                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${GREEN}${REMOTE_HOSTNAME}${NC}"
+    echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}Create Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
@@ -3127,7 +3127,8 @@ menu_delete_datagroup_only() {
     
     # Confirm deletion
     echo ""
-    read -rp "  Type DELETE to confirm: " confirm
+    echo -ne "  ${RED}Type DELETE to confirm:${NC} "
+    read -r confirm
     if [ "${confirm}" != "DELETE" ]; then
         log_info "Aborted by user."
         press_enter_to_continue
@@ -3300,7 +3301,8 @@ menu_delete_url_category() {
     
     # Confirm deletion
     echo ""
-    read -rp "  Type DELETE to confirm: " confirm
+    echo -ne "  ${RED}Type DELETE to confirm:${NC} "
+    read -r confirm
     if [ "${confirm}" != "DELETE" ]; then
         log_info "Aborted by user."
         press_enter_to_continue
