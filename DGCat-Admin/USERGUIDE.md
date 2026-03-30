@@ -153,24 +153,7 @@ If the connection fails, you're given the option to retry or exit. Common failur
 
 After a successful connection, you see the main menu:
 
-```
-  ╔════════════════════════════════════════════════════════════╗
-  ║                    DGCAT-Admin v4.3                        ║
-  ║               F5 BIG-IP Administration Tool                ║
-  ╠════════════════════════════════════════════════════════════╣
-    Connected: bigip01.dc1.example.com
-  ╠════════════════════════════════════════════════════════════╣
-  ║                                                            ║
-  ║   1)  Create Datagroup or URL Category                     ║
-  ║   2)  Create/Update Datagroup or URL Category from CSV     ║
-  ║   3)  Delete Datagroup or URL Category                     ║
-  ║   4)  Export Datagroup or URL Category to CSV              ║
-  ║   5)  View/Edit a Datagroup or URL Category                ║
-  ║                                                            ║
-  ╠════════════════════════════════════════════════════════════╣
-  ║   0)  Exit                                                 ║
-  ╚════════════════════════════════════════════════════════════╝
-```
+<img width="643" height="388" alt="Image" src="https://github.com/user-attachments/assets/1108fc0b-5ca1-4d6d-9ced-dbf0a0580c18" />
 
 Each option is described in detail in the following sections. Selecting `0` ends the session and returns to the welcome screen, where you can connect to a different device or exit.
 
