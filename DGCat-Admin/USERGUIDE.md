@@ -306,7 +306,7 @@ The fleet is loaded once at session start. The tool displays a summary during pr
   [ OK ]  Fleet loaded: 4 hosts across 2 sites
 ```
 
-## Fleet Configuration File
+### Fleet Configuration File
 
 The fleet configuration file is located at `${BACKUP_DIR}/fleet.conf`. If no fleet configuration exists on first run, the tool creates a boilerplate template with format documentation and examples. It is a plain text file with one entry per line:
 
