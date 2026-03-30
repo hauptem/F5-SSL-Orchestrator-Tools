@@ -489,8 +489,8 @@ To restore from a backup, use the Create/Update from CSV option (menu option 2) 
 | `PARTITIONS` | `Common` | `Common` | Comma-separated list of BIG-IP partitions to manage |
 | `PREVIEW_LINES` | `5` | `5` | Number of lines shown in CSV file previews |
 | `API_CONNECT_TIMEOUT` | `10` | — | TCP connection timeout in seconds |
-| `API_REQUEST_TIMEOUT` | `30` | — | Total request timeout in seconds |
-| `API_TIMEOUT` | — | `10` | Request timeout in seconds |
+| `API_REQUEST_TIMEOUT` | `60` | — | Total request timeout in seconds |
+| `API_TIMEOUT` | — | `60` | Request timeout in seconds |
 
 ### Protected Datagroups
 
