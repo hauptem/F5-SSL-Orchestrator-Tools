@@ -39,7 +39,7 @@ DGCat-Admin supports managing a single device or an entire fleet of BIG-IPs. Cha
 
 F5's recommended approach is to reference datagroups or custom URL categories in your SSLO security policy rules instead of adding entries directly. Datagroups and URL categories are optimized for fast lookups, can hold thousands of entries without impacting policy performance, and are independent objects that can be managed, exported, and replicated separately from the policies that reference them.
 
-The challenge is that BIG-IP provides limited tooling for bulk management of these objects when an orchestration tool such as Ansible is not available. Adding 500 domains to a datagroup through the GUI is tedious. Exporting a URL category to replicate it at another site requires manual work. Keeping six BIG-IP SSLO's in sync across three datacenters is operationally expensive.
+The challenge is that BIG-IP provides limited tooling for bulk management of these objects when an orchestration tool such as Ansible is not available. Adding 500 networks to a datagroup through the GUI is tedious. Exporting a URL category to replicate it at another site requires manual work. Keeping six BIG-IP SSLO's in sync across three datacenters is operationally expensive.
 
 ### What DGCat-Admin Solves
 
