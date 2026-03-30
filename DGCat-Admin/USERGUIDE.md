@@ -526,15 +526,27 @@ To disable log file creation, set `LOGGING_ENABLED` to `0` in the script configu
 
 ---
 
-## Troubleshooting
-
 ### Connection Issues
 
 **"Connection failed. Check hostname and network connectivity."**
-The tool could not reach the BIG-IP management interface. Verify that the hostname or IP is correct, that port 443 is open between your machine and the BIG-IP, and that the management interface is configured and accessible. You will also get this indication if restjavad on the remote system is unavailable and needs to be restarted.
+The tool could not reach the BIG-IP management interface. Verify that the hostname or IP is correct, that port 443 is open between your machine and the BIG-IP, and that the management interface is configured and accessible.
+
+**"Connection failed. HTTP 503"**
+The BIG-IP is reachable but the REST API service (restjavad) is unavailable. The GUI may still work because it runs through a separate service (httpd/tmui). Restart restjavad via SSH: `bigstart restart restjavad` and allow 30-60 seconds for it to initialize. Monitor with `bigstart status restjavad` until it shows `run`.
 
 **"Authentication failed. Check username/password."**
 The BIG-IP rejected the credentials. Verify the username and password. The account needs administrative API access — typically the `admin` role. Accounts with limited roles may not have permission to query or modify datagroups.
+
+### Import Issues
+
+**"CIDR alignment errors detected"**
+One or more CIDR entries in your CSV have non-zero host bits for their prefix length (e.g., `10.159.55.0/16` should be `10.159.0.0/16`). The tool shows up to five examples with corrected values. Fix the entries in your CSV and reimport. BIG-IP will reject misaligned CIDRs so the import is blocked before the API call.
+
+**"X duplicate entries removed, Y unique entries"**
+Your CSV contained duplicate keys or URLs. The tool automatically removes duplicates before applying. The reported count reflects what will land in the datagroup or URL category. No action needed.
+
+**"Failed to populate URL category"**
+The URL category was created but the API timed out while applying URLs. This can happen with very large URL categories (5,000+ entries). The category likely contains the data — verify in the GUI or by viewing it in the tool. If it is empty, retry using overwrite mode. If timeouts persist, increase `API_REQUEST_TIMEOUT` (bash) or `$script:API_TIMEOUT` (PowerShell) in the script header. Default is 60 seconds.
 
 ### Partition Issues
 
@@ -546,16 +558,24 @@ The partition listed in your `PARTITIONS` configuration does not exist on the BI
 **"No fleet hosts passed validation. No changes have been made."**
 Every target host either failed to connect or didn't have the target object. Verify network connectivity and credentials. Remember that fleet deployment uses the same credentials you used to connect to the primary device.
 
-**Hosts showing as SKIP in the deploy summary.**
-The host failed pre-deploy validation — either it was unreachable, the target object doesn't exist, or the backup failed. SKIP means deployment was never attempted on that host. Verify network connectivity and that the object exists on the target. Create the object on the target host first if needed, then redeploy.
+**Hosts showing "Object not found" during validation.**
+The host is reachable and credentials are valid, but the target datagroup or URL category does not exist on that host. Create the object on the target host first, then redeploy.
 
+**Hosts showing "Connection failed" during validation.**
+The host is unreachable or restjavad is down. Verify network connectivity and REST API availability on the target. See the 503 guidance above.
+
+**Hosts showing as SKIP in the deploy summary.**
+The host failed pre-deploy validation — either it was unreachable, the target object doesn't exist, or the backup failed. SKIP means deployment was never attempted on that host.
 
 ### Editor Issues
 
 **"No changes to apply" when you expected changes.**
 The editor compares your working state against the state that was loaded when you opened it (or last applied). If you applied changes with `w` and then didn't make further edits, the tool correctly reports no pending changes. Use `D` to deploy the current state to the fleet even without pending changes.
 
+**Bash editor warning: "This dataset has X entries"**
+Datasets over 8,000 entries will cause the bash editor to become very slow or unresponsive due to interpreter limitations. Import, export, and deploy operations are unaffected. Use the PowerShell version for interactive editing of large datasets. PowerShell has been tested with 20,000 entries without performance issues.
+
 ### General Issues
 
-**Slow performance with large datasets.**
-Operations on datagroups or URL categories with thousands of entries may take longer due to API response times and JSON processing. The tool shows progress indicators when it's working. If performance is consistently poor, check the BIG-IP management plane utilization — other automation or monitoring tools competing for API access can slow things down.
+**Slow API responses with large datasets.**
+Operations on URL categories with thousands of entries may take longer due to BIG-IP management plane processing time. The default API timeout is 60 seconds. For very large categories (10,000+ entries), you may need to increase this value in the script header. If performance is consistently poor, check the BIG-IP management plane utilization — other automation or monitoring tools competing for API access can slow things down.
