@@ -347,10 +347,10 @@ A file called `fleet.conf` is created by the script in your backup directory at 
 # Format: SITE|HOSTNAME_OR_IP
 #
 # Examples:
-# DC1|bigip01-mgmt.dc1.example.com
-# DC1|bigip02-mgmt.dc1.example.com
-# DC2|bigip01-mgmt.dc2.example.com
-# DC2|bigip02-mgmt.dc2.example.com
+# DC1|bigip01.lablocal.com
+# DC1|bigip02.lablocal.com
+# DC2|bigip01.lablocal.com
+# DC2|bigip02.lablocal.com
 #
 # Site names: letters, numbers, dashes, underscores only
 DC1|bigip01-mgmt.dc1.example.com
