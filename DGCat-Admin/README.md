@@ -40,6 +40,7 @@ DGCat-Admin makes managing those site lists very easy.
 - jq
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
+- Note: if you are working with custom url categories >5000 entries it is recommended to use the powershell version of this tool
 
 ### PowerShell Version
 
