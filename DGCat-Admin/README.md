@@ -9,7 +9,7 @@ A menu-driven administration tool for managing LTM datagroups and custom URL cat
 Available in two versions with identical functionality:
 
 - **Bash** (`dgcat-admin.sh`) — For Linux, macOS, or directly on BIG-IP/Big-IQ
-- **PowerShell** (`dgcat-admin.ps1`) — For Windows (PowerShell 5.1+, ships with Windows 10/11)
+- **PowerShell** (`dgcat-admin.ps1`) — For Windows
 
 ### The Datagroup and URL Category Approach
 
@@ -43,7 +43,7 @@ DGCat-Admin makes managing those site lists very easy.
 
 ### PowerShell Version
 
-- PowerShell 5.1 or later (ships with Windows 10/11)
+- PowerShell 5.1 or later
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
 
