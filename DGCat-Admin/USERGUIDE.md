@@ -306,6 +306,16 @@ The fleet is loaded once at session start. The tool displays a summary during pr
   [ OK ]  Fleet loaded: 4 hosts across 2 sites
 ```
 
+## Fleet Configuration File
+
+The fleet configuration file is located at `${BACKUP_DIR}/fleet.conf`. If no fleet configuration exists on first run, the tool creates a boilerplate template with format documentation and examples. It is a plain text file with one entry per line:
+
+```
+SITE|HOSTNAME_OR_IP
+```
+
+Site identifiers must contain only alphanumeric characters, dashes, and underscores. Lines starting with `#` are treated as comments. Blank lines are ignored.
+
 ### Initiating a Deploy
 
 From the editor, press `D`. The tool first checks whether you have pending changes (additions or deletions that haven't been applied yet).
@@ -501,16 +511,6 @@ The following system datagroups are protected and cannot be modified or deleted 
 - `aol`
 
 These are pre-configured BIG-IP datagroups that the system depends on. Attempting to select them for modification will produce an error message.
-
-### Fleet Configuration File
-
-The fleet configuration file is located at `${BACKUP_DIR}/fleet.conf`. If no fleet configuration exists on first run, the tool creates a boilerplate template with format documentation and examples. It is a plain text file with one entry per line:
-
-```
-SITE|HOSTNAME_OR_IP
-```
-
-Site identifiers must contain only alphanumeric characters, dashes, and underscores. Lines starting with `#` are treated as comments. Blank lines are ignored.
 
 ### Log Files
 
