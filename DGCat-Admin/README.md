@@ -42,14 +42,14 @@ DGCat-Admin makes managing those site lists very easy.
 - jq
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
-- Note: DGCat's editor in bash gets pretty sluggish when there are more than 6k-7k records, but the create deploy functions work at 20k as long as the API timeout is set to accomodate.
+- Note: DGCat's editor in bash gets pretty sluggish when there are more than 6k-7k records, but the create/deploy functions work fine
   
 ### PowerShell Version
 
 - PowerShell 5.1 or later
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
-- Powershell works fast even with 20k URL records - just set API_TIMEOUT accordingly for large datasets
+- Note: Powershell works fast even with 20k URL records - just set API_TIMEOUT accordingly for large datasets
 
 ## Installation
 
