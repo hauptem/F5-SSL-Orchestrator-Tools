@@ -2,6 +2,8 @@
 
 **Large Dataset Support**
 - Tested with 10000-entry URL categories and 1000-entry address datagroups
+- Bash appears to have a limit of 6000-7000 records before it gets really slow - maybe a python port next
+- Powershell is fast even with 10k records
 - set API timeout to 60s to accomodate large dataset publishing
 - URL category creation split into create-then-populate to avoid ghost objects
 - Fixed bash argument overflow on large imports
