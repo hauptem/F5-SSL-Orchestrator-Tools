@@ -1,10 +1,13 @@
 # DGCat-Admin v4.3 Release Notes - March 30 2026
 
 **Large Dataset Support**
-- Tested with 5,000-entry URL categories and 1000-entry address datagroups
-- Fixed bash argument overflow on large imports
+- Tested with 10000-entry URL categories and 1000-entry address datagroups
+- set API timeout to 60s to accomodate large dataset publishing
 - URL category creation split into create-then-populate to avoid ghost objects
-- PowerShell API timeout increased from 10s to 30s to accomodate large datasets
+- Fixed bash argument overflow on large imports
+
+**UI**  
+- Fixed a few more minor color discrepancies between powershell and bash UI
 
 **Import Validation**
 - CIDR alignment check prevents HTTP 400 if trying to install misaligned subnets via API
