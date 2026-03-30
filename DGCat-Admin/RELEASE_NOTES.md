@@ -42,11 +42,11 @@
 
 **New Features**
 - Create an Empty Datagroup or URL Category menu option
-- Logging toggle to disable/enable tool logging 
+- Logging toggle variable to disable/enable tool logging via configuration
 
 **Deployment**
 - Skips current device when no pending changes exist on that device (if a user used the write feature prior to deployment)
-- Step numbering adjusts dynamically
+- Deployment Step numbering adjusts dynamically
 - Pre-check failures now show as SKIP in summary; FAIL status is reserved for actual deploy failures
 - Connected host backups are saved within a site subfolder when the host is in a fleet
 
