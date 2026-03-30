@@ -251,51 +251,7 @@ When you open a datagroup or URL category in the editor, the tool fetches the cu
 
 The editor displays a full paginated view with all available commands:
 
-```
-  ╔══════════════════════════════════════════════════════════════════════════╗
-                             DGCat-Admin Editor
-  ╚══════════════════════════════════════════════════════════════════════════╝
-  URL Category: sslo-bypass-domains
-  URLs: 247
-  ──────────────────────────────────────────────────────────────────────────
-  NUM     ENTRY
-  ──────────────────────────────────────────────────────────────────────────
-  1       https://akamai.com/
-  2       https://*.amazonaws.com/
-  3       https://apple.com/
-  4       https://*.azure.com/
-  5       https://cloudflare.com/
-  6       https://*.crashlytics.com/
-  7       https://crl.microsoft.com/
-  8       https://*.digicert.com/
-  9       https://*.globalsign.com/
-  10      https://godaddy.com/
-  11      https://*.googleapis.com/
-  12      https://*.gstatic.com/
-  13      https://*.letsencrypt.org/
-  14      https://login.microsoftonline.com/
-  15      https://*.office365.com/
-  16      https://*.okta.com/
-  17      https://*.pki.goog/
-  18      https://*.symantec.com/
-  19      https://*.verisign.com/
-  20      https://*.windowsupdate.com/
-  ──────────────────────────────────────────────────────────────────────────
-  Showing 1-20 of 247 entries (Page 1/13)
-  Sort: Original
-  ──────────────────────────────────────────────────────────────────────────
-  n) Next page    p) Previous page    g) Go to page
-  f) Filter       c) Clear filter     s) Change sort
-
-  a) Add entry    d) Delete entry     x) Delete by pattern
-
-  w) Apply changes (write to current device)
-  D) Deploy to fleet
-
-  q) Done (return to main menu)
-
-  Select option:
-```
+<img width="693" height="734" alt="Image" src="https://github.com/user-attachments/assets/4d1dc329-b1f0-413f-9bb7-80db3480e7e8" />
 
 ### Navigation
 
