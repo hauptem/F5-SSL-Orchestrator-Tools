@@ -353,10 +353,10 @@ A file called `fleet.conf` is created by the script in your backup directory at 
 # DC2|bigip02.lablocal.com
 #
 # Site names: letters, numbers, dashes, underscores only
-DC1|bigip01-mgmt.dc1.example.com
-DC1|bigip02-mgmt.dc1.example.com
-DC2|bigip01-mgmt.dc2.example.com
-DC2|bigip02-mgmt.dc2.example.com
+East|ssloe1.company.com
+East|ssloe2.company.com
+West|sslow1.company.com
+West|sslow2.company.com
 ```
 
 Site labels are used for grouping in the deployment scope selection and in the deployment summary. Use datacenter names, environment names, or whatever labeling scheme makes sense for your topology.
