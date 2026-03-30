@@ -4,10 +4,10 @@
 - Tested with 5,000-entry URL categories and 1000-entry address datagroups
 - Fixed bash argument overflow on large imports
 - URL category creation split into create-then-populate to avoid ghost objects
-- PowerShell API timeout increased from 10s to 30s
+- PowerShell API timeout increased from 10s to 30s to accomodate large datasets
 
 **Import Validation**
-- CIDR alignment check prevents HTTP 400 on misaligned subnets
+- CIDR alignment check prevents HTTP 400 if trying to install misaligned subnets via API
 - CSV duplicates removed via dedup function before applying with reported count corrected
 
 **Performance**
