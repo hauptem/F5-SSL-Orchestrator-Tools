@@ -339,6 +339,7 @@ Next, you select which devices to deploy to:
 
 - **Entire topology** — All fleet hosts except the one you're currently connected to
 - **Specific site** — All hosts at a particular site
+- **Hosts** - Select any combination of hosts in your fleet
 
 The device you're connected to is automatically excluded from the fleet target list since it's handled separately.
 
