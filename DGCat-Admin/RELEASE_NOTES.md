@@ -11,6 +11,7 @@
 
 **Bug Fixes**
 - Fixed a stupid header conflict error that was causing .NET to fail configuration saves in powershell
+- Fixed a bash issue when adding a record to an empty datagroup or URL category
 
 # DGCat-Admin v4.3 Release Notes - March 30 2026
 
