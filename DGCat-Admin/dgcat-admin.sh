@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.3
+# Version: 4.5
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -2400,7 +2400,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.3                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.5                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -2411,6 +2411,7 @@ show_main_menu() {
     echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Delete Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}View/Edit a Datagroup or URL Category${NC}                ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}6)${NC}  ${WHITE}Search${NC}                                               ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
@@ -5157,6 +5158,414 @@ editor_submenu() {
         esac
     done
 }
+# =============================================================================
+# OPTION 6: FLEET LOOKING GLASS
+# =============================================================================
+menu_fleet_looking_glass() {
+    log_section "DGCat-Admin Search"
+    
+    # Require fleet config
+    if [ ${#FLEET_HOSTS[@]} -eq 0 ]; then
+        log_error "No fleet configuration loaded. Configure fleet.conf to use this feature."
+        press_enter_to_continue
+        return
+    fi
+    
+    echo ""
+    echo -e "  ${WHITE}What would you like to inspect?${NC}"
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo ""
+    local type_choice
+    read -rp "  Select [0-2]: " type_choice
+    
+    local object_type=""
+    local object_name=""
+    local partition=""
+    
+    case "${type_choice}" in
+        1)
+            object_type="datagroup"
+            # Select partition
+            if [ ${#PARTITION_LIST[@]} -gt 1 ]; then
+                partition=$(select_partition)
+                [ -z "${partition}" ] && return
+            else
+                partition="${PARTITION_LIST[0]}"
+            fi
+            echo ""
+            read -rp "  Enter datagroup name (or 'q' to cancel): " object_name
+            if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
+                return
+            fi
+            object_name=$(strip_partition_prefix "${object_name}")
+            ;;
+        2)
+            object_type="urlcat"
+            echo ""
+            read -rp "  Enter URL category name (or 'q' to cancel): " object_name
+            if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
+                return
+            fi
+            ;;
+        *)
+            return
+            ;;
+    esac
+    
+    # Select search scope
+    echo ""
+    echo -e "  ${WHITE}Select search scope:${NC}"
+    echo ""
+    echo -e "    ${YELLOW}1)${NC} ${WHITE}All fleet hosts${NC}"
+    echo -e "    ${YELLOW}2)${NC} ${WHITE}Select by site${NC}"
+    echo -e "    ${YELLOW}3)${NC} ${WHITE}Select by host${NC}"
+    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo ""
+    local scope_type
+    read -rp "  Select [0-3]: " scope_type
+    
+    local -a target_hosts=()
+    local -a target_sites_list=()
+    
+    case "${scope_type}" in
+        1)
+            # All fleet hosts
+            target_hosts=("${FLEET_HOSTS[@]}")
+            target_sites_list=("${FLEET_SITES[@]}")
+            ;;
+        2)
+            # Select by site
+            echo ""
+            for ((s=0; s<${#FLEET_UNIQUE_SITES[@]}; s++)); do
+                local site="${FLEET_UNIQUE_SITES[$s]}"
+                local site_count
+                site_count=$(count_site_hosts "${site}")
+                local site_host_word="hosts"
+                [ ${site_count} -eq 1 ] && site_host_word="host"
+                echo -e "    ${YELLOW}$((s + 1)))${NC} ${WHITE}${site}${NC} (${site_count} ${site_host_word})"
+            done
+            echo ""
+            local site_input
+            read -rp "  Enter site numbers (comma-separate for multiple): " site_input
+            
+            if [ -z "${site_input}" ]; then
+                return
+            fi
+            
+            IFS=',' read -ra site_selections <<< "${site_input}"
+            for sel in "${site_selections[@]}"; do
+                sel=$(echo "${sel}" | tr -d ' ')
+                if [[ "${sel}" =~ ^[0-9]+$ ]] && [ "${sel}" -ge 1 ] && [ "${sel}" -le ${#FLEET_UNIQUE_SITES[@]} ]; then
+                    local selected_site="${FLEET_UNIQUE_SITES[$((sel - 1))]}"
+                    for i in "${!FLEET_HOSTS[@]}"; do
+                        if [ "${FLEET_SITES[$i]}" == "${selected_site}" ]; then
+                            target_hosts+=("${FLEET_HOSTS[$i]}")
+                            target_sites_list+=("${FLEET_SITES[$i]}")
+                        fi
+                    done
+                fi
+            done
+            ;;
+        3)
+            # Select by host
+            echo ""
+            for ((h=0; h<${#FLEET_HOSTS[@]}; h++)); do
+                echo -e "    ${YELLOW}$((h + 1)))${NC} ${WHITE}${FLEET_HOSTS[$h]} (${FLEET_SITES[$h]})${NC}"
+            done
+            echo ""
+            local host_input
+            read -rp "  Enter host numbers (comma-separate for multiple): " host_input
+            
+            if [ -z "${host_input}" ]; then
+                return
+            fi
+            
+            IFS=',' read -ra host_selections <<< "${host_input}"
+            for sel in "${host_selections[@]}"; do
+                sel=$(echo "${sel}" | tr -d ' ')
+                if [[ "${sel}" =~ ^[0-9]+$ ]] && [ "${sel}" -ge 1 ] && [ "${sel}" -le ${#FLEET_HOSTS[@]} ]; then
+                    local idx=$((sel - 1))
+                    target_hosts+=("${FLEET_HOSTS[$idx]}")
+                    target_sites_list+=("${FLEET_SITES[$idx]}")
+                fi
+            done
+            ;;
+        *)
+            return
+            ;;
+    esac
+    
+    if [ ${#target_hosts[@]} -eq 0 ]; then
+        log_warn "No valid scope selected."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Pull from fleet
+    clear
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  FLEET QUERY: ${object_name}${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    
+    local orig_host="${REMOTE_HOST}"
+    
+    declare -A entry_hosts      # entry -> "host1|host2|..."
+    declare -a pulled_hosts     # hosts that were pulled
+    declare -A host_counts      # host -> entry count
+    declare -A host_sites       # host -> site name
+    
+    for ((h=0; h<${#target_hosts[@]}; h++)); do
+        local host="${target_hosts[$h]}"
+        local site="${target_sites_list[$h]}"
+        host_sites["${host}"]="${site}"
+        
+        echo -ne "  ${WHITE}[....] ${host} (${site})${NC}\r"
+        
+        REMOTE_HOST="${host}"
+        
+        # Test connectivity
+        if ! api_get "/mgmt/tm/sys/version" >/dev/null 2>&1; then
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Connection failed${NC}"
+            continue
+        fi
+        
+        # Pull entries
+        local entries=""
+        local count=0
+        
+        if [ "${object_type}" == "datagroup" ]; then
+            if ! api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${object_name}" >/dev/null 2>&1; then
+                echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Object not found${NC}"
+                continue
+            fi
+            while IFS='|' read -r key value; do
+                [ -z "${key}" ] && continue
+                local entry="${key}"
+                if [ -n "${entry_hosts[${entry}]+x}" ]; then
+                    entry_hosts["${entry}"]="${entry_hosts[${entry}]}|${host}"
+                else
+                    entry_hosts["${entry}"]="${host}"
+                fi
+                count=$((count + 1))
+            done < <(get_internal_datagroup_records_remote "${partition}" "${object_name}")
+        else
+            if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${object_name}" >/dev/null 2>&1; then
+                echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Object not found${NC}"
+                continue
+            fi
+            while IFS= read -r url; do
+                [ -z "${url}" ] && continue
+                if [ -n "${entry_hosts[${url}]+x}" ]; then
+                    entry_hosts["${url}"]="${entry_hosts[${url}]}|${host}"
+                else
+                    entry_hosts["${url}"]="${host}"
+                fi
+                count=$((count + 1))
+            done < <(get_url_category_entries_remote "${object_name}")
+        fi
+        
+        pulled_hosts+=("${host}")
+        host_counts["${host}"]=${count}
+        echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site}) - ${count} entries${NC}"
+    done
+    
+    REMOTE_HOST="${orig_host}"
+    
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    
+    local total_pulled=${#pulled_hosts[@]}
+    
+    if [ ${total_pulled} -eq 0 ]; then
+        log_error "No hosts returned data."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Build display info
+    local object_display="${object_name}"
+    if [ "${object_type}" == "datagroup" ]; then
+        object_display="/${partition}/${object_name} (Datagroup)"
+    else
+        object_display="${object_name} (URL Category)"
+    fi
+    
+    # Viewer loop
+    while true; do
+        clear
+        echo ""
+        echo -e "  ${CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${CYAN}${NC}${WHITE}                         DGCat-Admin Search                            ${NC}${CYAN}${NC}"
+        echo -e "  ${CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "  ${WHITE}Object: ${YELLOW}${object_display}${NC}"
+        echo -e "  ${WHITE}Hosts:  ${GREEN}${total_pulled}${NC} ${WHITE}of ${#target_hosts[@]} pulled | ${#entry_hosts[@]} unique entries across fleet${NC}"
+        echo ""
+        # Host counts
+        for fleet_host in "${pulled_hosts[@]}"; do
+            local site="${host_sites[${fleet_host}]}"
+            echo -e "    ${GREEN}*${NC} ${WHITE}${fleet_host} (${site}): ${host_counts[${fleet_host}]} entries${NC}"
+        done
+        echo ""
+        echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
+        echo ""
+        echo -e "  ${YELLOW}s)${NC} Search      ${YELLOW}d)${NC} Diff      ${YELLOW}q)${NC} Quit"
+        echo ""
+        local input
+        read -rp "  Select option: " input
+        
+        [ -z "${input}" ] && continue
+        
+        if [ "${input}" == "q" ] || [ "${input}" == "Q" ]; then
+            break
+        fi
+        
+        if [ "${input}" == "d" ] || [ "${input}" == "D" ]; then
+            # Diff
+            clear
+            echo ""
+            echo -e "  ${CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "  ${CYAN}${NC}${WHITE}                         DGCat-Admin Search                            ${NC}${CYAN}${NC}"
+            echo -e "  ${CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "  ${WHITE}Object: ${YELLOW}${object_display}${NC}"
+            echo -e "  ${WHITE}Hosts:  ${GREEN}${total_pulled}${NC} ${WHITE}of ${#target_hosts[@]} pulled | ${#entry_hosts[@]} unique entries across fleet${NC}"
+            echo ""
+            echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+            local diff_label=""
+            if [ "${object_type}" == "datagroup" ]; then
+                diff_label="Datagroup: /${partition}/${object_name}"
+            else
+                diff_label="URL Category: ${object_name}"
+            fi
+            echo -e "  ${WHITE}  ${diff_label}${NC}"
+            echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+            echo ""
+            
+            local drift_count=0
+            local consistent_count=0
+            
+            for entry in "${!entry_hosts[@]}"; do
+                local hosts_with="${entry_hosts[${entry}]}"
+                local host_count=$(( $(echo "${hosts_with}" | tr -cd '|' | wc -c) + 1 ))
+                
+                if [ ${host_count} -lt ${total_pulled} ]; then
+                    drift_count=$((drift_count + 1))
+                    echo -e "  ${YELLOW}${entry}${NC}"
+                    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+                    for fleet_host in "${pulled_hosts[@]}"; do
+                        local site="${host_sites[${fleet_host}]}"
+                        if [[ "|${hosts_with}|" == *"|${fleet_host}|"* ]] || [[ "${hosts_with}" == "${fleet_host}" ]]; then
+                            echo -e "    ${WHITE}${fleet_host} (${site})${NC}"
+                        else
+                            echo -e "    ${WHITE}${fleet_host} (${site})${NC} - ${RED}missing${NC}"
+                        fi
+                    done
+                    echo ""
+                else
+                    consistent_count=$((consistent_count + 1))
+                fi
+            done
+            
+            if [ ${drift_count} -eq 0 ]; then
+                echo -e "  ${GREEN}All ${#entry_hosts[@]} entries consistent across all ${total_pulled} hosts.${NC}"
+            else
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo -e "  ${WHITE}${drift_count} inconsistent | ${consistent_count} consistent across all hosts${NC}"
+            fi
+            echo ""
+            press_enter_to_continue
+            continue
+        fi
+        
+        if [ "${input}" == "s" ] || [ "${input}" == "S" ]; then
+            echo ""
+            local search_term
+            read -rp "  Enter search pattern: " search_term
+            [ -z "${search_term}" ] && continue
+            
+            clear
+            echo ""
+            echo -e "  ${CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "  ${CYAN}${NC}${WHITE}                         DGCat-Admin Search                            ${NC}${CYAN}${NC}"
+            echo -e "  ${CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "  ${WHITE}Object: ${YELLOW}${object_display}${NC}"
+            echo -e "  ${WHITE}Hosts:  ${GREEN}${total_pulled}${NC} ${WHITE}of ${#target_hosts[@]} pulled | ${#entry_hosts[@]} unique entries across fleet${NC}"
+            echo ""
+            echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+            echo -e "  ${WHITE}  SEARCH: ${search_term}${NC}"
+            echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+            echo ""
+            
+            local search_lower="${search_term,,}"
+            local match_count=0
+            
+            # Collect matching entries and classify by consistency
+            local -a consistent_matches=()
+            local -a inconsistent_matches=()
+            
+            for entry in "${!entry_hosts[@]}"; do
+                local entry_lower="${entry,,}"
+                if [[ "${entry_lower}" != *"${search_lower}"* ]]; then
+                    continue
+                fi
+                
+                match_count=$((match_count + 1))
+                local hosts_with="${entry_hosts[${entry}]}"
+                local host_count=$(( $(echo "${hosts_with}" | tr -cd '|' | wc -c) + 1 ))
+                
+                if [ ${host_count} -ge ${total_pulled} ]; then
+                    consistent_matches+=("${entry}")
+                else
+                    inconsistent_matches+=("${entry}")
+                fi
+            done
+            
+            if [ ${match_count} -eq 0 ]; then
+                echo -e "  ${WHITE}No matches for '${search_term}'${NC}"
+            else
+                # Display consistent matches (on all hosts) - listed once
+                if [ ${#consistent_matches[@]} -gt 0 ]; then
+                    echo -e "  ${GREEN}Matches on all ${total_pulled} hosts (${#consistent_matches[@]}):${NC}"
+                    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+                    for m in "${consistent_matches[@]}"; do
+                        echo -e "          ${YELLOW}${m}${NC}"
+                    done
+                    echo ""
+                fi
+                
+                # Display inconsistent matches (some hosts) - per-host detail
+                if [ ${#inconsistent_matches[@]} -gt 0 ]; then
+                    echo -e "  ${YELLOW}Partial matches (${#inconsistent_matches[@]}):${NC}"
+                    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+                    for entry in "${inconsistent_matches[@]}"; do
+                        echo -e "  ${YELLOW}${entry}${NC}"
+                        local hosts_with="${entry_hosts[${entry}]}"
+                        for fleet_host in "${pulled_hosts[@]}"; do
+                            local site="${host_sites[${fleet_host}]}"
+                            if [[ "|${hosts_with}|" == *"|${fleet_host}|"* ]] || [[ "${hosts_with}" == "${fleet_host}" ]]; then
+                                echo -e "    ${WHITE}${fleet_host} (${site})${NC}"
+                            else
+                                echo -e "    ${WHITE}${fleet_host} (${site})${NC} - ${RED}missing${NC}"
+                            fi
+                        done
+                        echo ""
+                    done
+                fi
+                
+                echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+                echo -e "  ${WHITE}${match_count} unique matches | ${GREEN}${#consistent_matches[@]} on all hosts${NC}, ${YELLOW}${#inconsistent_matches[@]} inconsistent${NC}"
+            fi
+            echo ""
+            
+            press_enter_to_continue
+            continue
+        fi
+        
+        log_warn "Invalid selection."
+        press_enter_to_continue
+    done
+}
 # Option 7: Edit a Datagroup or URL Category
 menu_edit_datagroup_or_category() {
     log_section "Edit a Datagroup or URL Category"
@@ -5334,7 +5743,7 @@ main() {
         # Welcome banner
         echo ""
         echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.3                        ${NC}${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.5                        ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
@@ -5386,7 +5795,7 @@ main() {
         while true; do
             show_main_menu
             
-            read -rp "  Select option [0-5]: " choice
+            read -rp "  Select option [0-6]: " choice
             
             case "${choice}" in
                 1) menu_create_empty ;;
@@ -5394,6 +5803,7 @@ main() {
                 3) menu_delete_datagroup ;;
                 4) menu_export_to_csv ;;
                 5) menu_edit_datagroup_or_category ;;
+                6) menu_fleet_looking_glass ;;
                 0)
                     log_section "Session End"
                     log_info "Session ended: $(date)"

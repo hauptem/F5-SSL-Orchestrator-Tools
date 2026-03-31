@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.3
+# Version: 4.5
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -1634,7 +1634,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v4.3                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v4.5                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -1668,6 +1668,11 @@ function Show-MainMenu {
     Write-Host "   " -NoNewline -ForegroundColor White
     Write-Host "5)" -NoNewline -ForegroundColor Yellow
     Write-Host "  View/Edit a Datagroup or URL Category                " -NoNewline -ForegroundColor White
+    Write-Host "║" -ForegroundColor Cyan
+    Write-Host "  ║" -NoNewline -ForegroundColor Cyan
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "6)" -NoNewline -ForegroundColor Yellow
+    Write-Host "  Search                                               " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
@@ -2712,6 +2717,406 @@ function Invoke-ExportUrlCategory {
 }
 
 # =============================================================================
+# OPTION 6: FLEET LOOKING GLASS
+# =============================================================================
+
+function Invoke-FleetLookingGlass {
+    Write-LogSection "DGCat-Admin Search"
+    
+    if ($script:FleetHosts.Count -eq 0) {
+        Write-LogError "No fleet configuration loaded. Configure fleet.conf to use this feature."
+        Press-EnterToContinue
+        return
+    }
+    
+    Write-Host ""
+    Write-Host "  What would you like to inspect?" -ForegroundColor White
+    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "Datagroup" -ForegroundColor White
+    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "URL Category" -ForegroundColor White
+    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host "Cancel" -ForegroundColor White
+    Write-Host ""
+    $typeChoice = Read-Host "  Select [0-2]"
+    
+    $objectType = ""
+    $objectName = ""
+    $partition = ""
+    
+    switch ($typeChoice) {
+        "1" {
+            $objectType = "datagroup"
+            if ($script:PARTITIONS.Count -gt 1) {
+                $partition = Select-Partition
+                if (-not $partition) { return }
+            } else {
+                $partition = $script:PARTITIONS[0]
+            }
+            Write-Host ""
+            $objectName = Read-Host "  Enter datagroup name (or 'q' to cancel)"
+            if ([string]::IsNullOrWhiteSpace($objectName) -or $objectName -eq "q") { return }
+            $objectName = Remove-PartitionPrefix -Name $objectName
+        }
+        "2" {
+            $objectType = "urlcat"
+            Write-Host ""
+            $objectName = Read-Host "  Enter URL category name (or 'q' to cancel)"
+            if ([string]::IsNullOrWhiteSpace($objectName) -or $objectName -eq "q") { return }
+        }
+        default { return }
+    }
+    
+    # Select search scope
+    Write-Host ""
+    Write-Host "  Select search scope:" -ForegroundColor White
+    Write-Host ""
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "1)" -ForegroundColor Yellow; Write-Host " All fleet hosts" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "2)" -ForegroundColor Yellow; Write-Host " Select by site" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "3)" -ForegroundColor Yellow; Write-Host " Select by host" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "0)" -ForegroundColor Yellow; Write-Host " Cancel" -ForegroundColor White
+    Write-Host ""
+    $scopeType = Read-Host "  Select [0-3]"
+    
+    $targetHosts = @()
+    $targetSites = @()
+    
+    switch ($scopeType) {
+        "1" {
+            $targetHosts = @($script:FleetHosts)
+            $targetSites = @($script:FleetSites)
+        }
+        "2" {
+            Write-Host ""
+            for ($s = 0; $s -lt $script:FleetUniqueSites.Count; $s++) {
+                $site = $script:FleetUniqueSites[$s]
+                $siteCount = Get-SiteHostCount -SiteId $site
+                $siteHostWord = $(if ($siteCount -eq 1) { "host" } else { "hosts" })
+                Write-Host -NoNewline "    "; Write-Host -NoNewline "$($s + 1))" -ForegroundColor Yellow
+                Write-Host " $site ($siteCount $siteHostWord)" -ForegroundColor White
+            }
+            Write-Host ""
+            $siteInput = Read-Host "  Enter site numbers (comma-separate for multiple)"
+            if ([string]::IsNullOrWhiteSpace($siteInput)) { return }
+            
+            $siteSelections = $siteInput -split ',' | ForEach-Object { $_.Trim() }
+            foreach ($sel in $siteSelections) {
+                if ($sel -match '^\d+$' -and [int]$sel -ge 1 -and [int]$sel -le $script:FleetUniqueSites.Count) {
+                    $selectedSite = $script:FleetUniqueSites[[int]$sel - 1]
+                    for ($i = 0; $i -lt $script:FleetHosts.Count; $i++) {
+                        if ($script:FleetSites[$i] -eq $selectedSite) {
+                            $targetHosts += $script:FleetHosts[$i]
+                            $targetSites += $script:FleetSites[$i]
+                        }
+                    }
+                }
+            }
+        }
+        "3" {
+            Write-Host ""
+            for ($h = 0; $h -lt $script:FleetHosts.Count; $h++) {
+                Write-Host -NoNewline "    "; Write-Host -NoNewline "$($h + 1))" -ForegroundColor Yellow
+                Write-Host " $($script:FleetHosts[$h]) ($($script:FleetSites[$h]))" -ForegroundColor White
+            }
+            Write-Host ""
+            $hostInput = Read-Host "  Enter host numbers (comma-separate for multiple)"
+            if ([string]::IsNullOrWhiteSpace($hostInput)) { return }
+            
+            $hostSelections = $hostInput -split ',' | ForEach-Object { $_.Trim() }
+            foreach ($sel in $hostSelections) {
+                if ($sel -match '^\d+$' -and [int]$sel -ge 1 -and [int]$sel -le $script:FleetHosts.Count) {
+                    $idx = [int]$sel - 1
+                    $targetHosts += $script:FleetHosts[$idx]
+                    $targetSites += $script:FleetSites[$idx]
+                }
+            }
+        }
+        default { return }
+    }
+    
+    if ($targetHosts.Count -eq 0) {
+        Write-LogWarn "No valid scope selected."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Pull from fleet
+    Clear-Host
+    Write-Host ""
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "    FLEET QUERY: $objectName" -ForegroundColor White
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    
+    $origHost = $script:RemoteHost
+    
+    $entryHosts = @{}       # entry -> list of hosts
+    $pulledHosts = @()
+    $hostCounts = @{}
+    $hostSites = @{}
+    
+    for ($h = 0; $h -lt $targetHosts.Count; $h++) {
+        $hostName = $targetHosts[$h]
+        $siteId = $targetSites[$h]
+        $hostSites[$hostName] = $siteId
+        
+        Write-Host "`r  [....] $hostName ($siteId)" -NoNewline -ForegroundColor White
+        
+        $script:RemoteHost = $hostName
+        
+        # Test connectivity
+        $connResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/version"
+        if (-not $connResult.Success) {
+            Write-Host "`r$(' ' * 80)" -NoNewline
+            Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
+            Write-Host " $hostName ($siteId) - Connection failed" -ForegroundColor White
+            continue
+        }
+        
+        # Pull entries
+        $entries = @()
+        if ($objectType -eq "datagroup") {
+            $records = Get-DatagroupRecordsRemote -Partition $partition -Name $objectName
+            if ($records.Count -eq 0) {
+                # Check if object exists vs empty
+                $existResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${partition}~${objectName}"
+                if (-not $existResult.Success) {
+                    Write-Host "`r$(' ' * 80)" -NoNewline
+                    Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
+                    Write-Host " $hostName ($siteId) - Object not found" -ForegroundColor White
+                    continue
+                }
+            }
+            foreach ($rec in $records) {
+                $entry = $rec.Key
+                if (-not $entryHosts.ContainsKey($entry)) {
+                    $entryHosts[$entry] = @()
+                }
+                $entryHosts[$entry] += $hostName
+            }
+            $entries = $records
+        } else {
+            $urls = Get-UrlCategoryEntriesRemote -Name $objectName
+            if ($urls.Count -eq 0) {
+                $existResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~${objectName}"
+                if (-not $existResult.Success) {
+                    Write-Host "`r$(' ' * 80)" -NoNewline
+                    Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
+                    Write-Host " $hostName ($siteId) - Object not found" -ForegroundColor White
+                    continue
+                }
+            }
+            foreach ($url in $urls) {
+                if (-not $entryHosts.ContainsKey($url)) {
+                    $entryHosts[$url] = @()
+                }
+                $entryHosts[$url] += $hostName
+            }
+            $entries = $urls
+        }
+        
+        $pulledHosts += $hostName
+        $hostCounts[$hostName] = $entries.Count
+        Write-Host "`r$(' ' * 80)" -NoNewline
+        Write-Host "`r  [ OK ]" -NoNewline -ForegroundColor Green
+        Write-Host " $hostName ($siteId) - $($entries.Count) entries" -ForegroundColor White
+    }
+    
+    $script:RemoteHost = $origHost
+    
+    Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    
+    $totalPulled = $pulledHosts.Count
+    
+    if ($totalPulled -eq 0) {
+        Write-LogError "No hosts returned data."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Build display info
+    if ($objectType -eq "datagroup") {
+        $objectDisplay = "/${partition}/${objectName} (Datagroup)"
+    } else {
+        $objectDisplay = "${objectName} (URL Category)"
+    }
+    
+    # Viewer loop
+    while ($true) {
+        Clear-Host
+        Write-Host ""
+        Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "                           DGCat-Admin Search                            " -ForegroundColor White
+        Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host -NoNewline "  Object: " -ForegroundColor White
+        Write-Host $objectDisplay -ForegroundColor Yellow
+        Write-Host -NoNewline "  Hosts:  " -ForegroundColor White
+        Write-Host -NoNewline "$totalPulled" -ForegroundColor Green
+        Write-Host " of $($targetHosts.Count) pulled | $($entryHosts.Count) unique entries across fleet" -ForegroundColor White
+        Write-Host ""
+        # Host counts
+        foreach ($fleetHost in $pulledHosts) {
+            $site = $hostSites[$fleetHost]
+            Write-Host -NoNewline "    " -ForegroundColor White
+            Write-Host -NoNewline "*" -ForegroundColor Green
+            Write-Host " $fleetHost ($site): $($hostCounts[$fleetHost]) entries" -ForegroundColor White
+        }
+        Write-Host ""
+        Write-Host "  ──────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host -NoNewline "  "; Write-Host -NoNewline "s)" -ForegroundColor Yellow; Write-Host -NoNewline " Search      " -ForegroundColor White
+        Write-Host -NoNewline "d)" -ForegroundColor Yellow; Write-Host -NoNewline " Diff      " -ForegroundColor White
+        Write-Host -NoNewline "q)" -ForegroundColor Yellow; Write-Host " Quit" -ForegroundColor White
+        Write-Host ""
+        $input = Read-Host "  Select option"
+        
+        if ([string]::IsNullOrWhiteSpace($input)) { continue }
+        
+        if ($input -eq "q" -or $input -eq "Q") { break }
+        
+        if ($input -eq "d" -or $input -eq "D") {
+            Clear-Host
+            Write-Host ""
+            Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+            Write-Host "                           DGCat-Admin Search                            " -ForegroundColor White
+            Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+            Write-Host -NoNewline "  Object: " -ForegroundColor White
+            Write-Host $objectDisplay -ForegroundColor Yellow
+            Write-Host -NoNewline "  Hosts:  " -ForegroundColor White
+            Write-Host -NoNewline "$totalPulled" -ForegroundColor Green
+            Write-Host " of $($targetHosts.Count) pulled | $($entryHosts.Count) unique entries across fleet" -ForegroundColor White
+            Write-Host ""
+            Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+            if ($objectType -eq "datagroup") {
+                $diffLabel = "Datagroup: /${partition}/${objectName}"
+            } else {
+                $diffLabel = "URL Category: ${objectName}"
+            }
+            Write-Host "    $diffLabel" -ForegroundColor White
+            Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+            Write-Host ""
+            
+            $driftCount = 0
+            $consistentCount = 0
+            
+            foreach ($entry in $entryHosts.Keys) {
+                $hostsWithEntry = $entryHosts[$entry]
+                
+                if ($hostsWithEntry.Count -lt $totalPulled) {
+                    $driftCount++
+                    Write-Host "  $entry" -ForegroundColor Yellow
+                    Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+                    foreach ($fleetHost in $pulledHosts) {
+                        $site = $hostSites[$fleetHost]
+                        if ($hostsWithEntry -contains $fleetHost) {
+                            Write-Host "    $fleetHost ($site)" -ForegroundColor White
+                        } else {
+                            Write-Host -NoNewline "    $fleetHost ($site) - " -ForegroundColor White; Write-Host "missing" -ForegroundColor Red
+                        }
+                    }
+                    Write-Host ""
+                } else {
+                    $consistentCount++
+                }
+            }
+            
+            if ($driftCount -eq 0) {
+                Write-Host "  All $($entryHosts.Count) entries consistent across all $totalPulled hosts." -ForegroundColor Green
+            } else {
+                Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                Write-Host "  $driftCount inconsistent | $consistentCount consistent across all hosts" -ForegroundColor White
+            }
+            Write-Host ""
+            Press-EnterToContinue
+            continue
+        }
+        
+        if ($input -eq "s" -or $input -eq "S") {
+            Write-Host ""
+            $searchTerm = Read-Host "  Enter search pattern"
+            if ([string]::IsNullOrWhiteSpace($searchTerm)) { continue }
+            
+            Clear-Host
+            Write-Host ""
+            Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+            Write-Host "                           DGCat-Admin Search                            " -ForegroundColor White
+            Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+            Write-Host -NoNewline "  Object: " -ForegroundColor White
+            Write-Host $objectDisplay -ForegroundColor Yellow
+            Write-Host -NoNewline "  Hosts:  " -ForegroundColor White
+            Write-Host -NoNewline "$totalPulled" -ForegroundColor Green
+            Write-Host " of $($targetHosts.Count) pulled | $($entryHosts.Count) unique entries across fleet" -ForegroundColor White
+            Write-Host ""
+            Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+            Write-Host "    SEARCH: $searchTerm" -ForegroundColor White
+            Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+            Write-Host ""
+            
+            $searchLower = $searchTerm.ToLower()
+            $matchCount = 0
+            
+            # Collect matching entries and classify by consistency
+            $consistentMatches = @()
+            $inconsistentMatches = @()
+            
+            foreach ($entry in $entryHosts.Keys) {
+                if ($entry.ToLower().Contains($searchLower)) {
+                    $matchCount++
+                    if ($entryHosts[$entry].Count -ge $totalPulled) {
+                        $consistentMatches += $entry
+                    } else {
+                        $inconsistentMatches += $entry
+                    }
+                }
+            }
+            
+            if ($matchCount -eq 0) {
+                Write-Host "  No matches for '$searchTerm'" -ForegroundColor White
+            } else {
+                # Display consistent matches (on all hosts) - listed once
+                if ($consistentMatches.Count -gt 0) {
+                    Write-Host "  Matches on all $totalPulled hosts ($($consistentMatches.Count)):" -ForegroundColor Green
+                    Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+                    foreach ($m in $consistentMatches) {
+                        Write-Host "          $m" -ForegroundColor Yellow
+                    }
+                    Write-Host ""
+                }
+                
+                # Display inconsistent matches (some hosts) - per-host detail
+                if ($inconsistentMatches.Count -gt 0) {
+                    Write-Host "  Partial matches ($($inconsistentMatches.Count)):" -ForegroundColor Yellow
+                    Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+                    foreach ($entry in $inconsistentMatches) {
+                        Write-Host "  $entry" -ForegroundColor Yellow
+                        foreach ($fleetHost in $pulledHosts) {
+                            $site = $hostSites[$fleetHost]
+                            if ($entryHosts[$entry] -contains $fleetHost) {
+                                Write-Host "    $fleetHost ($site)" -ForegroundColor White
+                            } else {
+                                Write-Host -NoNewline "    $fleetHost ($site) - " -ForegroundColor White; Write-Host "missing" -ForegroundColor Red
+                            }
+                        }
+                        Write-Host ""
+                    }
+                }
+                
+                Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                Write-Host -NoNewline "  $matchCount unique matches | " -ForegroundColor White
+                Write-Host -NoNewline "$($consistentMatches.Count) on all hosts" -ForegroundColor Green
+                Write-Host -NoNewline ", " -ForegroundColor White
+                Write-Host "$($inconsistentMatches.Count) inconsistent" -ForegroundColor Yellow
+            }
+            Write-Host ""
+            Press-EnterToContinue
+            continue
+        }
+        
+        Write-LogWarn "Invalid selection."
+        Press-EnterToContinue
+    }
+}
+
+# =============================================================================
 # INTERACTIVE EDITOR
 # =============================================================================
 
@@ -3501,7 +3906,7 @@ function Main {
         Write-Host ""
         Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-        Write-Host "                    DGCAT-Admin v4.3                        " -NoNewline -ForegroundColor White
+        Write-Host "                    DGCAT-Admin v4.5                        " -NoNewline -ForegroundColor White
         Write-Host "║" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
         Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -3560,7 +3965,7 @@ function Main {
         while ($true) {
             Show-MainMenu
             
-            $choice = Read-Host "  Select option [0-5]"
+            $choice = Read-Host "  Select option [0-6]"
             
             switch ($choice) {
                 "1" { Invoke-CreateEmpty }
@@ -3568,6 +3973,7 @@ function Main {
                 "3" { Invoke-DeleteMenu }
                 "4" { Invoke-ExportToCsv }
                 "5" { Invoke-EditMenu }
+                "6" { Invoke-FleetLookingGlass }
                 "0" {
                     Write-LogSection "Session End"
                     Write-LogInfo "Session ended: $(Get-Date)"
