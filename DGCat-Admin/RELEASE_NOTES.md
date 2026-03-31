@@ -6,6 +6,9 @@
 - **Search** — Find entries by pattern across the fleet; results are deduplicated before presentation
 - **Diff** — Identify configuration drift; entries missing from one or more hosts are flagged with per-host details
 
+**URL Category enhancement**
+- added a check for all URL category functions that take what the user types i.e. "Pinners" and if this value is not found, prepend sslo-urlCat and retry. This is for some special categories that show as "Pinners" in the GUI but are really named sslo-urlCatPinners
+
 **Bug Fixes**
 - Fixed a stupid header conflict error that was causing .NET to fail configuration saves in powershell
 
