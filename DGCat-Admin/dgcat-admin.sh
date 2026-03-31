@@ -1057,6 +1057,8 @@ load_fleet_config() {
     fi
     
     local -A seen_sites=()
+    local -A seen_hosts=()
+    local -a duplicate_hosts=()
     
     while IFS= read -r line || [ -n "${line}" ]; do
         # Skip empty lines and comments
@@ -1082,6 +1084,14 @@ load_fleet_config() {
             continue
         fi
         
+        # Check for duplicate hosts
+        if [ -n "${seen_hosts[${host}]+x}" ]; then
+            duplicate_hosts+=("${seen_hosts[${host}]}|${host}")
+            duplicate_hosts+=("${site}|${host}")
+            continue
+        fi
+        seen_hosts["${host}"]="${site}"
+        
         FLEET_SITES+=("${site}")
         FLEET_HOSTS+=("${host}")
         
@@ -1091,6 +1101,20 @@ load_fleet_config() {
             FLEET_UNIQUE_SITES+=("${site}")
         fi
     done < "${FLEET_CONFIG_FILE}"
+    
+    # Halt on duplicate hosts
+    if [ ${#duplicate_hosts[@]} -gt 0 ]; then
+        echo ""
+        log_error "Duplicate hosts detected in fleet.conf:"
+        echo ""
+        for dup in "${duplicate_hosts[@]}"; do
+            echo -e "          ${WHITE}${dup}${NC}"
+        done
+        echo ""
+        echo -e "          ${WHITE}Correct fleet.conf and restart.${NC}"
+        echo ""
+        exit 1
+    fi
     
     if [ ${#FLEET_HOSTS[@]} -eq 0 ]; then
         return 1
@@ -4371,8 +4395,8 @@ editor_submenu() {
                     
                     # Check for duplicate
                     local is_dup=false
-                    for existing_key in "${working_keys[@]}"; do
-                        if [ "${existing_key}" == "${new_key}" ]; then
+                    for ((dup_i=0; dup_i<${#working_keys[@]}; dup_i++)); do
+                        if [ "${working_keys[$dup_i]}" == "${new_key}" ]; then
                             is_dup=true
                             break
                         fi
@@ -4407,8 +4431,8 @@ editor_submenu() {
                     
                     # Check for duplicate
                     local is_dup=false
-                    for existing_url in "${working_keys[@]}"; do
-                        if [ "${existing_url}" == "${formatted_url}" ]; then
+                    for ((dup_i=0; dup_i<${#working_keys[@]}; dup_i++)); do
+                        if [ "${working_keys[$dup_i]}" == "${formatted_url}" ]; then
                             is_dup=true
                             break
                         fi
@@ -4605,25 +4629,25 @@ editor_submenu() {
                 local -a additions=()
                 local -a deletions=()
                 
-                for key in "${original_keys[@]}"; do
-                    orig_lookup["${key}"]=1
+                for ((ca_i=0; ca_i<${#original_keys[@]}; ca_i++)); do
+                    orig_lookup["${original_keys[$ca_i]}"]=1
                 done
                 
-                for key in "${working_keys[@]}"; do
-                    work_lookup["${key}"]=1
+                for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
+                    work_lookup["${working_keys[$ca_i]}"]=1
                 done
                 
                 # Deleted = in original but not in working
-                for orig_key in "${original_keys[@]}"; do
-                    if [ -z "${work_lookup[${orig_key}]+x}" ]; then
-                        deletions+=("${orig_key}")
+                for ((ca_i=0; ca_i<${#original_keys[@]}; ca_i++)); do
+                    if [ -z "${work_lookup[${original_keys[$ca_i]}]+x}" ]; then
+                        deletions+=("${original_keys[$ca_i]}")
                     fi
                 done
                 
                 # Added = in working but not in original
-                for work_key in "${working_keys[@]}"; do
-                    if [ -z "${orig_lookup[${work_key}]+x}" ]; then
-                        additions+=("${work_key}")
+                for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
+                    if [ -z "${orig_lookup[${working_keys[$ca_i]}]+x}" ]; then
+                        additions+=("${working_keys[$ca_i]}")
                     fi
                 done
                 
@@ -4674,8 +4698,8 @@ editor_submenu() {
                         echo "# URL Category Backup: ${cat_name}"
                         echo "# Created: $(date)"
                         echo "#"
-                        for orig_url in "${original_keys[@]}"; do
-                            echo "${orig_url}"
+                        for ((bk_i=0; bk_i<${#original_keys[@]}; bk_i++)); do
+                            echo "${original_keys[$bk_i]}"
                         done
                     } > "${backup_file}" 2>/dev/null
                 fi
@@ -4740,8 +4764,12 @@ editor_submenu() {
                 fi
                 
                 # Update original arrays to match working (reset change tracking)
-                original_keys=("${working_keys[@]}")
-                original_values=("${working_values[@]}")
+                original_keys=()
+                original_values=()
+                for ((cp_i=0; cp_i<${#working_keys[@]}; cp_i++)); do
+                    original_keys+=("${working_keys[$cp_i]}")
+                    original_values+=("${working_values[$cp_i]}")
+                done
                 
                 prompt_save_config
                 press_enter_to_continue
@@ -4784,27 +4812,27 @@ editor_submenu() {
                     local -A orig_lookup=()
                     local -A work_lookup=()
                     
-                    for key in "${original_keys[@]}"; do
-                        orig_lookup["${key}"]=1
+                    for ((ca_i=0; ca_i<${#original_keys[@]}; ca_i++)); do
+                        orig_lookup["${original_keys[$ca_i]}"]=1
                     done
                     
-                    for key in "${working_keys[@]}"; do
-                        work_lookup["${key}"]=1
+                    for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
+                        work_lookup["${working_keys[$ca_i]}"]=1
                     done
                     
                     # Build lists of additions and deletions using lookup tables
                     
                     # Deleted = in original but not in working
-                    for orig_key in "${original_keys[@]}"; do
-                        if [ -z "${work_lookup[${orig_key}]+x}" ]; then
-                            deploy_deletions+=("${orig_key}")
+                    for ((ca_i=0; ca_i<${#original_keys[@]}; ca_i++)); do
+                        if [ -z "${work_lookup[${original_keys[$ca_i]}]+x}" ]; then
+                            deploy_deletions+=("${original_keys[$ca_i]}")
                         fi
                     done
                     
                     # Added = in working but not in original
-                    for work_key in "${working_keys[@]}"; do
-                        if [ -z "${orig_lookup[${work_key}]+x}" ]; then
-                            deploy_additions+=("${work_key}")
+                    for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
+                        if [ -z "${orig_lookup[${working_keys[$ca_i]}]+x}" ]; then
+                            deploy_additions+=("${working_keys[$ca_i]}")
                         fi
                     done
                     
@@ -5033,8 +5061,8 @@ editor_submenu() {
                         echo "# Host: ${REMOTE_HOST}"
                         echo "# Created: $(date)"
                         echo "#"
-                        for orig_url in "${original_keys[@]}"; do
-                            echo "${orig_url}"
+                        for ((bk_i=0; bk_i<${#original_keys[@]}; bk_i++)); do
+                            echo "${original_keys[$bk_i]}"
                         done
                     } > "${current_backup}" 2>/dev/null
                 fi
@@ -5074,7 +5102,11 @@ editor_submenu() {
                     fi
                 else
                     local current_urls_json
-                    current_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
+                    if [ ${#working_keys[@]} -gt 0 ]; then
+                        current_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
+                    else
+                        current_urls_json="[]"
+                    fi
                     
                     if modify_url_category_replace_remote "${cat_name}" "${current_urls_json}"; then
                         echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
@@ -5106,8 +5138,12 @@ editor_submenu() {
                 if [ "${current_device_success}" == "true" ]; then
                     current_device_status="OK"
                     current_device_message="Deployed and saved"
-                    original_keys=("${working_keys[@]}")
-                    original_values=("${working_values[@]}")
+                    original_keys=()
+                    original_values=()
+                    for ((cp_i=0; cp_i<${#working_keys[@]}; cp_i++)); do
+                        original_keys+=("${working_keys[$cp_i]}")
+                        original_values+=("${working_values[$cp_i]}")
+                    done
                 fi
                 fi
                 
@@ -5170,7 +5206,11 @@ editor_submenu() {
                     execute_deploy_datagroup "${partition}" "${dg_name}" "${dg_type}" "${deploy_records_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
                 else
                     local deploy_urls_json
-                    deploy_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
+                    if [ ${#working_keys[@]} -gt 0 ]; then
+                        deploy_urls_json=$(printf '%s\n' "${working_keys[@]}" | build_urls_json_remote)
+                    else
+                        deploy_urls_json="[]"
+                    fi
                     
                     execute_deploy_urlcat "${cat_name}" "${deploy_urls_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
                 fi
