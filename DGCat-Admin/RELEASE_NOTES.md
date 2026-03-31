@@ -7,7 +7,7 @@
 - **Diff** — Identify configuration drift; entries missing from one or more hosts are flagged with per-host details
 
 **Bug Fixes**
-- Fixed a stupid .NET header conflict that was preventing saves in powershell
+- Fixed a stupid header conflict error that was causing .NET to fail config save in powershell
 
 # DGCat-Admin v4.3 Release Notes - March 30 2026
 
