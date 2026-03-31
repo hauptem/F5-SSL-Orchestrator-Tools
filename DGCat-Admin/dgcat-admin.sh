@@ -2564,6 +2564,15 @@ menu_create_empty_url_category() {
         return
     fi
     
+    # Check if SSLO version exists
+    local sslo_name="sslo-urlCat${cat_name}"
+    if url_category_exists "${sslo_name}"; then
+        log_error "URL category '${cat_name}' exists as SSLO category '${sslo_name}'."
+        log_info "Use the editor (option 5) to modify existing URL categories."
+        press_enter_to_continue
+        return
+    fi
+    
     # Select default action
     echo ""
     echo -e "  ${WHITE}Select default action for this category:${NC}"
@@ -3776,6 +3785,34 @@ menu_create_url_category() {
                 return
                 ;;
         esac
+    else
+        # Check if SSLO version exists
+        local sslo_name="sslo-urlCat${cat_name}"
+        if url_category_exists "${sslo_name}"; then
+            log_info "Found as SSLO category: ${sslo_name}"
+            cat_name="${sslo_name}"
+            local current_count
+            current_count=$(get_url_category_count "${cat_name}")
+            
+            log_info "URL category '${cat_name}' has ${current_count} URLs."
+            echo ""
+            echo -e "  ${WHITE}How do you want to proceed?${NC}"
+            echo -e "    ${YELLOW}1)${NC} ${WHITE}Overwrite - Replace all existing URLs${NC}"
+            echo -e "    ${YELLOW}2)${NC} ${WHITE}Merge     - Add new URLs to existing (deduplicated)${NC}"
+            echo -e "    ${YELLOW}3)${NC} ${WHITE}Cancel${NC}"
+            echo ""
+            read -rp "  Select [1-3]: " exist_choice
+            
+            case "${exist_choice}" in
+                1) restore_mode="overwrite" ;;
+                2) restore_mode="merge" ;;
+                *)
+                    log_info "Cancelled."
+                    press_enter_to_continue
+                    return
+                    ;;
+            esac
+        fi
     fi
     
     # Get CSV file path
@@ -5207,6 +5244,14 @@ menu_fleet_looking_glass() {
             read -rp "  Enter URL category name (or 'q' to cancel): " object_name
             if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
                 return
+            fi
+            # Resolve SSLO category name if needed
+            if ! url_category_exists "${object_name}"; then
+                local sslo_name="sslo-urlCat${object_name}"
+                if url_category_exists "${sslo_name}"; then
+                    log_info "Found as SSLO category: ${sslo_name}"
+                    object_name="${sslo_name}"
+                fi
             fi
             ;;
         *)

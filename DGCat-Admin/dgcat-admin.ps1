@@ -1807,6 +1807,15 @@ function Invoke-CreateEmptyUrlCategory {
         return
     }
     
+    # Check if SSLO version exists
+    $ssloName = "sslo-urlCat$catName"
+    if (Test-UrlCategoryExistsRemote -Name $ssloName) {
+        Write-LogError "URL category '$catName' exists as SSLO category '$ssloName'."
+        Write-LogInfo "Use the editor (option 5) to modify existing URL categories."
+        Press-EnterToContinue
+        return
+    }
+    
     # Select default action
     Write-Host ""
     Write-Host "  Select default action for this category:" -ForegroundColor White
@@ -2169,6 +2178,34 @@ function Invoke-CreateUrlCategory {
                 Write-LogInfo "Cancelled."
                 Press-EnterToContinue
                 return
+            }
+        }
+    } else {
+        # Check if SSLO version exists
+        $ssloName = "sslo-urlCat$catName"
+        if (Test-UrlCategoryExistsRemote -Name $ssloName) {
+            Write-LogInfo "Found as SSLO category: $ssloName"
+            $catName = $ssloName
+            $currentCount = Get-UrlCategoryCountRemote -Name $catName
+            Write-LogInfo "URL category '$catName' has $currentCount URLs."
+            Write-Host ""
+            Write-Host "  How do you want to proceed?" -ForegroundColor White
+            Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+            Write-Host "Overwrite - Replace all existing URLs" -ForegroundColor White
+            Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+            Write-Host "Merge     - Add new URLs to existing (deduplicated)" -ForegroundColor White
+            Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+            Write-Host "Cancel" -ForegroundColor White
+            Write-Host ""
+            $existChoice = Read-Host "  Select [1-3]"
+            switch ($existChoice) {
+                "1" { $restoreMode = "overwrite" }
+                "2" { $restoreMode = "merge" }
+                default {
+                    Write-LogInfo "Cancelled."
+                    Press-EnterToContinue
+                    return
+                }
             }
         }
     }
@@ -2750,6 +2787,14 @@ function Invoke-FleetLookingGlass {
             Write-Host ""
             $objectName = Read-Host "  Enter URL category name (or 'q' to cancel)"
             if ([string]::IsNullOrWhiteSpace($objectName) -or $objectName -eq "q") { return }
+            # Resolve SSLO category name if needed
+            if (-not (Test-UrlCategoryExistsRemote -Name $objectName)) {
+                $ssloName = "sslo-urlCat$objectName"
+                if (Test-UrlCategoryExistsRemote -Name $ssloName) {
+                    Write-LogInfo "Found as SSLO category: $ssloName"
+                    $objectName = $ssloName
+                }
+            }
         }
         default { return }
     }
