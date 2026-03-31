@@ -1,6 +1,6 @@
 # DGCat-Admin v4.5 Release Notes - March 31 2026
 
-**Search**
+**Fleet Search (option 6)**
 - Query and compare datagroups or URL categories across fleet hosts from a single session.
 - **Pull** — Retrieve entries from all fleet hosts, a specific site, or individual hosts
 - **Search** — Find entries by pattern across the fleet; results are deduplicated 
