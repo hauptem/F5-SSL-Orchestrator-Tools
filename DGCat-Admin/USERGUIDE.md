@@ -385,7 +385,7 @@ Note: All fleet operations use the same cached credentials you used to connect t
 
 ## Fleet Search
 
-**Menu option 6** queries a datagroup or URL category across your fleet and provides tools to search within the results and identify configuration drift between devices. This option requires a loaded fleet configuration.
+**Menu option 6** queries a datagroup or URL category across your fleet and provides tools to search within the results and identify configuration drift between devices.
 
 ### Selecting an Object
 
