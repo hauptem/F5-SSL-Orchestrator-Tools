@@ -430,25 +430,7 @@ Press `s` and enter a case-insensitive search pattern. The tool finds every entr
 
 **Entries found on only some hosts** are listed individually with per-host detail showing which hosts have the entry and which are missing it. This immediately surfaces drift without requiring a separate diff operation.
 
-```
-  Matches on all 4 hosts (12):
-  ──────────────────────────────────────────────────────────────
-          10.0.0.0/8
-          172.16.0.0/12
-          192.168.0.0/16
-          ...
-
-  Partial matches (1):
-  ──────────────────────────────────────────────────────────────
-  10.99.0.0/16
-    bigip01-mgmt.dc1.example.com (DC1)
-    bigip02-mgmt.dc1.example.com (DC1)
-    bigip01-mgmt.dc2.example.com (DC2) - missing
-    bigip02-mgmt.dc2.example.com (DC2) - missing
-
-  ══════════════════════════════════════════════════════════════
-  13 unique matches | 12 on all hosts, 1 inconsistent
-```
+<img width="753" height="380" alt="Image" src="https://github.com/user-attachments/assets/74f083d4-67f8-4f7e-b816-039296e0e4d0" />
 
 ### Diffing
 
