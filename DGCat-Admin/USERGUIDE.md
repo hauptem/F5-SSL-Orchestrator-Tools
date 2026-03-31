@@ -154,7 +154,7 @@ If the connection fails, you're given the option to retry or exit. Common failur
 
 After a successful connection, you see the main menu:
 
-<img width="643" height="388" alt="Image" src="https://github.com/user-attachments/assets/1108fc0b-5ca1-4d6d-9ced-dbf0a0580c18" />
+<img width="645" height="386" alt="Image" src="https://github.com/user-attachments/assets/09f78cca-e590-4436-acaf-5c2137ed7ed3" />
 
 Each option is described in detail in the following sections. Selecting `0` ends the session and returns to the welcome screen, where you can connect to a different device or exit.
 
