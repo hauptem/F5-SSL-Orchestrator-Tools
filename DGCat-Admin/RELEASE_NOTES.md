@@ -6,6 +6,9 @@
 - **Search** — Find entries by pattern across the fleet; results are deduplicated before presentation
 - **Diff** — Identify configuration drift; entries missing from one or more hosts are flagged with per-host details
 
+**Bug Fixes**
+- Fixed a stupid .NET header conflict that was preventing saves in powershell
+
 # DGCat-Admin v4.3 Release Notes - March 30 2026
 
 **Large Dataset Support**
