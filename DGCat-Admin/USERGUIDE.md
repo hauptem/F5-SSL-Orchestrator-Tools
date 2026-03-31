@@ -357,8 +357,6 @@ Deployment proceeds in up to three steps:
 
 **Step 3: Deploy to fleet.** The tool applies changes to each validated host in sequence. Each host's result is shown in real time. If the same error occurs on three consecutive hosts (indicating a systemic problem rather than an isolated failure), the tool warns you and asks whether to continue or stop.
 
-Step numbering adjusts automatically. A replication deploy with no local changes shows Step 1 and Step 2 only (validation then fleet). A deploy with pending changes shows all three steps.
-
 After all hosts have been processed, a summary table shows the status of every device:
 
 ```
