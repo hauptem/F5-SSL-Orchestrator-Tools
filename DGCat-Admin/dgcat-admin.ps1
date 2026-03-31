@@ -463,25 +463,12 @@ function Initialize-RemoteConnection {
 # -----------------------------------------------------------------------------
 
 function Save-F5Config {
-    $uri = "https://$($script:RemoteHost)/mgmt/tm/sys/config"
-    $headers = @{
-        "Authorization" = "Basic $($script:AuthHeader)"
-        "Content-Type" = "application/json"
-        "Connection" = "close"
-    }
-    $body = '{"command":"save"}'
-    
-    try {
-        $response = Invoke-WebRequest -Uri $uri -Headers $headers -Method POST -Body $body -TimeoutSec $script:API_TIMEOUT -ErrorAction Stop -UseBasicParsing
-        return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300)
-    } catch {
-        # BIG-IP may close the connection after a successful save
-        # If the error is a connection close, treat as success
-        if ($_.Exception.Message -match "connection.*closed|keep.alive") {
-            return $true
-        }
-        return $false
-    }
+    $result = Invoke-F5Post -Endpoint "/mgmt/tm/sys/config" -Body @{ command = "save" }
+    if ($result.Success) { return $true }
+    # BIG-IP closes TCP after a successful save config POST.
+    # Invoke-RestMethod treats this as a failure even though the save completed.
+    if ($result.Error -match "underlying connection was closed") { return $true }
+    return $false
 }
 
 function Test-PartitionRemote {
