@@ -13,10 +13,11 @@
 9. [Exporting to CSV](#exporting-to-csv)
 10. [The Interactive Editor](#the-interactive-editor)
 11. [Fleet Deployment](#fleet-deployment)
-12. [CSV File Formats](#csv-file-formats)
-13. [Backup System](#backup-system)
-14. [Configuration Reference](#configuration-reference)
-15. [Troubleshooting](#troubleshooting)
+12. [Fleet Search](#fleet-search)
+13. [CSV File Formats](#csv-file-formats)
+14. [Backup System](#backup-system)
+15. [Configuration Reference](#configuration-reference)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -379,6 +380,99 @@ Status meanings in the deploy summary: **OK** means the deployment succeeded. **
 Fleet deployment does not create objects that don't exist on target hosts. If you're deploying a datagroup and one of your fleet members doesn't have that datagroup, it is skipped with a status of `SKIP`. The assumption is that you're synchronizing existing objects across devices that are already configured, not bootstrapping new environments, but if you want to bootstrap new environments simply connect to each host directly, make the container datagroup or URL category, and then deploy content from your "source of truth" Big-IP.
 
 Note: All fleet operations use the same cached credentials you used to connect to the initial Big-IP. If a fleet Big-IP requires different credentials, it will show as a connection failure during validation.
+
+---
+
+## Fleet Search
+
+**Menu option 6** queries a datagroup or URL category across your fleet and provides tools to search within the results and identify configuration drift between devices. This option requires a loaded fleet configuration.
+
+### Selecting an Object
+
+You choose whether to inspect a datagroup or a URL category, then provide the object name. For datagroups, you also select a partition if more than one is configured.
+
+### Selecting a Scope
+
+Next, you choose which fleet hosts to query:
+
+- **All fleet hosts** — Every host in `fleet.conf`
+- **Select by site** — All hosts at one or more specific sites
+- **Select by host** — Individual hosts by number
+
+### Pulling Data
+
+The tool connects to each selected host, retrieves the object's entries, and builds a consolidated view. Hosts that are unreachable or don't have the object are flagged and skipped. After the pull completes, the tool shows a summary:
+
+```
+  ╔══════════════════════════════════════════════════════════════════════════╗
+                           DGCat-Admin Search
+  ╚══════════════════════════════════════════════════════════════════════════╝
+  Object: /Common/bypass-networks (Datagroup)
+  Hosts:  4 of 4 pulled | 312 unique entries across fleet
+
+    * bigip01-mgmt.dc1.example.com (DC1): 310 entries
+    * bigip02-mgmt.dc1.example.com (DC1): 310 entries
+    * bigip01-mgmt.dc2.example.com (DC2): 312 entries
+    * bigip02-mgmt.dc2.example.com (DC2): 312 entries
+
+  ──────────────────────────────────────────────────────────────────────────
+
+  s) Search      d) Diff      q) Quit
+```
+
+The "unique entries across fleet" count is the deduplicated total — the union of all entries across every pulled host. Per-host counts let you spot imbalances at a glance before running a diff.
+
+### Searching
+
+Press `s` and enter a case-insensitive search pattern. The tool finds every entry that contains the pattern and classifies the results by consistency:
+
+**Entries found on all pulled hosts** are listed once under a single header. There is no need to repeat them per host since every device has the same data.
+
+**Entries found on only some hosts** are listed individually with per-host detail showing which hosts have the entry and which are missing it. This immediately surfaces drift without requiring a separate diff operation.
+
+```
+  Matches on all 4 hosts (12):
+  ──────────────────────────────────────────────────────────────
+          10.0.0.0/8
+          172.16.0.0/12
+          192.168.0.0/16
+          ...
+
+  Partial matches (1):
+  ──────────────────────────────────────────────────────────────
+  10.99.0.0/16
+    bigip01-mgmt.dc1.example.com (DC1)
+    bigip02-mgmt.dc1.example.com (DC1)
+    bigip01-mgmt.dc2.example.com (DC2) - missing
+    bigip02-mgmt.dc2.example.com (DC2) - missing
+
+  ══════════════════════════════════════════════════════════════
+  13 unique matches | 12 on all hosts, 1 inconsistent
+```
+
+### Diffing
+
+Press `d` to run a full diff across all pulled hosts. The diff shows every entry that is not present on every host, with per-host presence detail for each one. Entries that are consistent across the entire fleet are counted but not displayed — if everything matches, the tool reports that all entries are consistent.
+
+```
+  All 312 entries consistent across all 4 hosts.
+```
+
+When drift exists, only the inconsistent entries are shown:
+
+```
+  10.99.0.0/16
+  ──────────────────────────────────────────────────────────────
+    bigip01-mgmt.dc1.example.com (DC1)
+    bigip02-mgmt.dc1.example.com (DC1)
+    bigip01-mgmt.dc2.example.com (DC2) - missing
+    bigip02-mgmt.dc2.example.com (DC2) - missing
+
+  ══════════════════════════════════════════════════════════════
+  1 inconsistent | 311 consistent across all hosts
+```
+
+This tells you exactly which entries need attention and where. To remediate drift, return to the main menu, open the object in the editor, and deploy it to the fleet using full replace mode.
 
 ---
 
