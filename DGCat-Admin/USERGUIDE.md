@@ -403,22 +403,7 @@ Next, you choose which fleet hosts to query:
 
 The tool connects to each selected host, retrieves the object's entries, and builds a consolidated view. Hosts that are unreachable or don't have the object are flagged and skipped. After the pull completes, the tool shows a summary:
 
-```
-  ╔══════════════════════════════════════════════════════════════════════════╗
-                           DGCat-Admin Search
-  ╚══════════════════════════════════════════════════════════════════════════╝
-  Object: /Common/bypass-networks (Datagroup)
-  Hosts:  4 of 4 pulled | 312 unique entries across fleet
-
-    * bigip01-mgmt.dc1.example.com (DC1): 310 entries
-    * bigip02-mgmt.dc1.example.com (DC1): 310 entries
-    * bigip01-mgmt.dc2.example.com (DC2): 312 entries
-    * bigip02-mgmt.dc2.example.com (DC2): 312 entries
-
-  ──────────────────────────────────────────────────────────────────────────
-
-  s) Search      d) Diff      q) Quit
-```
+<img width="754" height="344" alt="Image" src="https://github.com/user-attachments/assets/9ac7334c-281b-4783-80d7-1d46b6c4a84e" />
 
 The "unique entries across fleet" count is the deduplicated total — the union of all entries across every pulled host. Per-host counts let you spot imbalances at a glance before running a diff.
 
