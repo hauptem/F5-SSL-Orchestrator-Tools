@@ -1,3 +1,14 @@
+# DGCat-Admin v4.6 Release Notes - April 1 2026
+
+## New Features
+- **Fleet Backup (Option 7)** — Pull and save backups of a datagroup or URL category across the fleet. Supports scoping by all hosts, site, or individual host selection.
+- **Backup Disable** — `BACKUPS_ENABLED` config variable (default: on). Set to 0 to skip automatic pre-change backups. 
+- **Deploy Scope Redesign** — Deploy scope selection now matches Search and Fleet Backup with comma-separated site and host selection.
+- **Fleet Duplicate Detection** — fleet.conf is validated at startup for duplicate hostnames or IPs. Duplicates are displayed and the script halts until corrected.
+
+## Bug Fixes
+- **Bash Empty Array Handling** — All editor array operations converted to index-based loops to prevent unbound variable errors with `set -u` on empty datagroups.
+
 # DGCat-Admin v4.5 Release Notes - March 31 2026
 
 **Fleet Search (option 6)**
@@ -10,8 +21,7 @@
 - Added a check for all URL category functions that take what the user types i.e. "Pinners" and if this value is not found, prepend sslo-urlCat and retry. This is for some special categories that show as "Pinners" in the GUI but are really named sslo-urlCatPinners
 
 **Bug Fixes**
-- Fixed a stupid header conflict error that was causing .NET to fail configuration saves in powershell
-- Fixed a bash issue when adding a record to an empty datagroup or URL category
+- **PowerShell Save-F5Config** — Rebuilt on the Invoke-F5Post framework. Previous version silently failed due to a .NET restricted header exception.
 
 # DGCat-Admin v4.3 Release Notes - March 30 2026
 
