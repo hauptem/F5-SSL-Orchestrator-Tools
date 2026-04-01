@@ -14,8 +14,7 @@ Started: Wed Mar 11 15:36:32 EDT 2026
 ============================================================
   Credentials
 ============================================================
-  [INFO]  Enter BIG-IP admin credentials (used for REST API calls).
-  [INFO]  Credentials are NOT written to the log file.
+  [INFO]  Enter BIG-IP admin credentials.
   [....] Validating credentials...
   [ OK ]  Credentials validated successfully
 
