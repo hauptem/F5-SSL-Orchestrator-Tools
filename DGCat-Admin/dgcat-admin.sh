@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.5
+# Version: 4.6
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -30,6 +30,7 @@ set -euo pipefail
 # Backup settings
 BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
 MAX_BACKUPS=30
+BACKUPS_ENABLED=0
 
 # Session logging (set to 1 to enable log file creation)
 LOGGING_ENABLED=0
@@ -496,11 +497,11 @@ setup_remote_connection() {
         echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}"
         local i=1
         for idx in "${!FLEET_HOSTS[@]}"; do
-            printf "    ${YELLOW}%2d)${NC} ${WHITE}%s (%s)${NC}\n" "${i}" "${FLEET_HOSTS[$idx]}" "${FLEET_SITES[$idx]}"
+            printf "    ${YELLOW}%2d${NC}${WHITE})${NC} ${WHITE}%s (%s)${NC}\n" "${i}" "${FLEET_HOSTS[$idx]}" "${FLEET_SITES[$idx]}"
             i=$((i + 1))
         done
         echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}"
-        printf "    ${YELLOW} 0)${NC} ${WHITE}Exit${NC}\n"
+        printf "    ${YELLOW} 0${NC}${WHITE})${NC} ${WHITE}Exit${NC}\n"
     fi
     
     echo ""
@@ -1390,70 +1391,81 @@ select_deploy_scope() {
     echo "" >&2
     echo -e "  ${WHITE}Select deployment scope:${NC}" >&2
     echo "" >&2
-    
-    # Option 1: Entire topology (show true counts, connected host excluded at deploy time)
-    local total_hosts=${#FLEET_HOSTS[@]}
-    
-    # Pluralization for topology
-    local topo_host_word="hosts"
-    local topo_site_word="sites"
-    [ ${total_hosts} -eq 1 ] && topo_host_word="host"
-    [ ${#FLEET_UNIQUE_SITES[@]} -eq 1 ] && topo_site_word="site"
-    
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Entire topology${NC} (${total_hosts} ${topo_host_word} across ${#FLEET_UNIQUE_SITES[@]} ${topo_site_word})" >&2
-    
-    # Options 2+: Individual sites
-    local option_num=2
-    for site in "${FLEET_UNIQUE_SITES[@]}"; do
-        local site_count
-        site_count=$(count_site_hosts "${site}")
-        
-        # Pluralization for site
-        local site_host_word="hosts"
-        [ ${site_count} -eq 1 ] && site_host_word="host"
-        
-        echo -e "    ${YELLOW}${option_num})${NC} ${WHITE}Site: ${site}${NC} (${site_count} ${site_host_word})" >&2
-        option_num=$((option_num + 1))
-    done
-    
-    echo "" >&2
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}" >&2
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}All fleet hosts${NC}" >&2
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Select by site${NC}" >&2
+    echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Select by host${NC}" >&2
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}" >&2
     echo "" >&2
     
-    local max_option=$((option_num - 1))
-    read -rp "  Select [0-${max_option}]: " scope_choice
+    local scope_type
+    read -rp "  Select [0-3]: " scope_type
     
-    if [ "${scope_choice}" == "0" ] || [ -z "${scope_choice}" ]; then
-        return 1
-    fi
-    
-    if ! [[ "${scope_choice}" =~ ^[0-9]+$ ]] || [ "${scope_choice}" -lt 1 ] || [ "${scope_choice}" -gt ${max_option} ]; then
-        return 1
-    fi
-    
-    # Build target list based on selection
     local -a targets=()
     
-    if [ "${scope_choice}" == "1" ]; then
-        # Entire topology
-        for host in "${FLEET_HOSTS[@]}"; do
-            if [ "${host}" != "${REMOTE_HOST}" ]; then
-                targets+=("${host}")
-            fi
-        done
-    else
-        # Specific site
-        local site_index=$((scope_choice - 2))
-        local selected_site="${FLEET_UNIQUE_SITES[${site_index}]}"
-        
-        for i in "${!FLEET_HOSTS[@]}"; do
-            if [ "${FLEET_SITES[$i]}" == "${selected_site}" ] && [ "${FLEET_HOSTS[$i]}" != "${REMOTE_HOST}" ]; then
-                targets+=("${FLEET_HOSTS[$i]}")
-            fi
-        done
+    case "${scope_type}" in
+        1)
+            for ((i=0; i<${#FLEET_HOSTS[@]}; i++)); do
+                if [ "${FLEET_HOSTS[$i]}" != "${REMOTE_HOST}" ]; then
+                    targets+=("${FLEET_HOSTS[$i]}")
+                fi
+            done
+            ;;
+        2)
+            echo "" >&2
+            for ((s=0; s<${#FLEET_UNIQUE_SITES[@]}; s++)); do
+                local site="${FLEET_UNIQUE_SITES[$s]}"
+                local site_count
+                site_count=$(count_site_hosts "${site}")
+                local site_host_word="hosts"
+                [ ${site_count} -eq 1 ] && site_host_word="host"
+                echo -e "    ${YELLOW}$((s + 1))${NC}${WHITE})${NC} ${WHITE}${site}${NC} (${site_count} ${site_host_word})" >&2
+            done
+            echo "" >&2
+            local site_input
+            read -rp "  Enter site numbers (comma-separate for multiple): " site_input
+            if [ -z "${site_input}" ]; then return 1; fi
+            IFS=',' read -ra site_selections <<< "${site_input}"
+            for sel in "${site_selections[@]}"; do
+                sel=$(echo "${sel}" | tr -d ' ')
+                if [[ "${sel}" =~ ^[0-9]+$ ]] && [ "${sel}" -ge 1 ] && [ "${sel}" -le ${#FLEET_UNIQUE_SITES[@]} ]; then
+                    local selected_site="${FLEET_UNIQUE_SITES[$((sel - 1))]}"
+                    for i in "${!FLEET_HOSTS[@]}"; do
+                        if [ "${FLEET_SITES[$i]}" == "${selected_site}" ] && [ "${FLEET_HOSTS[$i]}" != "${REMOTE_HOST}" ]; then
+                            targets+=("${FLEET_HOSTS[$i]}")
+                        fi
+                    done
+                fi
+            done
+            ;;
+        3)
+            echo "" >&2
+            for ((h=0; h<${#FLEET_HOSTS[@]}; h++)); do
+                echo -e "    ${YELLOW}$((h + 1))${NC}${WHITE})${NC} ${WHITE}${FLEET_HOSTS[$h]} (${FLEET_SITES[$h]})${NC}" >&2
+            done
+            echo "" >&2
+            local host_input
+            read -rp "  Enter host numbers (comma-separate for multiple): " host_input
+            if [ -z "${host_input}" ]; then return 1; fi
+            IFS=',' read -ra host_selections <<< "${host_input}"
+            for sel in "${host_selections[@]}"; do
+                sel=$(echo "${sel}" | tr -d ' ')
+                if [[ "${sel}" =~ ^[0-9]+$ ]] && [ "${sel}" -ge 1 ] && [ "${sel}" -le ${#FLEET_HOSTS[@]} ]; then
+                    local idx=$((sel - 1))
+                    if [ "${FLEET_HOSTS[$idx]}" != "${REMOTE_HOST}" ]; then
+                        targets+=("${FLEET_HOSTS[$idx]}")
+                    fi
+                fi
+            done
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    
+    if [ ${#targets[@]} -eq 0 ]; then
+        return 1
     fi
     
-    # Output selected hosts
     printf '%s\n' "${targets[@]}"
     return 0
 }
@@ -1777,27 +1789,29 @@ execute_deploy_datagroup() {
         echo -ne "  ${WHITE}Deploying to ${host} (${site_id})...${NC}\n"
         
         # Backup
-        local backup_file
-        backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${site_id}")
-        if [ -z "${backup_file}" ]; then
-            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
-            deploy_results+=("${host}|${site_id}|FAIL|Backup failed")
-            fail_count=$((fail_count + 1))
-            last_error="Backup failed"
-            consecutive_same_error=$((consecutive_same_error + 1))
-            if [ ${consecutive_same_error} -ge 3 ]; then
-                echo ""
-                log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
-                read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
-                if [ "${cont_deploy}" != "yes" ]; then
-                    log_info "Deployment stopped by user."
-                    break
+        if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
+            local backup_file
+            backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${site_id}")
+            if [ -z "${backup_file}" ]; then
+                echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
+                deploy_results+=("${host}|${site_id}|FAIL|Backup failed")
+                fail_count=$((fail_count + 1))
+                last_error="Backup failed"
+                consecutive_same_error=$((consecutive_same_error + 1))
+                if [ ${consecutive_same_error} -ge 3 ]; then
+                    echo ""
+                    log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
+                    read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                    if [ "${cont_deploy}" != "yes" ]; then
+                        log_info "Deployment stopped by user."
+                        break
+                    fi
+                    consecutive_same_error=0
                 fi
-                consecutive_same_error=0
+                continue
             fi
-            continue
+            echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
         fi
-        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
         
         # Deploy (apply + save with verbose output)
         if deploy_internal_datagroup_to_host "${host}" "${partition}" "${dg_name}" "${dg_type}" "${records_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
@@ -1914,27 +1928,29 @@ execute_deploy_urlcat() {
         echo -ne "  ${WHITE}Deploying to ${host} (${site_id})...${NC}\n"
         
         # Backup
-        local backup_file
-        backup_file=$(backup_remote_url_category "${host}" "${cat_name}" "${site_id}")
-        if [ -z "${backup_file}" ]; then
-            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
-            deploy_results+=("${host}|${site_id}|FAIL|Backup failed")
-            fail_count=$((fail_count + 1))
-            last_error="Backup failed"
-            consecutive_same_error=$((consecutive_same_error + 1))
-            if [ ${consecutive_same_error} -ge 3 ]; then
-                echo ""
-                log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
-                read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
-                if [ "${cont_deploy}" != "yes" ]; then
-                    log_info "Deployment stopped by user."
-                    break
+        if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
+            local backup_file
+            backup_file=$(backup_remote_url_category "${host}" "${cat_name}" "${site_id}")
+            if [ -z "${backup_file}" ]; then
+                echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
+                deploy_results+=("${host}|${site_id}|FAIL|Backup failed")
+                fail_count=$((fail_count + 1))
+                last_error="Backup failed"
+                consecutive_same_error=$((consecutive_same_error + 1))
+                if [ ${consecutive_same_error} -ge 3 ]; then
+                    echo ""
+                    log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
+                    read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                    if [ "${cont_deploy}" != "yes" ]; then
+                        log_info "Deployment stopped by user."
+                        break
+                    fi
+                    consecutive_same_error=0
                 fi
-                consecutive_same_error=0
+                continue
             fi
-            continue
+            echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
         fi
-        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
         
         # Deploy (apply + save with verbose output)
         if deploy_url_category_to_host "${host}" "${cat_name}" "${urls_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
@@ -2083,7 +2099,7 @@ select_partition() {
         echo -e "    ${YELLOW}${i})${NC} ${WHITE}${partition}${NC}" >&2
         i=$((i + 1))
     done
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}" >&2
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}" >&2
     echo "" >&2
     
     local choice
@@ -2424,21 +2440,22 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.5                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.6                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}1)${NC}  ${WHITE}Create Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}2)${NC}  ${WHITE}Create/Update Datagroup or URL Category from CSV${NC}     ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}3)${NC}  ${WHITE}Delete Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}4)${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}5)${NC}  ${WHITE}View/Edit a Datagroup or URL Category${NC}                ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}6)${NC}  ${WHITE}Search${NC}                                               ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}1${NC}${WHITE})${NC}  ${WHITE}Create Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}2${NC}${WHITE})${NC}  ${WHITE}Create/Update Datagroup or URL Category from CSV${NC}     ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}3${NC}${WHITE})${NC}  ${WHITE}Delete Datagroup or URL Category${NC}                     ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}4${NC}${WHITE})${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}5${NC}${WHITE})${NC}  ${WHITE}View/Edit a Datagroup or URL Category${NC}                ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}6${NC}${WHITE})${NC}  ${WHITE}Search${NC}                                               ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}7${NC}${WHITE})${NC}  ${WHITE}Fleet Backup${NC}                                         ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}0)${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}0${NC}${WHITE})${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -2449,9 +2466,9 @@ menu_create_empty() {
     
     echo ""
     echo -e "  ${WHITE}What would you like to create?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     local choice
     read -rp "  Select [0-2]: " choice
@@ -2507,9 +2524,9 @@ menu_create_empty_datagroup() {
     # Select type
     echo ""
     echo -e "  ${WHITE}Select datagroup type:${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}string  - For domains, hostnames, URLs${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}address - For IP addresses, subnets (CIDR)${NC}"
-    echo -e "    ${YELLOW}3)${NC} ${WHITE}integer - For port numbers, numeric values${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}string  - For domains, hostnames, URLs${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}address - For IP addresses, subnets (CIDR)${NC}"
+    echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}integer - For port numbers, numeric values${NC}"
     echo ""
     local type_choice
     read -rp "  Select [1-3]: " type_choice
@@ -2600,9 +2617,9 @@ menu_create_empty_url_category() {
     # Select default action
     echo ""
     echo -e "  ${WHITE}Select default action for this category:${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}allow   - Allow traffic (use for bypass lists)${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}block   - Block traffic${NC}"
-    echo -e "    ${YELLOW}3)${NC} ${WHITE}confirm - Prompt user for confirmation${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}allow   - Allow traffic (use for bypass lists)${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}block   - Block traffic${NC}"
+    echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}confirm - Prompt user for confirmation${NC}"
     echo ""
     local action_choice
     read -rp "  Select [1-3] [1]: " action_choice
@@ -2647,9 +2664,9 @@ menu_create_from_csv() {
     
     echo ""
     echo -e "  ${WHITE}What would you like to create?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup (LTM data-group for iRules/policies)${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category (Custom URL category for SSLO/SWG)${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup (LTM data-group for iRules/policies)${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category (Custom URL category for SSLO/SWG)${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     read -rp "  Select [0-2]: " create_choice
     
@@ -2723,9 +2740,9 @@ menu_create_datagroup() {
         log_info "  Current records: ${current_count}"
         echo ""
         echo -e "  ${WHITE}How do you want to proceed?${NC}"
-        echo -e "    ${YELLOW}1)${NC} ${WHITE}Overwrite - Replace all existing entries with CSV contents${NC}"
-        echo -e "    ${YELLOW}2)${NC} ${WHITE}Merge     - Add CSV entries to existing (deduplicated)${NC}"
-        echo -e "    ${YELLOW}3)${NC} ${WHITE}Cancel${NC}"
+        echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Overwrite - Replace all existing entries with CSV contents${NC}"
+        echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge     - Add CSV entries to existing (deduplicated)${NC}"
+        echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
         echo ""
         read -rp "  Select [1-3]: " exist_choice
         
@@ -2740,18 +2757,20 @@ menu_create_datagroup() {
         esac
         
         # Create backup before modification
-        log_step "Creating backup of existing datagroup..."
-        local backup_file
-        backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
-        if [ -n "${backup_file}" ]; then
-            log_ok "Backup saved: ${backup_file}"
-        else
-            log_warn "Could not create backup."
-            read -rp "  Continue without backup? (yes/no) [no]: " cont
-            if [ "${cont}" != "yes" ]; then
-                log_info "Aborted."
-                press_enter_to_continue
-                return
+        if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
+            log_step "Creating backup of existing datagroup..."
+            local backup_file
+            backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+            if [ -n "${backup_file}" ]; then
+                log_ok "Backup saved: ${backup_file}"
+            else
+                log_warn "Could not create backup."
+                read -rp "  Continue without backup? (yes/no) [no]: " cont
+                if [ "${cont}" != "yes" ]; then
+                    log_info "Aborted."
+                    press_enter_to_continue
+                    return
+                fi
             fi
         fi
     else
@@ -2761,9 +2780,9 @@ menu_create_datagroup() {
         # Get datagroup type
         echo ""
         echo -e "  ${WHITE}Select datagroup type:${NC}"
-        echo -e "    ${YELLOW}1)${NC} ${WHITE}string  - For domains, hostnames, URLs${NC}"
-        echo -e "    ${YELLOW}2)${NC} ${WHITE}address - For IP addresses, subnets (CIDR)${NC}"
-        echo -e "    ${YELLOW}3)${NC} ${WHITE}integer - For port numbers, numeric values${NC}"
+        echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}string  - For domains, hostnames, URLs${NC}"
+        echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}address - For IP addresses, subnets (CIDR)${NC}"
+        echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}integer - For port numbers, numeric values${NC}"
         echo ""
         read -rp "  Select [1-3]: " type_choice
         
@@ -2878,8 +2897,8 @@ menu_create_datagroup() {
     
     # Ask about format
     echo -e "  ${WHITE}What does this file contain?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Keys only (e.g., domains, subnets)${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}Keys and Values (e.g., domain,action)${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Keys only (e.g., domains, subnets)${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Keys and Values (e.g., domain,action)${NC}"
     echo ""
     read -rp "  Select [1-2]: " format_choice
     
@@ -3058,9 +3077,9 @@ menu_delete_datagroup() {
     
     echo ""
     echo -e "  ${WHITE}What would you like to delete?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     read -rp "  Select [0-2]: " delete_choice
     
@@ -3144,18 +3163,20 @@ menu_delete_datagroup_only() {
     echo ""
     
     # Backup before delete
-    log_step "Creating backup before deletion..."
-    local backup_file
-    backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
-    if [ -n "${backup_file}" ]; then
-        log_ok "Backup saved: ${backup_file}"
-    else
-        log_warn "Could not create backup."
-        read -rp "  Continue without backup? (yes/no) [no]: " continue_choice
-        if [ "${continue_choice}" != "yes" ]; then
-            log_info "Aborted by user."
-            press_enter_to_continue
-            return
+    if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
+        log_step "Creating backup before deletion..."
+        local backup_file
+        backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+        if [ -n "${backup_file}" ]; then
+            log_ok "Backup saved: ${backup_file}"
+        else
+            log_warn "Could not create backup."
+            read -rp "  Continue without backup? (yes/no) [no]: " continue_choice
+            if [ "${continue_choice}" != "yes" ]; then
+                log_info "Aborted by user."
+                press_enter_to_continue
+                return
+            fi
         fi
     fi
     
@@ -3198,9 +3219,9 @@ menu_delete_url_category() {
     # Offer choice: enter name directly or list all
     echo ""
     echo -e "  ${WHITE}How would you like to select a URL category?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Enter category name directly${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}List all categories${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Enter category name directly${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     read -rp "  Select [0-2]: " method_choice
     
@@ -3265,12 +3286,12 @@ menu_delete_url_category() {
             local i=1
             local cat_array=()
             while IFS= read -r cat; do
-                printf "    ${YELLOW}%3d)${NC} ${WHITE}%s${NC}\n" "${i}" "${cat}"
+                printf "    ${YELLOW}%3d${NC}${WHITE})${NC} ${WHITE}%s${NC}\n" "${i}" "${cat}"
                 cat_array+=("${cat}")
                 i=$((i + 1))
             done <<< "${categories}"
             echo -e "  ${CYAN}─────────────────────────────────────────────────────────────${NC}"
-            echo -e "      ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+            echo -e "      ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
             
             # Select category
@@ -3308,28 +3329,30 @@ menu_delete_url_category() {
     echo ""
     
     # Backup before delete
-    log_step "Creating backup before deletion..."
-    local safe_name
-    safe_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    local backup_file="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
-    
-    {
-        echo "# URL Category Backup: ${selected_category}"
-        echo "# Created: $(date)"
-        echo "# Reason: Pre-deletion backup"
-        echo "#"
-        get_url_category_entries "${selected_category}"
-    } > "${backup_file}" 2>/dev/null
-    
-    if [ -f "${backup_file}" ]; then
-        log_ok "Backup saved: ${backup_file}"
-    else
-        log_warn "Could not create backup."
-        read -rp "  Continue without backup? (yes/no) [no]: " continue_choice
-        if [ "${continue_choice}" != "yes" ]; then
-            log_info "Aborted by user."
-            press_enter_to_continue
-            return
+    if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
+        log_step "Creating backup before deletion..."
+        local safe_name
+        safe_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+        local backup_file="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
+        
+        {
+            echo "# URL Category Backup: ${selected_category}"
+            echo "# Created: $(date)"
+            echo "# Reason: Pre-deletion backup"
+            echo "#"
+            get_url_category_entries "${selected_category}"
+        } > "${backup_file}" 2>/dev/null
+        
+        if [ -f "${backup_file}" ]; then
+            log_ok "Backup saved: ${backup_file}"
+        else
+            log_warn "Could not create backup."
+            read -rp "  Continue without backup? (yes/no) [no]: " continue_choice
+            if [ "${continue_choice}" != "yes" ]; then
+                log_info "Aborted by user."
+                press_enter_to_continue
+                return
+            fi
         fi
     fi
     
@@ -3364,9 +3387,9 @@ menu_export_to_csv() {
     
     echo ""
     echo -e "  ${WHITE}What would you like to export?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     read -rp "  Select [0-2]: " export_choice
     
@@ -3470,9 +3493,9 @@ menu_export_url_category() {
     # Offer choice: enter name directly or list all
     echo ""
     echo -e "  ${WHITE}How would you like to select a URL category?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Enter category name directly${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}List all categories${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Enter category name directly${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     read -rp "  Select [0-2]: " method_choice
     
@@ -3537,12 +3560,12 @@ menu_export_url_category() {
             local i=1
             local cat_array=()
             while IFS= read -r cat; do
-                printf "    ${YELLOW}%3d)${NC} ${WHITE}%s${NC}\n" "${i}" "${cat}" >&2
+                printf "    ${YELLOW}%3d${NC}${WHITE})${NC} ${WHITE}%s${NC}\n" "${i}" "${cat}" >&2
                 cat_array+=("${cat}")
                 i=$((i + 1))
             done <<< "${categories}"
             echo -e "  ${CYAN}─────────────────────────────────────────────────────────────${NC}"
-            echo -e "      ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+            echo -e "      ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
             
             # Select category
@@ -3594,8 +3617,8 @@ menu_export_url_category() {
     # Ask about format
     echo ""
     echo -e "  ${WHITE}Export format:${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Domain only (e.g., example.com)${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}Full URL format (e.g., https://example.com/)${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Domain only (e.g., example.com)${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Full URL format (e.g., https://example.com/)${NC}"
     echo ""
     read -rp "  Select [1-2] [1]: " format_choice
     format_choice="${format_choice:-1}"
@@ -3794,9 +3817,9 @@ menu_create_url_category() {
         log_info "URL category '${cat_name}' already exists with ${current_count} URLs."
         echo ""
         echo -e "  ${WHITE}How do you want to proceed?${NC}"
-        echo -e "    ${YELLOW}1)${NC} ${WHITE}Overwrite - Replace all existing URLs${NC}"
-        echo -e "    ${YELLOW}2)${NC} ${WHITE}Merge     - Add new URLs to existing (deduplicated)${NC}"
-        echo -e "    ${YELLOW}3)${NC} ${WHITE}Cancel${NC}"
+        echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Overwrite - Replace all existing URLs${NC}"
+        echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge     - Add new URLs to existing (deduplicated)${NC}"
+        echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
         echo ""
         read -rp "  Select [1-3]: " exist_choice
         
@@ -3821,9 +3844,9 @@ menu_create_url_category() {
             log_info "URL category '${cat_name}' has ${current_count} URLs."
             echo ""
             echo -e "  ${WHITE}How do you want to proceed?${NC}"
-            echo -e "    ${YELLOW}1)${NC} ${WHITE}Overwrite - Replace all existing URLs${NC}"
-            echo -e "    ${YELLOW}2)${NC} ${WHITE}Merge     - Add new URLs to existing (deduplicated)${NC}"
-            echo -e "    ${YELLOW}3)${NC} ${WHITE}Cancel${NC}"
+            echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Overwrite - Replace all existing URLs${NC}"
+            echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge     - Add new URLs to existing (deduplicated)${NC}"
+            echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
             read -rp "  Select [1-3]: " exist_choice
             
@@ -3977,9 +4000,9 @@ menu_create_url_category() {
         # Select default action
         echo ""
         echo -e "  ${WHITE}Select default action for this category:${NC}"
-        echo -e "    ${YELLOW}1)${NC} ${WHITE}allow   - Allow traffic (use for bypass lists)${NC}"
-        echo -e "    ${YELLOW}2)${NC} ${WHITE}block   - Block traffic${NC}"
-        echo -e "    ${YELLOW}3)${NC} ${WHITE}confirm - Prompt user for confirmation${NC}"
+        echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}allow   - Allow traffic (use for bypass lists)${NC}"
+        echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}block   - Block traffic${NC}"
+        echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}confirm - Prompt user for confirmation${NC}"
         echo ""
         read -rp "  Select [1-3] [1]: " action_choice
         action_choice="${action_choice:-1}"
@@ -4324,17 +4347,17 @@ editor_submenu() {
         echo ""
         echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
         echo ""
-        echo -e "  ${YELLOW}n)${NC} Next page    ${YELLOW}p)${NC} Previous page    ${YELLOW}g)${NC} Go to page"
-        echo -e "  ${YELLOW}f)${NC} Filter       ${YELLOW}c)${NC} Clear filter     ${YELLOW}s)${NC} Change sort"
+        echo -e "  ${YELLOW}n${NC}${WHITE})${NC} Next page    ${YELLOW}p${NC}${WHITE})${NC} Previous page    ${YELLOW}g${NC}${WHITE})${NC} Go to page"
+        echo -e "  ${YELLOW}f${NC}${WHITE})${NC} Filter       ${YELLOW}c${NC}${WHITE})${NC} Clear filter     ${YELLOW}s${NC}${WHITE})${NC} Change sort"
         echo ""
-        echo -e "  ${YELLOW}a)${NC} Add entry    ${YELLOW}d)${NC} Delete entry     ${YELLOW}x)${NC} Delete by pattern"
+        echo -e "  ${YELLOW}a${NC}${WHITE})${NC} Add entry    ${YELLOW}d${NC}${WHITE})${NC} Delete entry     ${YELLOW}x${NC}${WHITE})${NC} Delete by pattern"
         echo ""
-        echo -e "  ${YELLOW}w)${NC} Apply changes (write to current device)"
+        echo -e "  ${YELLOW}w${NC}${WHITE})${NC} Apply changes (write to current device)"
         if fleet_available; then
-            echo -e "  ${YELLOW}D)${NC} Deploy to fleet"
+            echo -e "  ${YELLOW}D${NC}${WHITE})${NC} Deploy to fleet"
         fi
         echo ""
-        echo -e "  ${YELLOW}q)${NC} Done (return to main menu)"
+        echo -e "  ${YELLOW}q${NC}${WHITE})${NC} Done (return to main menu)"
         echo ""
         read -rp "  Select option: " edit_choice
         
@@ -4371,9 +4394,9 @@ editor_submenu() {
             s)
                 echo ""
                 echo -e "  ${WHITE}Sort order:${NC}"
-                echo -e "    ${YELLOW}1)${NC} Original (as stored)"
-                echo -e "    ${YELLOW}2)${NC} A-Z (ascending)"
-                echo -e "    ${YELLOW}3)${NC} Z-A (descending)"
+                echo -e "    ${YELLOW}1${NC}${WHITE})${NC} Original (as stored)"
+                echo -e "    ${YELLOW}2${NC}${WHITE})${NC} A-Z (ascending)"
+                echo -e "    ${YELLOW}3${NC}${WHITE})${NC} Z-A (descending)"
                 echo ""
                 read -rp "  Select [1-3]: " sort_choice
                 case "${sort_choice}" in
@@ -4685,32 +4708,34 @@ editor_submenu() {
                 fi
                 
                 # Create backup before applying
-                log_step "Creating backup before applying changes..."
-                local backup_file=""
-                if [ "${edit_type}" == "datagroup" ]; then
-                    backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
-                else
-                    # For URL categories, create a simple backup
-                    local safe_name
-                    safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-                    backup_file="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
-                    {
-                        echo "# URL Category Backup: ${cat_name}"
-                        echo "# Created: $(date)"
-                        echo "#"
-                        for ((bk_i=0; bk_i<${#original_keys[@]}; bk_i++)); do
-                            echo "${original_keys[$bk_i]}"
-                        done
-                    } > "${backup_file}" 2>/dev/null
-                fi
-                
-                if [ -n "${backup_file}" ] && [ -f "${backup_file}" ]; then
-                    log_ok "Backup saved: ${backup_file}"
-                else
-                    log_warn "Could not create backup."
-                    read -rp "  Continue without backup? (yes/no) [no]: " cont
-                    if [ "${cont}" != "yes" ]; then
-                        continue
+                if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
+                    log_step "Creating backup before applying changes..."
+                    local backup_file=""
+                    if [ "${edit_type}" == "datagroup" ]; then
+                        backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+                    else
+                        # For URL categories, create a simple backup
+                        local safe_name
+                        safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+                        backup_file="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
+                        {
+                            echo "# URL Category Backup: ${cat_name}"
+                            echo "# Created: $(date)"
+                            echo "#"
+                            for ((bk_i=0; bk_i<${#original_keys[@]}; bk_i++)); do
+                                echo "${original_keys[$bk_i]}"
+                            done
+                        } > "${backup_file}" 2>/dev/null
+                    fi
+                    
+                    if [ -n "${backup_file}" ] && [ -f "${backup_file}" ]; then
+                        log_ok "Backup saved: ${backup_file}"
+                    else
+                        log_warn "Could not create backup."
+                        read -rp "  Continue without backup? (yes/no) [no]: " cont
+                        if [ "${cont}" != "yes" ]; then
+                            continue
+                        fi
                     fi
                 fi
                 
@@ -4891,9 +4916,9 @@ editor_submenu() {
                     # Select deploy mode
                     echo ""
                     echo -e "  ${WHITE}Select deployment mode:${NC}"
-                    echo -e "    ${YELLOW}1)${NC} ${WHITE}Full Replace - Overwrite target with exact state from current device${NC}"
-                    echo -e "    ${YELLOW}2)${NC} ${WHITE}Merge        - Apply only additions/deletions, preserve target-specific entries${NC}"
-                    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+                    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Full Replace - Overwrite target with exact state from current device${NC}"
+                    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge        - Apply only additions/deletions, preserve target-specific entries${NC}"
+                    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                     echo ""
                     read -rp "  Select [0-2]: " deploy_mode_choice
                     
@@ -5049,33 +5074,35 @@ editor_submenu() {
                 echo -e "  ${WHITE}Deploying to ${REMOTE_HOST}...${NC}"
                 
                 # Create backup of current device
-                local current_backup=""
-                if [ "${edit_type}" == "datagroup" ]; then
-                    current_backup=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
-                else
-                    local safe_name
-                    safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-                    current_backup="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
-                    {
-                        echo "# URL Category Backup: ${cat_name}"
-                        echo "# Host: ${REMOTE_HOST}"
-                        echo "# Created: $(date)"
-                        echo "#"
-                        for ((bk_i=0; bk_i<${#original_keys[@]}; bk_i++)); do
-                            echo "${original_keys[$bk_i]}"
-                        done
-                    } > "${current_backup}" 2>/dev/null
-                fi
-                
-                if [ -n "${current_backup}" ] && [ -f "${current_backup}" ]; then
-                    echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
-                else
-                    echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
-                    read -rp "  Continue without backup? (yes/no) [no]: " cont
-                    if [ "${cont}" != "yes" ]; then
-                        log_info "Deploy cancelled."
-                        press_enter_to_continue
-                        continue
+                if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
+                    local current_backup=""
+                    if [ "${edit_type}" == "datagroup" ]; then
+                        current_backup=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+                    else
+                        local safe_name
+                        safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+                        current_backup="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
+                        {
+                            echo "# URL Category Backup: ${cat_name}"
+                            echo "# Host: ${REMOTE_HOST}"
+                            echo "# Created: $(date)"
+                            echo "#"
+                            for ((bk_i=0; bk_i<${#original_keys[@]}; bk_i++)); do
+                                echo "${original_keys[$bk_i]}"
+                            done
+                        } > "${current_backup}" 2>/dev/null
+                    fi
+                    
+                    if [ -n "${current_backup}" ] && [ -f "${current_backup}" ]; then
+                        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
+                    else
+                        echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
+                        read -rp "  Continue without backup? (yes/no) [no]: " cont
+                        if [ "${cont}" != "yes" ]; then
+                            log_info "Deploy cancelled."
+                            press_enter_to_continue
+                            continue
+                        fi
                     fi
                 fi
                 
@@ -5250,9 +5277,9 @@ menu_fleet_looking_glass() {
     
     echo ""
     echo -e "  ${WHITE}What would you like to inspect?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     local type_choice
     read -rp "  Select [0-2]: " type_choice
@@ -5303,10 +5330,10 @@ menu_fleet_looking_glass() {
     echo ""
     echo -e "  ${WHITE}Select search scope:${NC}"
     echo ""
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}All fleet hosts${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}Select by site${NC}"
-    echo -e "    ${YELLOW}3)${NC} ${WHITE}Select by host${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}All fleet hosts${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Select by site${NC}"
+    echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Select by host${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     local scope_type
     read -rp "  Select [0-3]: " scope_type
@@ -5329,7 +5356,7 @@ menu_fleet_looking_glass() {
                 site_count=$(count_site_hosts "${site}")
                 local site_host_word="hosts"
                 [ ${site_count} -eq 1 ] && site_host_word="host"
-                echo -e "    ${YELLOW}$((s + 1)))${NC} ${WHITE}${site}${NC} (${site_count} ${site_host_word})"
+                echo -e "    ${YELLOW}$((s + 1))${NC}${WHITE})${NC} ${WHITE}${site}${NC} (${site_count} ${site_host_word})"
             done
             echo ""
             local site_input
@@ -5357,7 +5384,7 @@ menu_fleet_looking_glass() {
             # Select by host
             echo ""
             for ((h=0; h<${#FLEET_HOSTS[@]}; h++)); do
-                echo -e "    ${YELLOW}$((h + 1)))${NC} ${WHITE}${FLEET_HOSTS[$h]} (${FLEET_SITES[$h]})${NC}"
+                echo -e "    ${YELLOW}$((h + 1))${NC}${WHITE})${NC} ${WHITE}${FLEET_HOSTS[$h]} (${FLEET_SITES[$h]})${NC}"
             done
             echo ""
             local host_input
@@ -5495,7 +5522,7 @@ menu_fleet_looking_glass() {
         echo ""
         echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
         echo ""
-        echo -e "  ${YELLOW}s)${NC} Search      ${YELLOW}d)${NC} Diff      ${YELLOW}q)${NC} Quit"
+        echo -e "  ${YELLOW}s${NC}${WHITE})${NC} Search      ${YELLOW}d${NC}${WHITE})${NC} Diff      ${YELLOW}q${NC}${WHITE})${NC} Quit"
         echo ""
         local input
         read -rp "  Select option: " input
@@ -5651,15 +5678,213 @@ menu_fleet_looking_glass() {
         press_enter_to_continue
     done
 }
-# Option 7: Edit a Datagroup or URL Category
+
+# Option 7: Fleet Backup
+menu_fleet_backup() {
+    log_section "Fleet Backup"
+    
+    # Require fleet config
+    if [ ${#FLEET_HOSTS[@]} -eq 0 ]; then
+        log_error "No fleet configuration loaded. Configure fleet.conf to use this feature."
+        press_enter_to_continue
+        return
+    fi
+    
+    echo ""
+    echo -e "  ${WHITE}What would you like to backup?${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
+    echo ""
+    local type_choice
+    read -rp "  Select [0-2]: " type_choice
+    
+    local object_type=""
+    local object_name=""
+    local partition=""
+    
+    case "${type_choice}" in
+        1)
+            object_type="datagroup"
+            if [ ${#PARTITION_LIST[@]} -gt 1 ]; then
+                partition=$(select_partition)
+                [ -z "${partition}" ] && return
+            else
+                partition="${PARTITION_LIST[0]}"
+            fi
+            echo ""
+            read -rp "  Enter datagroup name (or 'q' to cancel): " object_name
+            if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
+                return
+            fi
+            object_name=$(strip_partition_prefix "${object_name}")
+            ;;
+        2)
+            object_type="urlcat"
+            echo ""
+            read -rp "  Enter URL category name (or 'q' to cancel): " object_name
+            if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
+                return
+            fi
+            # Resolve SSLO category name if needed
+            if ! url_category_exists "${object_name}"; then
+                local sslo_name="sslo-urlCat${object_name}"
+                if url_category_exists "${sslo_name}"; then
+                    log_info "Found as SSLO category: ${sslo_name}"
+                    object_name="${sslo_name}"
+                fi
+            fi
+            ;;
+        *)
+            return
+            ;;
+    esac
+    
+    # Select backup scope
+    echo ""
+    echo -e "  ${WHITE}Select backup scope:${NC}"
+    echo ""
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}All fleet hosts${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Select by site${NC}"
+    echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Select by host${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
+    echo ""
+    local scope_type
+    read -rp "  Select [0-3]: " scope_type
+    
+    local -a target_hosts=()
+    local -a target_sites_list=()
+    
+    case "${scope_type}" in
+        1)
+            target_hosts=("${FLEET_HOSTS[@]}")
+            target_sites_list=("${FLEET_SITES[@]}")
+            ;;
+        2)
+            echo ""
+            for ((s=0; s<${#FLEET_UNIQUE_SITES[@]}; s++)); do
+                local site="${FLEET_UNIQUE_SITES[$s]}"
+                local site_count
+                site_count=$(count_site_hosts "${site}")
+                local site_host_word="hosts"
+                [ ${site_count} -eq 1 ] && site_host_word="host"
+                echo -e "    ${YELLOW}$((s + 1))${NC}${WHITE})${NC} ${WHITE}${site}${NC} (${site_count} ${site_host_word})"
+            done
+            echo ""
+            local site_input
+            read -rp "  Enter site numbers (comma-separate for multiple): " site_input
+            if [ -z "${site_input}" ]; then return; fi
+            IFS=',' read -ra site_selections <<< "${site_input}"
+            for sel in "${site_selections[@]}"; do
+                sel=$(echo "${sel}" | tr -d ' ')
+                if [[ "${sel}" =~ ^[0-9]+$ ]] && [ "${sel}" -ge 1 ] && [ "${sel}" -le ${#FLEET_UNIQUE_SITES[@]} ]; then
+                    local selected_site="${FLEET_UNIQUE_SITES[$((sel - 1))]}"
+                    for i in "${!FLEET_HOSTS[@]}"; do
+                        if [ "${FLEET_SITES[$i]}" == "${selected_site}" ]; then
+                            target_hosts+=("${FLEET_HOSTS[$i]}")
+                            target_sites_list+=("${FLEET_SITES[$i]}")
+                        fi
+                    done
+                fi
+            done
+            ;;
+        3)
+            echo ""
+            for ((h=0; h<${#FLEET_HOSTS[@]}; h++)); do
+                echo -e "    ${YELLOW}$((h + 1))${NC}${WHITE})${NC} ${WHITE}${FLEET_HOSTS[$h]} (${FLEET_SITES[$h]})${NC}"
+            done
+            echo ""
+            local host_input
+            read -rp "  Enter host numbers (comma-separate for multiple): " host_input
+            if [ -z "${host_input}" ]; then return; fi
+            IFS=',' read -ra host_selections <<< "${host_input}"
+            for sel in "${host_selections[@]}"; do
+                sel=$(echo "${sel}" | tr -d ' ')
+                if [[ "${sel}" =~ ^[0-9]+$ ]] && [ "${sel}" -ge 1 ] && [ "${sel}" -le ${#FLEET_HOSTS[@]} ]; then
+                    local idx=$((sel - 1))
+                    target_hosts+=("${FLEET_HOSTS[$idx]}")
+                    target_sites_list+=("${FLEET_SITES[$idx]}")
+                fi
+            done
+            ;;
+        *)
+            return
+            ;;
+    esac
+    
+    if [ ${#target_hosts[@]} -eq 0 ]; then
+        log_warn "No valid scope selected."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Execute backup
+    clear
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  FLEET BACKUP: ${object_name}${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    
+    local orig_host="${REMOTE_HOST}"
+    local success_count=0
+    local fail_count=0
+    local -a backup_files=()
+    
+    for ((h=0; h<${#target_hosts[@]}; h++)); do
+        local host="${target_hosts[$h]}"
+        local site="${target_sites_list[$h]}"
+        
+        echo -ne "  ${WHITE}[....] ${host} (${site})${NC}\r"
+        
+        REMOTE_HOST="${host}"
+        
+        # Test connectivity
+        if ! api_get "/mgmt/tm/sys/version" >/dev/null 2>&1; then
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Connection failed${NC}"
+            fail_count=$((fail_count + 1))
+            continue
+        fi
+        
+        # Create backup
+        local backup_file=""
+        if [ "${object_type}" == "datagroup" ]; then
+            backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${object_name}" "${site}")
+        else
+            backup_file=$(backup_remote_url_category "${host}" "${object_name}" "${site}")
+        fi
+        
+        if [ -n "${backup_file}" ]; then
+            echo -e "\033[2K\r  ${GREEN}[ OK ]${NC} ${WHITE}${host} (${site})${NC}"
+            success_count=$((success_count + 1))
+            backup_files+=("${backup_file}")
+        else
+            echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Backup failed${NC}"
+            fail_count=$((fail_count + 1))
+        fi
+    done
+    
+    REMOTE_HOST="${orig_host}"
+    
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${WHITE}Backup complete: ${GREEN}${success_count} saved${NC}, ${RED}${fail_count} failed${NC} of ${#target_hosts[@]} hosts${NC}"
+    echo ""
+    if [ ${success_count} -gt 0 ]; then
+        log_info "Backups saved to: ${BACKUP_DIR}/"
+    fi
+    
+    press_enter_to_continue
+}
+
+# Option 5: Edit a Datagroup or URL Category
 menu_edit_datagroup_or_category() {
     log_section "Edit a Datagroup or URL Category"
     
     echo ""
     echo -e "  ${WHITE}What would you like to edit?${NC}"
-    echo -e "    ${YELLOW}1)${NC} ${WHITE}Datagroup${NC}"
-    echo -e "    ${YELLOW}2)${NC} ${WHITE}URL Category${NC}"
-    echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     read -rp "  Select [0-2]: " edit_choice
     
@@ -5703,9 +5928,9 @@ menu_edit_datagroup_or_category() {
             # Category selection
             echo ""
             echo -e "  ${WHITE}How would you like to select a URL category?${NC}"
-            echo -e "    ${YELLOW}1)${NC} ${WHITE}Enter category name directly${NC}"
-            echo -e "    ${YELLOW}2)${NC} ${WHITE}List all categories${NC}"
-            echo -e "    ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+            echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Enter category name directly${NC}"
+            echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
+            echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
             read -rp "  Select [0-2]: " method_choice
             
@@ -5764,12 +5989,12 @@ menu_edit_datagroup_or_category() {
                     local i=1
                     local cat_array=()
                     while IFS= read -r cat; do
-                        printf "    ${YELLOW}%3d)${NC} ${WHITE}%s${NC}\n" "${i}" "${cat}"
+                        printf "    ${YELLOW}%3d${NC}${WHITE})${NC} ${WHITE}%s${NC}\n" "${i}" "${cat}"
                         cat_array+=("${cat}")
                         i=$((i + 1))
                     done <<< "${categories}"
                     echo -e "  ${CYAN}─────────────────────────────────────────────────────────────${NC}"
-                    echo -e "      ${YELLOW}0)${NC} ${WHITE}Cancel${NC}"
+                    echo -e "      ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                     echo ""
                     
                     read -rp "  Select [0-$((${#cat_array[@]}))] : " cat_choice
@@ -5828,12 +6053,12 @@ main() {
         # Welcome banner
         echo ""
         echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.5                        ${NC}${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.6                        ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
         echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
-        echo -e "    ${YELLOW}1)${NC}  ${WHITE}Connect to BIG-IP${NC}"
-        echo -e "    ${YELLOW}0)${NC}  ${WHITE}Exit${NC}"
+        echo -e "    ${YELLOW}1${NC}${WHITE})${NC}  ${WHITE}Connect to BIG-IP${NC}"
+        echo -e "    ${YELLOW}0${NC}${WHITE})${NC}  ${WHITE}Exit${NC}"
         echo ""
         
         local start_choice
@@ -5880,7 +6105,7 @@ main() {
         while true; do
             show_main_menu
             
-            read -rp "  Select option [0-6]: " choice
+            read -rp "  Select option [0-7]: " choice
             
             case "${choice}" in
                 1) menu_create_empty ;;
@@ -5889,6 +6114,7 @@ main() {
                 4) menu_export_to_csv ;;
                 5) menu_edit_datagroup_or_category ;;
                 6) menu_fleet_looking_glass ;;
+                7) menu_fleet_backup ;;
                 0)
                     log_section "Session End"
                     log_info "Session ended: $(date)"

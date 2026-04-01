@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.5
+# Version: 4.6
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -28,6 +28,7 @@
 # Backup settings
 $script:BACKUP_DIR = Join-Path $PSScriptRoot "dgcat-admin-backups"
 $script:MAX_BACKUPS = 30
+$script:BACKUPS_ENABLED = 0
 
 # Session logging (set to 1 to enable log file creation)
 $script:LOGGING_ENABLED = 0
@@ -361,11 +362,11 @@ function Initialize-RemoteConnection {
         Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
         for ($i = 0; $i -lt $script:FleetHosts.Count; $i++) {
             $num = $i + 1
-            Write-Host ("    " + $num.ToString().PadLeft(2) + ") ") -NoNewline -ForegroundColor Yellow
+            Write-Host "    " -NoNewline; Write-Host $num.ToString().PadLeft(2) -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White
             Write-Host "$($script:FleetHosts[$i]) ($($script:FleetSites[$i]))" -ForegroundColor White
         }
         Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-        Write-Host '     0) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '     ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "Exit" -ForegroundColor White
     }
     
@@ -705,10 +706,10 @@ function Select-Partition {
     Write-Host "  ${Prompt}:" -ForegroundColor White
     for ($i = 0; $i -lt $script:PARTITIONS.Count; $i++) {
         $num = $i + 1
-        Write-Host ("    $num) ") -NoNewline -ForegroundColor Yellow
+        Write-Host "    " -NoNewline; Write-Host "$num" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White
         Write-Host $script:PARTITIONS[$i] -ForegroundColor White
     }
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     
@@ -814,6 +815,8 @@ function Import-FleetConfig {
     if (-not (Test-Path $script:FLEET_CONFIG_FILE)) { return $false }
     
     $seenSites = @{}
+    $seenHosts = @{}
+    $duplicateHosts = @()
     
     foreach ($line in (Get-Content $script:FLEET_CONFIG_FILE)) {
         $line = $line.Trim()
@@ -828,6 +831,14 @@ function Import-FleetConfig {
         if ([string]::IsNullOrWhiteSpace($site) -or [string]::IsNullOrWhiteSpace($host_)) { continue }
         if ($site -notmatch '^[a-zA-Z0-9_-]+$') { continue }
         
+        # Check for duplicate hosts
+        if ($seenHosts.ContainsKey($host_)) {
+            $duplicateHosts += "$($seenHosts[$host_])|$host_"
+            $duplicateHosts += "$site|$host_"
+            continue
+        }
+        $seenHosts[$host_] = $site
+        
         $script:FleetSites += $site
         $script:FleetHosts += $host_
         
@@ -835,6 +846,20 @@ function Import-FleetConfig {
             $seenSites[$site] = $true
             $script:FleetUniqueSites += $site
         }
+    }
+    
+    # Halt on duplicate hosts
+    if ($duplicateHosts.Count -gt 0) {
+        Write-Host ""
+        Write-LogError "Duplicate hosts detected in fleet.conf:"
+        Write-Host ""
+        foreach ($dup in $duplicateHosts) {
+            Write-Host "          $dup" -ForegroundColor White
+        }
+        Write-Host ""
+        Write-Host "          Correct fleet.conf and restart." -ForegroundColor White
+        Write-Host ""
+        exit 1
     }
     
     return $script:FleetHosts.Count -gt 0
@@ -1002,52 +1027,67 @@ function Select-DeployScope {
     Write-Host ""
     Write-Host "  Select deployment scope:" -ForegroundColor White
     Write-Host ""
-    
-    # Show true topology counts (connected host excluded at deploy time, not in display)
-    $totalCount = $script:FleetHosts.Count
-    $hostWord = $(if ($totalCount -eq 1) { "host" } else { "hosts" })
-    $siteWord = $(if ($script:FleetUniqueSites.Count -eq 1) { "site" } else { "sites" })
-    
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
-    Write-Host "Entire topology ($totalCount $hostWord across $($script:FleetUniqueSites.Count) $siteWord)" -ForegroundColor White
-    
-    $optionNum = 2
-    foreach ($site in $script:FleetUniqueSites) {
-        $siteCount = Get-SiteHostCount -SiteId $site
-        $siteHostWord = $(if ($siteCount -eq 1) { "host" } else { "hosts" })
-        
-        Write-Host ("    $optionNum) ") -NoNewline -ForegroundColor Yellow
-        Write-Host "Site: $site ($siteCount $siteHostWord)" -ForegroundColor White
-        $optionNum++
-    }
-    
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " All fleet hosts" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Select by site" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "3" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Select by host" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
     Write-Host ""
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
-    Write-Host "Cancel" -ForegroundColor White
-    Write-Host ""
-    
-    $maxOption = $optionNum - 1
-    $scopeChoice = Read-Host "  Select [0-$maxOption]"
-    
-    if ($scopeChoice -eq "0" -or [string]::IsNullOrWhiteSpace($scopeChoice)) { return @() }
-    
-    $num = 0
-    if (-not [int]::TryParse($scopeChoice, [ref]$num) -or $num -lt 1 -or $num -gt $maxOption) { return @() }
+    $scopeType = Read-Host "  Select [0-3]"
     
     $targets = @()
-    if ($num -eq 1) {
-        # Entire topology
-        $targets = @($script:FleetHosts | Where-Object { $_ -ne $script:RemoteHost })
-    } else {
-        # Specific site
-        $siteIndex = $num - 2
-        $selectedSite = $script:FleetUniqueSites[$siteIndex]
-        for ($i = 0; $i -lt $script:FleetHosts.Count; $i++) {
-            if ($script:FleetSites[$i] -eq $selectedSite -and $script:FleetHosts[$i] -ne $script:RemoteHost) {
-                $targets += $script:FleetHosts[$i]
+    
+    switch ($scopeType) {
+        "1" {
+            $targets = @($script:FleetHosts | Where-Object { $_ -ne $script:RemoteHost })
+        }
+        "2" {
+            Write-Host ""
+            for ($s = 0; $s -lt $script:FleetUniqueSites.Count; $s++) {
+                $site = $script:FleetUniqueSites[$s]
+                $siteCount = @(Get-SiteHosts -SiteId $site).Count
+                $siteHostWord = $(if ($siteCount -eq 1) { "host" } else { "hosts" })
+                Write-Host -NoNewline "    "; Write-Host -NoNewline "$($s + 1)" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White
+                Write-Host " $site ($siteCount $siteHostWord)" -ForegroundColor White
+            }
+            Write-Host ""
+            $siteInput = Read-Host "  Enter site numbers (comma-separate for multiple)"
+            if ([string]::IsNullOrWhiteSpace($siteInput)) { return @() }
+            foreach ($sel in ($siteInput -split ',')) {
+                $sel = $sel.Trim()
+                $num = 0
+                if ([int]::TryParse($sel, [ref]$num) -and $num -ge 1 -and $num -le $script:FleetUniqueSites.Count) {
+                    $selectedSite = $script:FleetUniqueSites[$num - 1]
+                    for ($i = 0; $i -lt $script:FleetHosts.Count; $i++) {
+                        if ($script:FleetSites[$i] -eq $selectedSite -and $script:FleetHosts[$i] -ne $script:RemoteHost) {
+                            $targets += $script:FleetHosts[$i]
+                        }
+                    }
+                }
             }
         }
+        "3" {
+            Write-Host ""
+            for ($h = 0; $h -lt $script:FleetHosts.Count; $h++) {
+                Write-Host -NoNewline "    "; Write-Host -NoNewline "$($h + 1)" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White
+                Write-Host " $($script:FleetHosts[$h]) ($($script:FleetSites[$h]))" -ForegroundColor White
+            }
+            Write-Host ""
+            $hostInput = Read-Host "  Enter host numbers (comma-separate for multiple)"
+            if ([string]::IsNullOrWhiteSpace($hostInput)) { return @() }
+            foreach ($sel in ($hostInput -split ',')) {
+                $sel = $sel.Trim()
+                $num = 0
+                if ([int]::TryParse($sel, [ref]$num) -and $num -ge 1 -and $num -le $script:FleetHosts.Count) {
+                    $idx = $num - 1
+                    if ($script:FleetHosts[$idx] -ne $script:RemoteHost) {
+                        $targets += $script:FleetHosts[$idx]
+                    }
+                }
+            }
+        }
+        default { return @() }
     }
+    
     return $targets
 }
 
@@ -1260,32 +1300,34 @@ function Invoke-FleetDeploy {
         Write-Host "  Deploying to $($vr.Host) ($($vr.Site))..." -ForegroundColor White
         
         # Backup
-        $backupFile = ""
-        if ($ObjectType -eq "datagroup") {
-            $backupFile = Backup-RemoteDatagroup -HostName $vr.Host -Partition $Partition -Name $ObjectName -SiteId $vr.Site
-        } else {
-            $backupFile = Backup-RemoteUrlCategory -HostName $vr.Host -CatName $ObjectName -SiteId $vr.Site
-        }
-        
-        if ([string]::IsNullOrWhiteSpace($backupFile)) {
-            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
-            $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "FAIL"; Message = "Backup failed" }
-            $failCount++
-            $consecutiveSameError++
-            $lastError = "Backup failed"
-            if ($consecutiveSameError -ge 3) {
-                Write-Host ""
-                Write-LogWarn "Systemic failure detected: Same error on 3 consecutive hosts"
-                Write-Host "  Continue deploying to remaining hosts? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-                if ($cont -ne "yes") {
-                    Write-LogInfo "Deployment stopped by user."
-                    break
-                }
-                $consecutiveSameError = 0
+        if ($script:BACKUPS_ENABLED -eq 1) {
+            $backupFile = ""
+            if ($ObjectType -eq "datagroup") {
+                $backupFile = Backup-RemoteDatagroup -HostName $vr.Host -Partition $Partition -Name $ObjectName -SiteId $vr.Site
+            } else {
+                $backupFile = Backup-RemoteUrlCategory -HostName $vr.Host -CatName $ObjectName -SiteId $vr.Site
             }
-            continue
+            
+            if ([string]::IsNullOrWhiteSpace($backupFile)) {
+                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
+                $deployResults += @{ Host = $vr.Host; Site = $vr.Site; Status = "FAIL"; Message = "Backup failed" }
+                $failCount++
+                $consecutiveSameError++
+                $lastError = "Backup failed"
+                if ($consecutiveSameError -ge 3) {
+                    Write-Host ""
+                    Write-LogWarn "Systemic failure detected: Same error on 3 consecutive hosts"
+                    Write-Host "  Continue deploying to remaining hosts? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+                    if ($cont -ne "yes") {
+                        Write-LogInfo "Deployment stopped by user."
+                        break
+                    }
+                    $consecutiveSameError = 0
+                }
+                continue
+            }
+            Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Creating backup" -ForegroundColor White
         }
-        Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Creating backup" -ForegroundColor White
         
         # Deploy (apply + save with verbose output from deploy functions)
         $success = & $DeployAction $vr.Host $vr.Site
@@ -1621,7 +1663,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v4.5                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v4.6                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -1633,39 +1675,44 @@ function Show-MainMenu {
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "1)" -NoNewline -ForegroundColor Yellow
+    Write-Host "1" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Create Datagroup or URL Category                     " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "2)" -NoNewline -ForegroundColor Yellow
+    Write-Host "2" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Create/Update Datagroup or URL Category from CSV     " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "3)" -NoNewline -ForegroundColor Yellow
+    Write-Host "3" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Delete Datagroup or URL Category                     " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "4)" -NoNewline -ForegroundColor Yellow
+    Write-Host "4" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Export Datagroup or URL Category to CSV              " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "5)" -NoNewline -ForegroundColor Yellow
+    Write-Host "5" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  View/Edit a Datagroup or URL Category                " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "6)" -NoNewline -ForegroundColor Yellow
+    Write-Host "6" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Search                                               " -NoNewline -ForegroundColor White
+    Write-Host "║" -ForegroundColor Cyan
+    Write-Host "  ║" -NoNewline -ForegroundColor Cyan
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "7" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+    Write-Host "  Fleet Backup                                         " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "0)" -NoNewline -ForegroundColor Yellow
+    Write-Host "0" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Exit                                                 " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
@@ -1678,11 +1725,11 @@ function Invoke-CreateEmpty {
     
     Write-Host ""
     Write-Host "  What would you like to create?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Datagroup" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "URL Category" -ForegroundColor White
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     $choice = Read-Host "  Select [0-2]"
@@ -1734,11 +1781,11 @@ function Invoke-CreateEmptyDatagroup {
     # Select type
     Write-Host ""
     Write-Host "  Select datagroup type:" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "string  - For domains, hostnames, URLs" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "address - For IP addresses, subnets (CIDR)" -ForegroundColor White
-    Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '3' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "integer - For port numbers, numeric values" -ForegroundColor White
     Write-Host ""
     $typeChoice = Read-Host "  Select [1-3]"
@@ -1819,11 +1866,11 @@ function Invoke-CreateEmptyUrlCategory {
     # Select default action
     Write-Host ""
     Write-Host "  Select default action for this category:" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "allow   - Allow traffic (use for bypass lists)" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "block   - Block traffic" -ForegroundColor White
-    Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '3' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "confirm - Prompt user for confirmation" -ForegroundColor White
     Write-Host ""
     $actionChoice = Read-Host "  Select [1-3] [1]"
@@ -1860,11 +1907,11 @@ function Invoke-CreateFromCsv {
     
     Write-Host ""
     Write-Host "  What would you like to create?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Datagroup (LTM data-group for iRules/policies)" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "URL Category (Custom URL category for SSLO/SWG)" -ForegroundColor White
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     $choice = Read-Host "  Select [0-2]"
@@ -1919,11 +1966,11 @@ function Invoke-CreateDatagroup {
         Write-LogInfo "  Current records: $($records.Count)"
         Write-Host ""
         Write-Host "  How do you want to proceed?" -ForegroundColor White
-        Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "Overwrite - Replace all existing entries with CSV contents" -ForegroundColor White
-        Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "Merge     - Add CSV entries to existing (deduplicated)" -ForegroundColor White
-        Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '3' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "Cancel" -ForegroundColor White
         Write-Host ""
         $existChoice = Read-Host "  Select [1-3]"
@@ -1939,28 +1986,30 @@ function Invoke-CreateDatagroup {
         }
         
         # Backup before modification
-        Write-LogStep "Creating backup of existing datagroup..."
-        $backupFile = Backup-Datagroup -Partition $partition -Name $dgName
-        if ($backupFile) {
-            Write-LogOk "Backup saved: $backupFile"
-        } else {
-            Write-LogWarn "Could not create backup."
-            Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-            if ($cont -ne "yes") {
-                Write-LogInfo "Aborted."
-                Press-EnterToContinue
-                return
+        if ($script:BACKUPS_ENABLED -eq 1) {
+            Write-LogStep "Creating backup of existing datagroup..."
+            $backupFile = Backup-Datagroup -Partition $partition -Name $dgName
+            if ($backupFile) {
+                Write-LogOk "Backup saved: $backupFile"
+            } else {
+                Write-LogWarn "Could not create backup."
+                Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+                if ($cont -ne "yes") {
+                    Write-LogInfo "Aborted."
+                    Press-EnterToContinue
+                    return
+                }
             }
         }
     } else {
         # New datagroup - ask for type
         Write-Host ""
         Write-Host "  Select datagroup type:" -ForegroundColor White
-        Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "string  - For domains, hostnames, URLs" -ForegroundColor White
-        Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "address - For IP addresses, subnets (CIDR)" -ForegroundColor White
-        Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '3' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "integer - For port numbers, numeric values" -ForegroundColor White
         Write-Host ""
         $typeChoice = Read-Host "  Select [1-3]"
@@ -2012,9 +2061,9 @@ function Invoke-CreateDatagroup {
     
     # Ask about format
     Write-Host "  What does this file contain?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Keys only (e.g., domains, subnets)" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Keys and Values (e.g., domain,action)" -ForegroundColor White
     Write-Host ""
     $formatChoice = Read-Host "  Select [1-2]"
@@ -2163,11 +2212,11 @@ function Invoke-CreateUrlCategory {
         Write-LogInfo "URL category '$catName' already exists with $currentCount URLs."
         Write-Host ""
         Write-Host "  How do you want to proceed?" -ForegroundColor White
-        Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "Overwrite - Replace all existing URLs" -ForegroundColor White
-        Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "Merge     - Add new URLs to existing (deduplicated)" -ForegroundColor White
-        Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '3' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "Cancel" -ForegroundColor White
         Write-Host ""
         $existChoice = Read-Host "  Select [1-3]"
@@ -2190,11 +2239,11 @@ function Invoke-CreateUrlCategory {
             Write-LogInfo "URL category '$catName' has $currentCount URLs."
             Write-Host ""
             Write-Host "  How do you want to proceed?" -ForegroundColor White
-            Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+            Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
             Write-Host "Overwrite - Replace all existing URLs" -ForegroundColor White
-            Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+            Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
             Write-Host "Merge     - Add new URLs to existing (deduplicated)" -ForegroundColor White
-            Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+            Write-Host '    ' -NoNewline; Write-Host '3' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
             Write-Host "Cancel" -ForegroundColor White
             Write-Host ""
             $existChoice = Read-Host "  Select [1-3]"
@@ -2284,11 +2333,11 @@ function Invoke-CreateUrlCategory {
     if ($restoreMode -ne "merge") {
         Write-Host ""
         Write-Host "  Select default action for this category:" -ForegroundColor White
-        Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "allow   - Allow traffic (use for bypass lists)" -ForegroundColor White
-        Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "block   - Block traffic" -ForegroundColor White
-        Write-Host '    3) ' -NoNewline -ForegroundColor Yellow
+        Write-Host '    ' -NoNewline; Write-Host '3' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
         Write-Host "confirm - Prompt user for confirmation" -ForegroundColor White
         Write-Host ""
         $actionChoice = Read-Host "  Select [1-3] [1]"
@@ -2361,11 +2410,11 @@ function Invoke-DeleteMenu {
     
     Write-Host ""
     Write-Host "  What would you like to delete?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Datagroup" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "URL Category" -ForegroundColor White
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     $choice = Read-Host "  Select [0-2]"
@@ -2414,14 +2463,16 @@ function Invoke-DeleteDatagroup {
     Write-LogInfo "  Records: $($records.Count)"
     Write-Host ""
     
-    Write-LogStep "Creating backup before deletion..."
-    $backupFile = Backup-Datagroup -Partition $partition -Name $dgName
-    if ($backupFile) {
-        Write-LogOk "Backup saved: $backupFile"
-    } else {
-        Write-LogWarn "Could not create backup."
-        Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-        if ($cont -ne "yes") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
+    if ($script:BACKUPS_ENABLED -eq 1) {
+        Write-LogStep "Creating backup before deletion..."
+        $backupFile = Backup-Datagroup -Partition $partition -Name $dgName
+        if ($backupFile) {
+            Write-LogOk "Backup saved: $backupFile"
+        } else {
+            Write-LogWarn "Could not create backup."
+            Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+            if ($cont -ne "yes") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
+        }
     }
     
     Write-Host ""
@@ -2453,11 +2504,11 @@ function Invoke-DeleteUrlCategory {
     
     Write-Host ""
     Write-Host "  How would you like to select a URL category?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Enter category name directly" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "List all categories" -ForegroundColor White
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     $methodChoice = Read-Host "  Select [0-2]"
@@ -2492,11 +2543,11 @@ function Invoke-DeleteUrlCategory {
             Write-Host "  Available URL Categories:" -ForegroundColor White
             Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor Cyan
             for ($i = 0; $i -lt $categories.Count; $i++) {
-                Write-Host ("    " + ($i + 1).ToString().PadLeft(3) + ") ") -NoNewline -ForegroundColor Yellow
+                Write-Host "    " -NoNewline; Write-Host ($i + 1).ToString().PadLeft(3) -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White
                 Write-Host $categories[$i] -ForegroundColor White
             }
             Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-            Write-Host '      0) ' -NoNewline -ForegroundColor Yellow
+            Write-Host '      ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
             Write-Host "Cancel" -ForegroundColor White
             Write-Host ""
             
@@ -2518,13 +2569,15 @@ function Invoke-DeleteUrlCategory {
     Write-LogInfo "  URLs:     $urlCount"
     Write-Host ""
     
-    Write-LogStep "Creating backup before deletion..."
-    $backupFile = Backup-UrlCategory -CatName $selectedCategory
-    if ($backupFile) { Write-LogOk "Backup saved: $backupFile" }
-    else {
-        Write-LogWarn "Could not create backup."
-        Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-        if ($cont -ne "yes") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
+    if ($script:BACKUPS_ENABLED -eq 1) {
+        Write-LogStep "Creating backup before deletion..."
+        $backupFile = Backup-UrlCategory -CatName $selectedCategory
+        if ($backupFile) { Write-LogOk "Backup saved: $backupFile" }
+        else {
+            Write-LogWarn "Could not create backup."
+            Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+            if ($cont -ne "yes") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
+        }
     }
     
     Write-Host ""
@@ -2551,11 +2604,11 @@ function Invoke-ExportToCsv {
     
     Write-Host ""
     Write-Host "  What would you like to export?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Datagroup" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "URL Category" -ForegroundColor White
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     $choice = Read-Host "  Select [0-2]"
@@ -2627,11 +2680,11 @@ function Invoke-ExportUrlCategory {
     # Select category (same pattern as delete)
     Write-Host ""
     Write-Host "  How would you like to select a URL category?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Enter category name directly" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "List all categories" -ForegroundColor White
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     $methodChoice = Read-Host "  Select [0-2]"
@@ -2665,11 +2718,11 @@ function Invoke-ExportUrlCategory {
             Write-Host "  Available URL Categories:" -ForegroundColor White
             Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor Cyan
             for ($i = 0; $i -lt $categories.Count; $i++) {
-                Write-Host ("    " + ($i + 1).ToString().PadLeft(3) + ") ") -NoNewline -ForegroundColor Yellow
+                Write-Host "    " -NoNewline; Write-Host ($i + 1).ToString().PadLeft(3) -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White
                 Write-Host $categories[$i] -ForegroundColor White
             }
             Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-            Write-Host '      0) ' -NoNewline -ForegroundColor Yellow
+            Write-Host '      ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
             Write-Host "Cancel" -ForegroundColor White
             Write-Host ""
             $catChoice = Read-Host "  Select [0-$($categories.Count)]"
@@ -2695,9 +2748,9 @@ function Invoke-ExportUrlCategory {
     
     Write-Host ""
     Write-Host "  Export format:" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Domain only (e.g., example.com)" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Full URL format (e.g., https://example.com/)" -ForegroundColor White
     Write-Host ""
     $formatChoice = Read-Host "  Select [1-2] [1]"
@@ -2755,11 +2808,11 @@ function Invoke-FleetLookingGlass {
     
     Write-Host ""
     Write-Host "  What would you like to inspect?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Datagroup" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "URL Category" -ForegroundColor White
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     $typeChoice = Read-Host "  Select [0-2]"
@@ -2803,10 +2856,10 @@ function Invoke-FleetLookingGlass {
     Write-Host ""
     Write-Host "  Select search scope:" -ForegroundColor White
     Write-Host ""
-    Write-Host -NoNewline "    "; Write-Host -NoNewline "1)" -ForegroundColor Yellow; Write-Host " All fleet hosts" -ForegroundColor White
-    Write-Host -NoNewline "    "; Write-Host -NoNewline "2)" -ForegroundColor Yellow; Write-Host " Select by site" -ForegroundColor White
-    Write-Host -NoNewline "    "; Write-Host -NoNewline "3)" -ForegroundColor Yellow; Write-Host " Select by host" -ForegroundColor White
-    Write-Host -NoNewline "    "; Write-Host -NoNewline "0)" -ForegroundColor Yellow; Write-Host " Cancel" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " All fleet hosts" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Select by site" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "3" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Select by host" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
     Write-Host ""
     $scopeType = Read-Host "  Select [0-3]"
     
@@ -2824,7 +2877,7 @@ function Invoke-FleetLookingGlass {
                 $site = $script:FleetUniqueSites[$s]
                 $siteCount = Get-SiteHostCount -SiteId $site
                 $siteHostWord = $(if ($siteCount -eq 1) { "host" } else { "hosts" })
-                Write-Host -NoNewline "    "; Write-Host -NoNewline "$($s + 1))" -ForegroundColor Yellow
+                Write-Host -NoNewline "    "; Write-Host -NoNewline "$($s + 1)" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White
                 Write-Host " $site ($siteCount $siteHostWord)" -ForegroundColor White
             }
             Write-Host ""
@@ -2847,7 +2900,7 @@ function Invoke-FleetLookingGlass {
         "3" {
             Write-Host ""
             for ($h = 0; $h -lt $script:FleetHosts.Count; $h++) {
-                Write-Host -NoNewline "    "; Write-Host -NoNewline "$($h + 1))" -ForegroundColor Yellow
+                Write-Host -NoNewline "    "; Write-Host -NoNewline "$($h + 1)" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White
                 Write-Host " $($script:FleetHosts[$h]) ($($script:FleetSites[$h]))" -ForegroundColor White
             }
             Write-Host ""
@@ -2995,9 +3048,9 @@ function Invoke-FleetLookingGlass {
         Write-Host ""
         Write-Host "  ──────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host -NoNewline "  "; Write-Host -NoNewline "s)" -ForegroundColor Yellow; Write-Host -NoNewline " Search      " -ForegroundColor White
-        Write-Host -NoNewline "d)" -ForegroundColor Yellow; Write-Host -NoNewline " Diff      " -ForegroundColor White
-        Write-Host -NoNewline "q)" -ForegroundColor Yellow; Write-Host " Quit" -ForegroundColor White
+        Write-Host -NoNewline "  "; Write-Host -NoNewline "s" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host -NoNewline " Search      " -ForegroundColor White
+        Write-Host -NoNewline "d" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host -NoNewline " Diff      " -ForegroundColor White
+        Write-Host -NoNewline "q" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Quit" -ForegroundColor White
         Write-Host ""
         $input = Read-Host "  Select option"
         
@@ -3149,6 +3202,203 @@ function Invoke-FleetLookingGlass {
 }
 
 # =============================================================================
+# FLEET BACKUP
+# =============================================================================
+
+function Invoke-FleetBackup {
+    Write-LogSection "Fleet Backup"
+    
+    if ($script:FleetHosts.Count -eq 0) {
+        Write-LogError "No fleet configuration loaded. Configure fleet.conf to use this feature."
+        Press-EnterToContinue
+        return
+    }
+    
+    Write-Host ""
+    Write-Host "  What would you like to backup?" -ForegroundColor White
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
+    Write-Host "Datagroup" -ForegroundColor White
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
+    Write-Host "URL Category" -ForegroundColor White
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
+    Write-Host "Cancel" -ForegroundColor White
+    Write-Host ""
+    $typeChoice = Read-Host "  Select [0-2]"
+    
+    $objectType = ""
+    $objectName = ""
+    $partition = ""
+    
+    switch ($typeChoice) {
+        "1" {
+            $objectType = "datagroup"
+            if ($script:PARTITIONS.Count -gt 1) {
+                $partition = Select-Partition
+                if ([string]::IsNullOrWhiteSpace($partition)) { return }
+            } else {
+                $partition = $script:PARTITIONS[0]
+            }
+            Write-Host ""
+            $objectName = Read-Host "  Enter datagroup name (or 'q' to cancel)"
+            if ([string]::IsNullOrWhiteSpace($objectName) -or $objectName -eq "q") { return }
+            $objectName = Remove-PartitionPrefix -Name $objectName
+        }
+        "2" {
+            $objectType = "urlcat"
+            Write-Host ""
+            $objectName = Read-Host "  Enter URL category name (or 'q' to cancel)"
+            if ([string]::IsNullOrWhiteSpace($objectName) -or $objectName -eq "q") { return }
+            # Resolve SSLO category name if needed
+            if (-not (Test-UrlCategoryExistsRemote -Name $objectName)) {
+                $ssloName = "sslo-urlCat$objectName"
+                if (Test-UrlCategoryExistsRemote -Name $ssloName) {
+                    Write-LogInfo "Found as SSLO category: $ssloName"
+                    $objectName = $ssloName
+                }
+            }
+        }
+        default { return }
+    }
+    
+    # Select backup scope
+    Write-Host ""
+    Write-Host "  Select backup scope:" -ForegroundColor White
+    Write-Host ""
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " All fleet hosts" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Select by site" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "3" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Select by host" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
+    Write-Host ""
+    $scopeType = Read-Host "  Select [0-3]"
+    
+    $targetHosts = @()
+    $targetSites = @()
+    
+    switch ($scopeType) {
+        "1" {
+            $targetHosts = @($script:FleetHosts)
+            $targetSites = @($script:FleetSites)
+        }
+        "2" {
+            Write-Host ""
+            for ($s = 0; $s -lt $script:FleetUniqueSites.Count; $s++) {
+                $site = $script:FleetUniqueSites[$s]
+                $siteCount = @(Get-SiteHosts -SiteId $site).Count
+                $siteHostWord = $(if ($siteCount -eq 1) { "host" } else { "hosts" })
+                Write-Host "    $($s + 1)) $site ($siteCount $siteHostWord)" -ForegroundColor White
+            }
+            Write-Host ""
+            $siteInput = Read-Host "  Enter site numbers (comma-separate for multiple)"
+            if ([string]::IsNullOrWhiteSpace($siteInput)) { return }
+            foreach ($sel in ($siteInput -split ',')) {
+                $sel = $sel.Trim()
+                $num = 0
+                if ([int]::TryParse($sel, [ref]$num) -and $num -ge 1 -and $num -le $script:FleetUniqueSites.Count) {
+                    $selectedSite = $script:FleetUniqueSites[$num - 1]
+                    for ($i = 0; $i -lt $script:FleetHosts.Count; $i++) {
+                        if ($script:FleetSites[$i] -eq $selectedSite) {
+                            $targetHosts += $script:FleetHosts[$i]
+                            $targetSites += $script:FleetSites[$i]
+                        }
+                    }
+                }
+            }
+        }
+        "3" {
+            Write-Host ""
+            for ($h = 0; $h -lt $script:FleetHosts.Count; $h++) {
+                Write-Host "    $($h + 1)) $($script:FleetHosts[$h]) ($($script:FleetSites[$h]))" -ForegroundColor White
+            }
+            Write-Host ""
+            $hostInput = Read-Host "  Enter host numbers (comma-separate for multiple)"
+            if ([string]::IsNullOrWhiteSpace($hostInput)) { return }
+            foreach ($sel in ($hostInput -split ',')) {
+                $sel = $sel.Trim()
+                $num = 0
+                if ([int]::TryParse($sel, [ref]$num) -and $num -ge 1 -and $num -le $script:FleetHosts.Count) {
+                    $idx = $num - 1
+                    $targetHosts += $script:FleetHosts[$idx]
+                    $targetSites += $script:FleetSites[$idx]
+                }
+            }
+        }
+        default { return }
+    }
+    
+    if ($targetHosts.Count -eq 0) {
+        Write-LogWarn "No valid scope selected."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Execute backup
+    Clear-Host
+    Write-Host ""
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "    FLEET BACKUP: $objectName" -ForegroundColor White
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    
+    $origHost = $script:RemoteHost
+    $successCount = 0
+    $failCount = 0
+    
+    for ($h = 0; $h -lt $targetHosts.Count; $h++) {
+        $hostName = $targetHosts[$h]
+        $siteId = $targetSites[$h]
+        
+        Write-Host "`r  [....] $hostName ($siteId)" -NoNewline -ForegroundColor White
+        
+        $script:RemoteHost = $hostName
+        
+        # Test connectivity
+        $connResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/version"
+        if (-not $connResult.Success) {
+            Write-Host "`r$(' ' * 80)" -NoNewline
+            Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
+            Write-Host " $hostName ($siteId) - Connection failed" -ForegroundColor White
+            $failCount++
+            continue
+        }
+        
+        # Create backup
+        $backupFile = ""
+        if ($objectType -eq "datagroup") {
+            $backupFile = Backup-RemoteDatagroup -HostName $hostName -Partition $partition -Name $objectName -SiteId $siteId
+        } else {
+            $backupFile = Backup-RemoteUrlCategory -HostName $hostName -CatName $objectName -SiteId $siteId
+        }
+        
+        if ($backupFile) {
+            Write-Host "`r$(' ' * 80)" -NoNewline
+            Write-Host "`r  [ OK ]" -NoNewline -ForegroundColor Green
+            Write-Host " $hostName ($siteId)" -ForegroundColor White
+            $successCount++
+        } else {
+            Write-Host "`r$(' ' * 80)" -NoNewline
+            Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
+            Write-Host " $hostName ($siteId) - Backup failed" -ForegroundColor White
+            $failCount++
+        }
+    }
+    
+    $script:RemoteHost = $origHost
+    
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host -NoNewline "  Backup complete: " -ForegroundColor White
+    Write-Host -NoNewline "$successCount saved" -ForegroundColor Green
+    Write-Host -NoNewline ", " -ForegroundColor White
+    Write-Host -NoNewline "$failCount failed" -ForegroundColor Red
+    Write-Host " of $($targetHosts.Count) hosts" -ForegroundColor White
+    Write-Host ""
+    if ($successCount -gt 0) {
+        Write-LogInfo "Backups saved to: $($script:BACKUP_DIR)\"
+    }
+    
+    Press-EnterToContinue
+}
+
+# =============================================================================
 # INTERACTIVE EDITOR
 # =============================================================================
 
@@ -3157,11 +3407,11 @@ function Invoke-EditMenu {
     
     Write-Host ""
     Write-Host "  What would you like to edit?" -ForegroundColor White
-    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Datagroup" -ForegroundColor White
-    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "URL Category" -ForegroundColor White
-    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
     $choice = Read-Host "  Select [0-2]"
@@ -3192,11 +3442,11 @@ function Invoke-EditMenu {
             # Category selection
             Write-Host ""
             Write-Host "  How would you like to select a URL category?" -ForegroundColor White
-            Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+            Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
             Write-Host "Enter category name directly" -ForegroundColor White
-            Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+            Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
             Write-Host "List all categories" -ForegroundColor White
-            Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+            Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
             Write-Host "Cancel" -ForegroundColor White
             Write-Host ""
             $methodChoice = Read-Host "  Select [0-2]"
@@ -3229,11 +3479,11 @@ function Invoke-EditMenu {
                     Write-Host "  Available URL Categories:" -ForegroundColor White
                     Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor Cyan
                     for ($i = 0; $i -lt $categories.Count; $i++) {
-                        Write-Host ("    " + ($i + 1).ToString().PadLeft(3) + ") ") -NoNewline -ForegroundColor Yellow
+                        Write-Host "    " -NoNewline; Write-Host ($i + 1).ToString().PadLeft(3) -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White
                         Write-Host $categories[$i] -ForegroundColor White
                     }
                     Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-                    Write-Host "      0) Cancel" -ForegroundColor Yellow
+                    Write-Host "      " -NoNewline; Write-Host "0" -NoNewline -ForegroundColor Yellow; Write-Host ") Cancel" -ForegroundColor White
                     Write-Host ""
                     $catChoice = Read-Host "  Select [0-$($categories.Count)]"
                     if ($catChoice -eq "0" -or [string]::IsNullOrWhiteSpace($catChoice)) { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
@@ -3401,23 +3651,23 @@ function Invoke-EditorSubmenu {
         Write-Host ""
         Write-Host "  ──────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host "  n) " -NoNewline -ForegroundColor Yellow; Write-Host "Next page    " -NoNewline -ForegroundColor Green
-        Write-Host "p) " -NoNewline -ForegroundColor Yellow; Write-Host "Previous page    " -NoNewline -ForegroundColor Green
-        Write-Host "g) " -NoNewline -ForegroundColor Yellow; Write-Host "Go to page" -ForegroundColor Green
-        Write-Host "  f) " -NoNewline -ForegroundColor Yellow; Write-Host "Filter       " -NoNewline -ForegroundColor Green
-        Write-Host "c) " -NoNewline -ForegroundColor Yellow; Write-Host "Clear filter     " -NoNewline -ForegroundColor Green
-        Write-Host "s) " -NoNewline -ForegroundColor Yellow; Write-Host "Change sort" -ForegroundColor Green
+        Write-Host "  " -NoNewline; Write-Host "n" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Next page    " -NoNewline -ForegroundColor Green
+        Write-Host "p" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Previous page    " -NoNewline -ForegroundColor Green
+        Write-Host "g" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Go to page" -ForegroundColor Green
+        Write-Host "  " -NoNewline; Write-Host "f" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Filter       " -NoNewline -ForegroundColor Green
+        Write-Host "c" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Clear filter     " -NoNewline -ForegroundColor Green
+        Write-Host "s" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Change sort" -ForegroundColor Green
         Write-Host ""
-        Write-Host "  a) " -NoNewline -ForegroundColor Yellow; Write-Host "Add entry    " -NoNewline -ForegroundColor Green
-        Write-Host "d) " -NoNewline -ForegroundColor Yellow; Write-Host "Delete entry     " -NoNewline -ForegroundColor Green
-        Write-Host "x) " -NoNewline -ForegroundColor Yellow; Write-Host "Delete by pattern" -ForegroundColor Green
+        Write-Host "  " -NoNewline; Write-Host "a" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Add entry    " -NoNewline -ForegroundColor Green
+        Write-Host "d" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Delete entry     " -NoNewline -ForegroundColor Green
+        Write-Host "x" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Delete by pattern" -ForegroundColor Green
         Write-Host ""
-        Write-Host "  w) " -NoNewline -ForegroundColor Yellow; Write-Host "Apply changes (write to current device)" -ForegroundColor Green
+        Write-Host "  " -NoNewline; Write-Host "w" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Apply changes (write to current device)" -ForegroundColor Green
         if (Test-FleetAvailable) {
-            Write-Host "  D) " -NoNewline -ForegroundColor Yellow; Write-Host "Deploy to fleet" -ForegroundColor Green
+            Write-Host "  " -NoNewline; Write-Host "D" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Deploy to fleet" -ForegroundColor Green
         }
         Write-Host ""
-        Write-Host "  q) " -NoNewline -ForegroundColor Yellow; Write-Host "Done (return to main menu)" -ForegroundColor Green
+        Write-Host "  " -NoNewline; Write-Host "q" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Done (return to main menu)" -ForegroundColor Green
         Write-Host ""
         $editChoice = Read-Host "  Select option"
         
@@ -3440,9 +3690,9 @@ function Invoke-EditorSubmenu {
             "s" {
                 Write-Host ""
                 Write-Host "  Sort order:" -ForegroundColor White
-                Write-Host "    1) Original (as stored)" -ForegroundColor Yellow
-                Write-Host "    2) A-Z (ascending)" -ForegroundColor Yellow
-                Write-Host "    3) Z-A (descending)" -ForegroundColor Yellow
+                Write-Host "    " -NoNewline; Write-Host "1" -NoNewline -ForegroundColor Yellow; Write-Host ") Original (as stored)" -ForegroundColor White
+                Write-Host "    " -NoNewline; Write-Host "2" -NoNewline -ForegroundColor Yellow; Write-Host ") A-Z (ascending)" -ForegroundColor White
+                Write-Host "    " -NoNewline; Write-Host "3" -NoNewline -ForegroundColor Yellow; Write-Host ") Z-A (descending)" -ForegroundColor White
                 Write-Host ""
                 $sortChoice = Read-Host "  Select [1-3]"
                 switch ($sortChoice) { "1" { $currentSort = "original" }; "2" { $currentSort = "asc" }; "3" { $currentSort = "desc" } }
@@ -3569,18 +3819,20 @@ function Invoke-EditorSubmenu {
                 if ($confirmApply -ne "yes") { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
                 
                 # Create backup
-                Write-LogStep "Creating backup before applying changes..."
-                $backupFile = ""
-                if ($EditType -eq "datagroup") {
-                    $backupFile = Backup-Datagroup -Partition $Partition -Name $DgName
-                } else {
-                    $backupFile = Backup-UrlCategory -CatName $CatName
-                }
-                if ($backupFile) { Write-LogOk "Backup saved: $backupFile" }
-                else {
-                    Write-LogWarn "Could not create backup."
-                    Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-                    if ($cont -ne "yes") { continue }
+                if ($script:BACKUPS_ENABLED -eq 1) {
+                    Write-LogStep "Creating backup before applying changes..."
+                    $backupFile = ""
+                    if ($EditType -eq "datagroup") {
+                        $backupFile = Backup-Datagroup -Partition $Partition -Name $DgName
+                    } else {
+                        $backupFile = Backup-UrlCategory -CatName $CatName
+                    }
+                    if ($backupFile) { Write-LogOk "Backup saved: $backupFile" }
+                    else {
+                        Write-LogWarn "Could not create backup."
+                        Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+                        if ($cont -ne "yes") { continue }
+                    }
                 }
                 
                 # Apply
@@ -3665,11 +3917,11 @@ function Invoke-EditorSubmenu {
                     # Select deploy mode
                     Write-Host ""
                     Write-Host "  Select deployment mode:" -ForegroundColor White
-                    Write-Host '    1) ' -NoNewline -ForegroundColor Yellow
+                    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
                     Write-Host "Full Replace - Overwrite target with exact state from current device" -ForegroundColor White
-                    Write-Host '    2) ' -NoNewline -ForegroundColor Yellow
+                    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
                     Write-Host "Merge        - Apply only additions/deletions, preserve target-specific entries" -ForegroundColor White
-                    Write-Host '    0) ' -NoNewline -ForegroundColor Yellow
+                    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
                     Write-Host "Cancel" -ForegroundColor White
                     Write-Host ""
                     $deployModeChoice = Read-Host "  Select [0-2]"
@@ -3784,18 +4036,20 @@ function Invoke-EditorSubmenu {
                     Write-Host "  Deploying to $($script:RemoteHost)..." -ForegroundColor White
                     
                     # Backup
-                    $currentBackup = ""
-                    if ($EditType -eq "datagroup") {
-                        $currentBackup = Backup-Datagroup -Partition $Partition -Name $DgName
-                    } else {
-                        $currentBackup = Backup-UrlCategory -CatName $CatName
-                    }
-                    if ($currentBackup) {
-                        Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Creating backup" -ForegroundColor White
-                    } else {
-                        Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
-                        Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-                        if ($cont -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+                    if ($script:BACKUPS_ENABLED -eq 1) {
+                        $currentBackup = ""
+                        if ($EditType -eq "datagroup") {
+                            $currentBackup = Backup-Datagroup -Partition $Partition -Name $DgName
+                        } else {
+                            $currentBackup = Backup-UrlCategory -CatName $CatName
+                        }
+                        if ($currentBackup) {
+                            Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Creating backup" -ForegroundColor White
+                        } else {
+                            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
+                            Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+                            if ($cont -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+                        }
                     }
                     
                     # Apply
@@ -3938,15 +4192,15 @@ function Main {
         Write-Host ""
         Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-        Write-Host "                    DGCAT-Admin v4.5                        " -NoNewline -ForegroundColor White
+        Write-Host "                    DGCAT-Admin v4.6                        " -NoNewline -ForegroundColor White
         Write-Host "║" -ForegroundColor Cyan
         Write-Host "  ║" -NoNewline -ForegroundColor Cyan
         Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
         Write-Host "║" -ForegroundColor Cyan
         Write-Host "  ╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host "    1)  Connect to BIG-IP" -ForegroundColor White
-        Write-Host "    0)  Exit" -ForegroundColor White
+        Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host "  Connect to BIG-IP" -ForegroundColor White
+        Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host "  Exit" -ForegroundColor White
         Write-Host ""
         
         $startChoice = Read-Host "  Select [0-1]"
@@ -3997,7 +4251,7 @@ function Main {
         while ($true) {
             Show-MainMenu
             
-            $choice = Read-Host "  Select option [0-6]"
+            $choice = Read-Host "  Select option [0-7]"
             
             switch ($choice) {
                 "1" { Invoke-CreateEmpty }
@@ -4006,6 +4260,7 @@ function Main {
                 "4" { Invoke-ExportToCsv }
                 "5" { Invoke-EditMenu }
                 "6" { Invoke-FleetLookingGlass }
+                "7" { Invoke-FleetBackup }
                 "0" {
                     Write-LogSection "Session End"
                     Write-LogInfo "Session ended: $(Get-Date)"
