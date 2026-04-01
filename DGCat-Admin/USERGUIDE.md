@@ -466,7 +466,7 @@ The tool connects to each selected host, pulls the object's current state, and w
 
 ```
   ══════════════════════════════════════════════════════════════
-    FLEET BACKUP: sslo-urlCatPinners
+    BACKUP: sslo-urlCatPinners
   ══════════════════════════════════════════════════════════════
   [ OK ] bigip01-mgmt.dc1.example.com (DC1)
   [ OK ] bigip02-mgmt.dc1.example.com (DC1)
