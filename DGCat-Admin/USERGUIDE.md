@@ -14,10 +14,11 @@
 10. [The Interactive Editor](#the-interactive-editor)
 11. [Fleet Deployment](#fleet-deployment)
 12. [Fleet Search](#fleet-search)
-13. [CSV File Formats](#csv-file-formats)
-14. [Backup System](#backup-system)
-15. [Configuration Reference](#configuration-reference)
-16. [Troubleshooting](#troubleshooting)
+13. [Fleet Backup](#fleet-backup)
+14. [CSV File Formats](#csv-file-formats)
+15. [Backup System](#backup-system)
+16. [Configuration Reference](#configuration-reference)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -106,12 +107,15 @@ The top of the script contains a configuration section with three settings you m
 ```bash
 BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
 MAX_BACKUPS=30
+BACKUPS_ENABLED=1
 PARTITIONS="Common"
 ```
 
 **BACKUP_DIR** is where backups, logs, and the fleet configuration file are stored. The default path works well when running on a BIG-IP. If you're running from a different machine, change this to a local path.
 
 **MAX_BACKUPS** controls how many backup files are retained per object. When the limit is exceeded, the oldest backups are removed automatically.
+
+**BACKUPS_ENABLED** controls whether automatic pre-change backups are created. Set to `0` to disable. Export (Option 4) and Fleet Backup (Option 7) are unaffected by this setting.
 
 **PARTITIONS** is a comma-separated list of BIG-IP partitions to manage. Most SSLO deployments use the `Common` partition, but if your environment uses additional partitions, add them here. Only datagroups in listed partitions will be visible to the tool.
 
@@ -156,7 +160,7 @@ After a successful connection, you see the main menu:
 
 <img width="645" height="386" alt="Image" src="https://github.com/user-attachments/assets/09f78cca-e590-4436-acaf-5c2137ed7ed3" />
 
-Each option is described in detail in the following sections. Selecting `0` ends the session and returns to the welcome screen, where you can connect to a different device or exit.
+Each option is described in detail in the following sections. Option 7 (Fleet Backup) requires a fleet configuration. Selecting `0` ends the session and returns to the welcome screen, where you can connect to a different device or exit.
 
 ---
 
@@ -337,9 +341,9 @@ After confirming your intent to deploy, you select a deployment mode:
 
 Next, you select which devices to deploy to:
 
-- **Entire topology** — All fleet hosts except the one you're currently connected to
-- **Specific site** — All hosts at a particular site
-- **Hosts** - Select any combination of hosts in your fleet
+- **All fleet hosts** — Every host in your fleet except the one you're currently connected to
+- **Select by site** — Choose one or more sites by number (comma-separated for multiple)
+- **Select by host** — Choose individual hosts by number (comma-separated for multiple)
 
 The device you're connected to is automatically excluded from the fleet target list since it's handled separately.
 
@@ -442,6 +446,43 @@ This tells you exactly which entries need attention and where. To remediate drif
 
 ---
 
+## Fleet Backup
+
+**Menu option 7** pulls a backup of a datagroup or URL category from fleet hosts and saves each one locally. This is useful for capturing the current state of a policy object across your entire topology before a change window, or for auditing what each device has without modifying anything.
+
+### Selecting an Object
+
+You choose whether to back up a datagroup or a URL category, then provide the object name. For datagroups, you also select a partition if more than one is configured. For URL categories, SSLO display names are resolved automatically.
+
+### Selecting a Scope
+
+The scope selection is identical to Fleet Search:
+
+- **All fleet hosts** — Every host in `fleet.conf`
+- **Select by site** — One or more sites by number (comma-separated for multiple)
+- **Select by host** — Individual hosts by number (comma-separated for multiple)
+
+### Execution
+
+The tool connects to each selected host, pulls the object's current state, and writes a timestamped backup CSV into the site's subdirectory within the backup directory. Hosts that are unreachable or don't have the object are flagged and skipped.
+
+```
+  ══════════════════════════════════════════════════════════════
+    FLEET BACKUP: sslo-urlCatPinners
+  ══════════════════════════════════════════════════════════════
+  [ OK ] bigip01-mgmt.dc1.example.com (DC1)
+  [ OK ] bigip02-mgmt.dc1.example.com (DC1)
+  [ OK ] bigip01-mgmt.dc2.example.com (DC2)
+  [FAIL] bigip02-mgmt.dc2.example.com (DC2) - Connection failed
+  ══════════════════════════════════════════════════════════════
+
+  Backup complete: 3 saved, 1 failed of 4 hosts
+```
+
+Backup files are organized by site in the backup directory and follow the same naming convention as pre-deploy backups.
+
+---
+
 ## CSV File Formats
 
 ### Datagroup CSV
@@ -510,6 +551,10 @@ These comment headers are preserved during reimport, making export files directl
 
 DGCat-Admin creates automatic backups before any operation that modifies or deletes data. You do not need to create manual backups.
 
+### Disabling Automatic Backups
+
+If you prefer to manage backups yourself using Export (Option 4) or Fleet Backup (Option 7), you can disable automatic pre-change backups by setting `BACKUPS_ENABLED` to `0` in the script configuration. The backup directory is still created for exports, fleet backups, and logs. The default is `1` (enabled).
+
 ### When Backups Are Created
 
 - Before overwriting or merging entries during CSV import
@@ -555,6 +600,7 @@ To restore from a backup, use the Create/Update from CSV option (menu option 2) 
 |----------|-------------|-------------------|-------------|
 | `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | `$PSScriptRoot\dgcat-admin-backups` | Storage for backups, logs, and fleet config |
 | `MAX_BACKUPS` | `30` | `30` | Maximum backup files retained per object |
+| `BACKUPS_ENABLED` | `1` | `1` | Set to `0` to disable automatic pre-change backups |
 | `LOGGING_ENABLED` | `0` | `0` | Set to `1` to enable session log file creation |
 | `PARTITIONS` | `Common` | `Common` | Comma-separated list of BIG-IP partitions to manage |
 | `PREVIEW_LINES` | `5` | `5` | Number of lines shown in CSV file previews |
@@ -615,6 +661,9 @@ The URL category was created but the API timed out while applying URLs. This can
 The partition listed in your `PARTITIONS` configuration does not exist on the BIG-IP you connected to. Either add the partition on the BIG-IP, remove it from your configuration, or accept that it will be skipped. The tool logs a warning but continues with the partitions that do exist.
 
 ### Fleet Issues
+
+**"Duplicate hosts detected in fleet.conf"**
+The tool found the same hostname or IP listed more than once in `fleet.conf`. Both conflicting entries are displayed in `fleet.conf` format so you can locate them. The script halts until `fleet.conf` is corrected or deleted. This check prevents a host from receiving duplicate deployments or being counted twice in search results.
 
 **"No fleet hosts passed validation. No changes have been made."**
 Every target host either failed to connect or didn't have the target object. Verify network connectivity and credentials. Remember that fleet deployment uses the same credentials you used to connect to the primary device.
