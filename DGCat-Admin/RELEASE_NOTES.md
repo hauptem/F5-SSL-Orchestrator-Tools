@@ -1,7 +1,7 @@
 # DGCat-Admin v4.6 Release Notes - April 1 2026
 
 - **Fleet Backup (Option 7)** — Pull and save backups of a datagroup or URL category across the fleet. Supports scoping by all hosts, site, or individual host selection.
-- **Backup Disable** — `BACKUPS_ENABLED` config variable (default: on). Set to 0 to skip automatic pre-change backups. 
+- **Backup Disable** — `BACKUPS_ENABLED` config variable (default: off). Set to 1 to enable automatic pre-change backups. 
 - **Deploy Scope Redesign** — Deploy scope selection now matches Search and Fleet Backup with comma-separated site and host selection.
 - **Fleet Duplicate Detection** — fleet.conf is validated at startup for duplicate hostnames or IPs. Duplicates are displayed and the script halts until corrected.
 
