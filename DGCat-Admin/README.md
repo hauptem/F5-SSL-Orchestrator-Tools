@@ -31,11 +31,12 @@ DGCat-Admin makes managing those site lists very easy.
 - Need to ingest a large number of subnets or hosts from an Excel spreadsheet into a datagroup for SSLO security policy use?
 - Want to take a custom URL category and convert it to a datagroup?
 - Want to take a datagroup and convert it to a custom URL category?
-- **New in 4.5** Want to search your entire fleet non-destructively and find a needle in a stack of needles?
+- Want to search your entire fleet non-destructively and find a needle in a stack of needles?
+- **New in 4.6** Backup datagroups or URL categories from your entire topology 
 
 **This tool was designed specifically for those purposes.**
 
-<img width="645" height="386" alt="Image" src="https://github.com/user-attachments/assets/09f78cca-e590-4436-acaf-5c2137ed7ed3" />
+<img width="668" height="396" alt="Image" src="https://github.com/user-attachments/assets/4aff2add-068c-4de1-b4a2-8801ecd7e405" />
 
 ## Requirements
 
