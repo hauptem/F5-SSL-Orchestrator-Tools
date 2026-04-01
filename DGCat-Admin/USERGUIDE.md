@@ -96,8 +96,6 @@ chmod +x dgcat-admin.sh
 .\dgcat-admin.ps1
 ```
 
-Or double-click the included `dgcat-admin.bat` launcher, which opens a native PowerShell window with proper color rendering.
-
 There is no installation process, no dependencies beyond the above, and no configuration files required to get started. The tool creates its backup directory automatically on first run.
 
 ### Initial Configuration
@@ -107,7 +105,7 @@ The top of the script contains a configuration section with three settings you m
 ```bash
 BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
 MAX_BACKUPS=30
-BACKUPS_ENABLED=1
+BACKUPS_ENABLED=0
 PARTITIONS="Common"
 ```
 
@@ -115,7 +113,7 @@ PARTITIONS="Common"
 
 **MAX_BACKUPS** controls how many backup files are retained per object. When the limit is exceeded, the oldest backups are removed automatically.
 
-**BACKUPS_ENABLED** controls whether automatic pre-change backups are created. Set to `0` to disable. Export (Option 4) and Fleet Backup (Option 7) are unaffected by this setting.
+**BACKUPS_ENABLED** controls whether automatic pre-change backups are created. Set to `1` to enable. 
 
 **PARTITIONS** is a comma-separated list of BIG-IP partitions to manage. Most SSLO deployments use the `Common` partition, but if your environment uses additional partitions, add them here. Only datagroups in listed partitions will be visible to the tool.
 
@@ -452,7 +450,7 @@ This tells you exactly which entries need attention and where. To remediate drif
 
 ### Selecting an Object
 
-You choose whether to back up a datagroup or a URL category, then provide the object name. For datagroups, you also select a partition if more than one is configured. For URL categories, SSLO display names are resolved automatically.
+You choose whether to back up a datagroup or a URL category, then provide the object name. For datagroups, you also select a partition if more than one is configured. 
 
 ### Selecting a Scope
 
@@ -553,7 +551,7 @@ DGCat-Admin creates automatic backups before any operation that modifies or dele
 
 ### Disabling Automatic Backups
 
-If you prefer to manage backups yourself using Export (Option 4) or Fleet Backup (Option 7), you can disable automatic pre-change backups by setting `BACKUPS_ENABLED` to `0` in the script configuration. The backup directory is still created for exports, fleet backups, and logs. The default is `1` (enabled).
+If you prefer to have the tool automatically backup before every apply action you can enable automatic pre-change backups by setting `BACKUPS_ENABLED` to `1` in the script configuration. The default is `0` (disabled).
 
 ### When Backups Are Created
 
@@ -600,7 +598,7 @@ To restore from a backup, use the Create/Update from CSV option (menu option 2) 
 |----------|-------------|-------------------|-------------|
 | `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | `$PSScriptRoot\dgcat-admin-backups` | Storage for backups, logs, and fleet config |
 | `MAX_BACKUPS` | `30` | `30` | Maximum backup files retained per object |
-| `BACKUPS_ENABLED` | `1` | `1` | Set to `0` to disable automatic pre-change backups |
+| `BACKUPS_ENABLED` | `0` | `0` | Set to `1` to enable automatic pre-change backups |
 | `LOGGING_ENABLED` | `0` | `0` | Set to `1` to enable session log file creation |
 | `PARTITIONS` | `Common` | `Common` | Comma-separated list of BIG-IP partitions to manage |
 | `PREVIEW_LINES` | `5` | `5` | Number of lines shown in CSV file previews |
@@ -628,7 +626,7 @@ dgcat-admin-20260327_143052.log
 
 The log captures all operations performed during the session, including timestamps, success/failure status, and error details. Log files are useful for auditing changes and troubleshooting issues that occurred during a session.
 
-To disable log file creation, set `LOGGING_ENABLED` to `0` in the script configuration.
+To enable log file creation, set `LOGGING_ENABLED` to `1` in the script configuration.
 
 ---
 ## Troubleshooting
