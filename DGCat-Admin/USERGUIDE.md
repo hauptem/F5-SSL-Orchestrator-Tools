@@ -156,7 +156,7 @@ If the connection fails, you're given the option to retry or exit. Common failur
 
 After a successful connection, you see the main menu:
 
-<img width="645" height="386" alt="Image" src="https://github.com/user-attachments/assets/09f78cca-e590-4436-acaf-5c2137ed7ed3" />
+<img width="668" height="396" alt="Image" src="https://github.com/user-attachments/assets/4aff2add-068c-4de1-b4a2-8801ecd7e405" />
 
 Each option is described in detail in the following sections. Option 7 (Fleet Backup) requires a fleet configuration. Selecting `0` ends the session and returns to the welcome screen, where you can connect to a different device or exit.
 
