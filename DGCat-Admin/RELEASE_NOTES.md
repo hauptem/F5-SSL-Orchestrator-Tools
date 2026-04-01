@@ -22,6 +22,10 @@
 **Bug Fixes**
 - **PowerShell Save-F5Config** — Rebuilt on the Invoke-F5Post framework. Previous version silently failed due to a .NET restricted header exception.
 
+# DGCat-Admin v4.4 Release Notes 
+
+- 4.4 was taken out back and shot
+
 # DGCat-Admin v4.3 Release Notes - March 30 2026
 
 **Large Dataset Support**
