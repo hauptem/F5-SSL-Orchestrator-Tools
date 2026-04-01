@@ -122,8 +122,7 @@ preflight_checks() {
 # =============================================================================
 get_credentials() {
     log_section "Credentials"
-    log_info "Enter BIG-IP admin credentials (used for REST API calls)."
-    log_info "Credentials are NOT written to the log file."
+    log_info "Enter BIG-IP admin credentials."
     echo ""
 
     read -rp "  Username [admin]: " input_user
