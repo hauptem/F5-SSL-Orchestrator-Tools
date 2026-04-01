@@ -13,7 +13,7 @@ Useful scripts and tools for F5's SSL Orchestrator product.
 
 | Tool | Description |
 |------|-------------|
-| [Clean Slate](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/Clean-Slate) | Remove all SSLO configurations and restores to a clean state |
+| [Clean Slate](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/Clean-Slate) | Removes all SSLO configuration and restores to a clean state |
 | [TLS Recon](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/TLS-Recon) | Discover TLS traffic on non-standard ports during SSLO deployments |
 | [DGCat Admin](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/DGCat-Admin) | Menu-driven tool for LTM Datagroup and URL Category management |
 
