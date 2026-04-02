@@ -7,6 +7,7 @@
 - Datagroup selection now displays numbered lists across all operations for ease of selection
 - System datagroups are now hidden from selection list view
 - Removed legacy Connect to BIG-IP startup menu
+
 **Cleanup**
 - Removed 8 orphaned functions
 
