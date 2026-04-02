@@ -484,7 +484,7 @@ Backup files are organized by site in the backup directory and follow the same n
 
 ## Bootstrap
 
-**Menu option 8** creates datagroups and URL categories in bulk from a configuration manifest. This is designed for standing up new environments, rebuilding after a migration, or ensuring a standard set of objects exists across your fleet.
+**Menu option 8** creates datagroups and URL categories in bulk from a configuration manifest. This is designed for standing up new environments, rebuilding after a migration, or ensuring a standard set of objects exists across your fleet. 
 
 ### Bootstrap Configuration
 
@@ -589,10 +589,6 @@ These comment headers are preserved during reimport, making export files directl
 
 ## Backup System
 
-DGCat-Admin creates automatic backups before any operation that modifies or deletes data. You do not need to create manual backups.
-
-### Disabling Automatic Backups
-
 If you prefer to have the tool automatically backup before every apply action you can enable automatic pre-change backups by setting `BACKUPS_ENABLED` to `1` in the script configuration. The default is `0` (disabled).
 
 ### When Backups Are Created
@@ -624,11 +620,11 @@ DC1/bigip02-mgmt_dc1_example_com_Common_bypass-domains_20260327_143022.csv
 
 ### Retention
 
-The tool retains up to `MAX_BACKUPS` files per object (default: 30). When the limit is exceeded, the oldest backup files are removed automatically.
+The tool retains up to `MAX_BACKUPS` files per object (default: 10). When the limit is exceeded, the oldest backup files are removed automatically.
 
 ### Restoring from Backup
 
-To restore from a backup, use the Create/Update from CSV option (menu option 2) and point it at the backup file. Select overwrite mode to replace the current contents with the backup. The comment headers in the backup file are ignored during import.
+To restore from a backup, use the Create/Update from CSV option (menu option 2) and point it at the backup file. Select overwrite mode to replace the current contents with the backup.
 
 ---
 
@@ -639,7 +635,7 @@ To restore from a backup, use the Create/Update from CSV option (menu option 2) 
 | Variable | Bash Default | PowerShell Default | Description |
 |----------|-------------|-------------------|-------------|
 | `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | `$PSScriptRoot\dgcat-admin-backups` | Storage for backups, logs, and fleet config |
-| `MAX_BACKUPS` | `30` | `30` | Maximum backup files retained per object |
+| `MAX_BACKUPS` | `10` | `10` | Maximum backup files retained per object |
 | `BACKUPS_ENABLED` | `0` | `0` | Set to `1` to enable automatic pre-change backups |
 | `LOGGING_ENABLED` | `0` | `0` | Set to `1` to enable session log file creation |
 | `PARTITIONS` | `Common` | `Common` | Comma-separated list of BIG-IP partitions to manage |
@@ -650,13 +646,14 @@ To restore from a backup, use the Create/Update from CSV option (menu option 2) 
 
 ### Protected Datagroups
 
-The following system datagroups are protected and cannot be modified or deleted through the tool:
+The following system datagroups are protected and cannot be modified or deleted through the tool and are hidden from view when viewing available datagroups.
 
 - `private_net`
 - `images`
 - `aol`
+- `sys_APM_MS_Office_OFBA_DG`
 
-These are pre-configured BIG-IP datagroups that the system depends on. Attempting to select them for modification will produce an error message.
+Attempting to modify or delete these datagroups will produce an error message.
 
 ### Log Files
 
