@@ -35,7 +35,7 @@ DGCat-Admin makes managing those site lists very easy.
 - Backup datagroups or URL categories from your entire topology
 **New in 5.0**
 - Bootstrap an entire fleet with datagroups and URL categories from a single config file
-- Make edits to datagroups without having to replace the entire datagroup contents (Mode 5 Editor enhancement)
+- Make edits to datagroups without having to replace the entire datagroup contents (Option 5 Editor enhancement for writes and deploys)
   https://community.f5.com/discussions/technicalforum/update-an-internal-data-group-via-api/306520 
 
 **This tool was designed specifically for those purposes.**
