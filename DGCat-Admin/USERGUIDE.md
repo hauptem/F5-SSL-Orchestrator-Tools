@@ -626,20 +626,6 @@ To restore from a backup, use the Create/Update from CSV option (menu option 2) 
 
 ## Configuration Reference
 
-### Script Variables
-
-| Variable | Bash Default | PowerShell Default | Description |
-|----------|-------------|-------------------|-------------|
-| `BACKUP_DIR` | `/shared/tmp/dgcat-admin-backups` | `$PSScriptRoot\dgcat-admin-backups` | Storage for backups, logs, and fleet config |
-| `MAX_BACKUPS` | `10` | `10` | Maximum backup files retained per object |
-| `BACKUPS_ENABLED` | `0` | `0` | Set to `1` to enable automatic pre-change backups |
-| `LOGGING_ENABLED` | `0` | `0` | Set to `1` to enable session log file creation |
-| `PARTITIONS` | `Common` | `Common` | Comma-separated list of BIG-IP partitions to manage |
-| `PREVIEW_LINES` | `5` | `5` | Number of lines shown in CSV file previews |
-| `API_CONNECT_TIMEOUT` | `10` | — | TCP connection timeout in seconds |
-| `API_REQUEST_TIMEOUT` | `60` | — | Total request timeout in seconds |
-| `API_TIMEOUT` | — | `60` | Request timeout in seconds |
-
 ### Protected Datagroups
 
 The following system datagroups are protected and cannot be modified or deleted through the tool and are hidden from view when viewing available datagroups.
