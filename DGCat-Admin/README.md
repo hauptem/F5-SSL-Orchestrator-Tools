@@ -42,7 +42,7 @@ DGCat-Admin makes managing those site lists very easy.
 
 **This tool was designed specifically for those purposes.**
 
-<img width="636" height="396" alt="Image" src="https://github.com/user-attachments/assets/0899bdbb-4d23-45f7-a396-13b1a73fd11e" />
+<img width="642" height="412" alt="Image" src="https://github.com/user-attachments/assets/9961997a-15a3-4ce6-8cb3-5049a6c33c89" />
 
 ## Requirements
 
