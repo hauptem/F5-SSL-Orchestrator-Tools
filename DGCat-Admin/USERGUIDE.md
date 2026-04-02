@@ -157,7 +157,7 @@ If the connection fails, you're given the option to retry or exit. Common failur
 
 After a successful connection, you see the main menu:
 
-<img width="636" height="396" alt="Image" src="https://github.com/user-attachments/assets/0899bdbb-4d23-45f7-a396-13b1a73fd11e" />
+<img width="642" height="412" alt="Image" src="https://github.com/user-attachments/assets/9961997a-15a3-4ce6-8cb3-5049a6c33c89" />
 
 Each option is described in detail in the following sections. Option 0 returns to the host selection screen where you can connect to a different BIG-IP without restarting the tool or re-running pre-flight checks.
 
