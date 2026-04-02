@@ -33,7 +33,7 @@ DGCat-Admin makes managing those site lists very easy.
 - Want to take a datagroup and convert it to a custom URL category?
 - Want to search your entire fleet non-destructively and find a needle in a stack of needles?
 - Backup datagroups or URL categories from your entire topology
-- 
+
 **New in 5.0**
   
 - Bootstrap an entire fleet with datagroups and URL categories from a single config file
