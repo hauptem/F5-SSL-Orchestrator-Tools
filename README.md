@@ -36,4 +36,4 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - Backup your F5 configuration before implementing any changes
 - Review and understand all code before deploying to production systems
 
-- By using this software, you acknowledge that you have read and understood these disclaimers and agree to use this solution at your own risk.
+By using this software, you acknowledge that you have read and understood these disclaimers and agree to use this solution at your own risk.
