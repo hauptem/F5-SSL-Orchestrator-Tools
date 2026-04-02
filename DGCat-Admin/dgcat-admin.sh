@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.6
+# Version: 5.0
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -29,7 +29,7 @@ set -euo pipefail
 
 # Backup settings
 BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
-MAX_BACKUPS=30
+MAX_BACKUPS=10
 BACKUPS_ENABLED=0
 
 # Session logging (set to 1 to enable log file creation)
@@ -57,6 +57,7 @@ PROTECTED_DATAGROUPS=(
     "private_net"
     "images"
     "aol"
+	"sys_APM_MS_Office_OFBA_DG"
 )
 
 # CSV preview lines
@@ -305,39 +306,6 @@ strip_partition_prefix() {
     echo "$1" | sed 's/^\/[^/]*\///g'
 }
 
-# List datagroups in a partition with optional system marker
-# Args: partition, show_system_marker (true/false)
-# Returns: 0 if datagroups found, 1 if none
-list_partition_datagroups() {
-    local partition="$1"
-    local show_system="${2:-false}"
-    
-    echo -e "${WHITE}  [....] Retrieving datagroups...${NC}" >&2
-    local datagroups
-    datagroups=$(get_all_datagroup_list | grep "^${partition}|" || true)
-    
-    if [ -z "${datagroups}" ]; then
-        log_info "No datagroups found in partition '${partition}'."
-        return 1
-    fi
-    
-    echo "" >&2
-    echo -e "${WHITE}  [INFO]  Available datagroups in partition '${partition}':${NC}" >&2
-    echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}" >&2
-    
-    while IFS='|' read -r p name class; do
-        [ -z "${name}" ] && continue
-        local marker=""
-        if [ "${show_system}" == "true" ] && is_protected_datagroup "${name}"; then
-            marker="${YELLOW} [SYSTEM]${NC}"
-        fi
-        printf "    ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}%b\n" "${name}" "${class}" "${marker}" >&2
-    done <<< "${datagroups}"
-    
-    echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}" >&2
-    return 0
-}
-
 # Prompt user to select a datagroup from a partition
 # Args: partition, prompt_text
 # Outputs: name|class on success, empty on failure/cancel
@@ -345,35 +313,103 @@ list_partition_datagroups() {
 select_datagroup() {
     local partition="$1"
     local prompt="${2:-Enter datagroup name}"
+    local mode="${3:-existing}"   # existing, any, new
     
-    # List available datagroups
-    if ! list_partition_datagroups "${partition}" "true"; then
+    # Pull datagroup list
+    echo -e "${WHITE}  [....] Retrieving datagroups...${NC}" >&2
+    local datagroups
+    datagroups=$(get_all_datagroup_list | grep "^${partition}|" || true)
+    
+    if [ -z "${datagroups}" ] && [ "${mode}" == "existing" ]; then
+        echo -e "${WHITE}  [INFO]  No datagroups found in partition '${partition}'.${NC}" >&2
         return 1
+    fi
+    
+    # Build array and display list
+    local dg_names=()
+    local dg_classes=()
+    local idx=1
+    
+    if [ -n "${datagroups}" ]; then
+        echo "" >&2
+        echo -e "${WHITE}  [INFO]  Available datagroups in partition '${partition}':${NC}" >&2
+        echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}" >&2
+        
+        while IFS='|' read -r p name class; do
+            [ -z "${name}" ] && continue
+            if is_protected_datagroup "${name}"; then
+                continue
+            fi
+            dg_names+=("${name}")
+            dg_classes+=("${class}")
+            if [ "${mode}" == "new" ]; then
+                printf "    ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}\n" "${name}" "${class}" >&2
+            else
+                printf "    ${YELLOW}%3d${NC}${WHITE})${NC} ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}\n" "${idx}" "${name}" "${class}" >&2
+            fi
+            idx=$((idx + 1))
+        done <<< "${datagroups}"
+        
+        echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}" >&2
     fi
     
     while true; do
         echo "" >&2
-        local dg_name
-        read -rp "  ${prompt} (or 'q' to cancel): " dg_name
+        local dg_input
+        read -rp "  ${prompt} (or 'q' to cancel): " dg_input
         
-        if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
+        if [ -z "${dg_input}" ] || [ "${dg_input}" == "q" ] || [ "${dg_input}" == "Q" ]; then
             echo -e "${WHITE}  [INFO]  Cancelled.${NC}" >&2
             return 1
         fi
         
-        # Strip partition prefix if included
-        dg_name=$(strip_partition_prefix "${dg_name}")
-        
-        # Check if exists
-        local dg_class
-        dg_class=$(datagroup_exists "${partition}" "${dg_name}")
-        if [ -z "${dg_class}" ]; then
-            echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_name}' does not exist in partition '${partition}'. Try again.${NC}" >&2
-            continue
+        # Check if input is a number
+        if [[ "${dg_input}" =~ ^[0-9]+$ ]] && [ ${#dg_names[@]} -gt 0 ]; then
+            if [ "${dg_input}" -ge 1 ] && [ "${dg_input}" -le ${#dg_names[@]} ]; then
+                if [ "${mode}" == "new" ]; then
+                    echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_names[$((dg_input - 1))]}' already exists. Enter a new name.${NC}" >&2
+                    continue
+                fi
+                local sel_name="${dg_names[$((dg_input - 1))]}"
+                local sel_class="${dg_classes[$((dg_input - 1))]}"
+                echo "${sel_name}|${sel_class}"
+                return 0
+            else
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Invalid selection. Try again.${NC}" >&2
+                continue
+            fi
         fi
         
-        echo "${dg_name}|${dg_class}"
-        return 0
+        # Direct name entry
+        local dg_name
+        dg_name=$(strip_partition_prefix "${dg_input}")
+        
+        # Check if name matches an existing datagroup in our list
+        local found_idx=-1
+        for ((ci=0; ci<${#dg_names[@]}; ci++)); do
+            if [ "${dg_names[$ci]}" == "${dg_name}" ]; then
+                found_idx=$ci
+                break
+            fi
+        done
+        
+        if [ ${found_idx} -ge 0 ]; then
+            # Name exists in list
+            if [ "${mode}" == "new" ]; then
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_name}' already exists. Enter a new name.${NC}" >&2
+                continue
+            fi
+            echo "${dg_name}|${dg_classes[$found_idx]}"
+            return 0
+        else
+            # Name not in list
+            if [ "${mode}" == "existing" ]; then
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_name}' does not exist in partition '${partition}'. Try again.${NC}" >&2
+                continue
+            fi
+            echo "${dg_name}|"
+            return 0
+        fi
     done
 }
 
@@ -488,7 +524,7 @@ api_delete() {
 # Uses FLEET_HOSTS/FLEET_SITES arrays if already loaded by load_fleet_config()
 # Returns: 0 on successful connection, 1 on failure
 setup_remote_connection() {
-    log_section "REST API Connection Setup"
+    log_section "DGCat Connection Setup"
     
     # Show fleet hosts for quick selection if fleet is loaded
     if [ ${#FLEET_HOSTS[@]} -gt 0 ]; then
@@ -694,16 +730,6 @@ FLEET_TEMPLATE
 # -----------------------------------------------------------------------------
 # System Functions
 # -----------------------------------------------------------------------------
-
-# Get BIG-IP version
-get_version_remote() {
-    if api_get "/mgmt/tm/sys/version"; then
-        echo "${API_RESPONSE}" | jq -r '.entries[].nestedStats.entries.Version.description // "unknown"' 2>/dev/null | head -1
-        return 0
-    fi
-    echo "unknown"
-    return 1
-}
 
 # Save configuration
 save_config_remote() {
@@ -1101,7 +1127,7 @@ load_fleet_config() {
             seen_sites["${site}"]=1
             FLEET_UNIQUE_SITES+=("${site}")
         fi
-    done < "${FLEET_CONFIG_FILE}"
+    done < <(sed "1s/^$(printf '\357\273\277')//" "${FLEET_CONFIG_FILE}" | tr -d '\r')
     
     # Halt on duplicate hosts
     if [ ${#duplicate_hosts[@]} -gt 0 ]; then
@@ -1122,19 +1148,6 @@ load_fleet_config() {
     fi
     
     return 0
-}
-
-# Get hosts for a specific site
-# Args: site_id
-# Outputs: hostnames (one per line)
-get_site_hosts() {
-    local site_id="$1"
-    
-    for i in "${!FLEET_HOSTS[@]}"; do
-        if [ "${FLEET_SITES[$i]}" == "${site_id}" ]; then
-            echo "${FLEET_HOSTS[$i]}"
-        fi
-    done
 }
 
 # Get site ID for a host
@@ -1203,18 +1216,6 @@ get_connected_backup_dir() {
     else
         echo "${BACKUP_DIR}"
     fi
-}
-
-# Get log file path for a host
-# Args: site_id, hostname
-# Outputs: log file path
-get_host_log_path() {
-    local site_id="$1"
-    local hostname="$2"
-    local safe_hostname
-    safe_hostname=$(echo "${hostname}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    
-    echo "${BACKUP_DIR}/${site_id}/${safe_hostname}_${TIMESTAMP}.log"
 }
 
 # =============================================================================
@@ -1380,6 +1381,7 @@ DEPLOY_ERROR_MSG=""
 select_deploy_scope() {
     local object_type="$1"
     local object_name="$2"
+    local include_self="${3:-false}"
     
     echo "" >&2
     echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}" >&2
@@ -1405,7 +1407,7 @@ select_deploy_scope() {
     case "${scope_type}" in
         1)
             for ((i=0; i<${#FLEET_HOSTS[@]}; i++)); do
-                if [ "${FLEET_HOSTS[$i]}" != "${REMOTE_HOST}" ]; then
+                if [ "${include_self}" == "true" ] || [ "${FLEET_HOSTS[$i]}" != "${REMOTE_HOST}" ]; then
                     targets+=("${FLEET_HOSTS[$i]}")
                 fi
             done
@@ -1430,8 +1432,10 @@ select_deploy_scope() {
                 if [[ "${sel}" =~ ^[0-9]+$ ]] && [ "${sel}" -ge 1 ] && [ "${sel}" -le ${#FLEET_UNIQUE_SITES[@]} ]; then
                     local selected_site="${FLEET_UNIQUE_SITES[$((sel - 1))]}"
                     for i in "${!FLEET_HOSTS[@]}"; do
-                        if [ "${FLEET_SITES[$i]}" == "${selected_site}" ] && [ "${FLEET_HOSTS[$i]}" != "${REMOTE_HOST}" ]; then
-                            targets+=("${FLEET_HOSTS[$i]}")
+                        if [ "${FLEET_SITES[$i]}" == "${selected_site}" ]; then
+                            if [ "${include_self}" == "true" ] || [ "${FLEET_HOSTS[$i]}" != "${REMOTE_HOST}" ]; then
+                                targets+=("${FLEET_HOSTS[$i]}")
+                            fi
                         fi
                     done
                 fi
@@ -1451,7 +1455,7 @@ select_deploy_scope() {
                 sel=$(echo "${sel}" | tr -d ' ')
                 if [[ "${sel}" =~ ^[0-9]+$ ]] && [ "${sel}" -ge 1 ] && [ "${sel}" -le ${#FLEET_HOSTS[@]} ]; then
                     local idx=$((sel - 1))
-                    if [ "${FLEET_HOSTS[$idx]}" != "${REMOTE_HOST}" ]; then
+                    if [ "${include_self}" == "true" ] || [ "${FLEET_HOSTS[$idx]}" != "${REMOTE_HOST}" ]; then
                         targets+=("${FLEET_HOSTS[$idx]}")
                     fi
                 fi
@@ -2064,23 +2068,6 @@ partition_exists() {
     return ${result}
 }
 
-# Validate all configured partitions exist
-validate_partitions() {
-    local invalid_count=0
-    for partition in "${PARTITION_LIST[@]}"; do
-        if ! partition_exists "${partition}"; then
-            log_warn "Partition '${partition}' does not exist on this system"
-            invalid_count=$((invalid_count + 1))
-        fi
-    done
-    
-    if [ ${invalid_count} -gt 0 ]; then
-        log_warn "${invalid_count} configured partition(s) not found. They will be skipped."
-    fi
-    
-    return 0
-}
-
 # Display partition selection menu and return selected partition
 # Returns partition name via echo, empty string if cancelled
 select_partition() {
@@ -2223,29 +2210,6 @@ backup_datagroup() {
         echo "${backup_file}"
     fi
     return 0
-}
-# Apply records from arrays to datagroup
-# Args: partition, dg_name, dg_type, keys_array_name, values_array_name
-apply_records_from_arrays() {
-    local partition="$1"
-    local dg_name="$2"
-    local dg_type="$3"
-    local keys_name=$4
-    local values_name=$5
-    
-    eval "local keys_count=\${#${keys_name}[@]}"
-    
-    local records_json
-    records_json=$(
-        for ((i=0; i<keys_count; i++)); do
-            eval "local key=\"\${${keys_name}[$i]}\""
-            eval "local value=\"\${${values_name}[$i]:-}\""
-            echo "${key}|${value}"
-        done | build_records_json_remote "${dg_type}"
-    )
-    
-    apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"
-    return $?
 }
 # Create datagroup
 create_internal_datagroup() {
@@ -2440,7 +2404,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.6                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.0                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -2452,7 +2416,8 @@ show_main_menu() {
     echo -e "  ${CYAN}║${NC}   ${YELLOW}4${NC}${WHITE})${NC}  ${WHITE}Export Datagroup or URL Category to CSV${NC}              ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}5${NC}${WHITE})${NC}  ${WHITE}View/Edit a Datagroup or URL Category${NC}                ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}6${NC}${WHITE})${NC}  ${WHITE}Search${NC}                                               ${CYAN}║${NC}"
-    echo -e "  ${CYAN}║${NC}   ${YELLOW}7${NC}${WHITE})${NC}  ${WHITE}Fleet Backup${NC}                                         ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}7${NC}${WHITE})${NC}  ${WHITE}Backup${NC}                                               ${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}   ${YELLOW}8${NC}${WHITE})${NC}  ${WHITE}Bootstrap${NC}                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}                                                            ${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}║${NC}   ${YELLOW}0${NC}${WHITE})${NC}  ${WHITE}Exit${NC}                                                 ${CYAN}║${NC}"
@@ -2494,29 +2459,20 @@ menu_create_empty_datagroup() {
         return
     fi
     
-    echo ""
-    local dg_name
-    read -rp "  Enter datagroup name (or 'q' to cancel): " dg_name
-    if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ]; then
-        log_info "Cancelled."
+    # Select a new datagroup name
+    local selection
+    selection=$(select_datagroup "${partition}" "Enter new datagroup name" "new") || true
+    
+    if [ -z "${selection}" ]; then
         press_enter_to_continue
         return
     fi
     
-    dg_name=$(strip_partition_prefix "${dg_name}")
+    local dg_name
+    dg_name=$(echo "${selection}" | cut -d'|' -f1)
     
     if is_protected_datagroup "${dg_name}"; then
         log_error "The name '${dg_name}' is reserved for a BIG-IP system datagroup."
-        press_enter_to_continue
-        return
-    fi
-    
-    # Check if already exists
-    local existing_class
-    existing_class=$(datagroup_exists "${partition}" "${dg_name}")
-    if [ -n "${existing_class}" ]; then
-        log_error "Datagroup '${dg_name}' already exists in partition '${partition}'."
-        log_info "Use the editor (option 5) to modify existing datagroups."
         press_enter_to_continue
         return
     fi
@@ -2664,8 +2620,8 @@ menu_create_from_csv() {
     
     echo ""
     echo -e "  ${WHITE}What would you like to create?${NC}"
-    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup (LTM data-group for iRules/policies)${NC}"
-    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category (Custom URL category for SSLO/SWG)${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Datagroup${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     read -rp "  Select [0-2]: " create_choice
@@ -2697,18 +2653,17 @@ menu_create_datagroup() {
         return
     fi
     
-    # Get datagroup name
-    echo ""
-    read -rp "  Enter datagroup name (or 'q' to cancel): " dg_name
+    # Select or enter datagroup name
+    local selection
+    selection=$(select_datagroup "${partition}" "Enter datagroup name" "any") || true
     
-    if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
-        log_info "Cancelled."
+    if [ -z "${selection}" ]; then
         press_enter_to_continue
         return
     fi
     
-    # Strip partition prefix if user included it
-    dg_name=$(strip_partition_prefix "${dg_name}")
+    local dg_name
+    dg_name=$(echo "${selection}" | cut -d'|' -f1)
     
     # Check if this name matches a protected system datagroup
     if is_protected_datagroup "${dg_name}"; then
@@ -3110,33 +3065,18 @@ menu_delete_datagroup_only() {
         return
     fi
     
-    # List available datagroups
-    if ! list_partition_datagroups "${partition}" "true"; then
+    # Select datagroup
+    local selection
+    selection=$(select_datagroup "${partition}" "Enter datagroup name to delete") || true
+    
+    if [ -z "${selection}" ]; then
         press_enter_to_continue
         return
     fi
     
-    echo ""
-    local dg_name
-    read -rp "  Enter datagroup name to delete (or 'q' to cancel): " dg_name
-    
-    if [ -z "${dg_name}" ] || [ "${dg_name}" == "q" ] || [ "${dg_name}" == "Q" ]; then
-        log_info "Cancelled."
-        press_enter_to_continue
-        return
-    fi
-    
-    # Strip partition prefix if included
-    dg_name=$(strip_partition_prefix "${dg_name}")
-    
-    # Check if datagroup exists and get its class
-    local dg_class
-    dg_class=$(datagroup_exists "${partition}" "${dg_name}")
-    if [ -z "${dg_class}" ]; then
-        log_error "Datagroup '${dg_name}' does not exist in partition '${partition}'."
-        press_enter_to_continue
-        return
-    fi
+    local dg_name dg_class
+    dg_name=$(echo "${selection}" | cut -d'|' -f1)
+    dg_class=$(echo "${selection}" | cut -d'|' -f2)
     
     # Check if this is a protected system datagroup
     if is_protected_datagroup "${dg_name}"; then
@@ -3216,58 +3156,21 @@ menu_delete_url_category() {
         return
     fi
     
-    # Offer choice: enter name directly or list all
+    # Select URL category: enter name, list, or cancel
+    local selected_category=""
     echo ""
-    echo -e "  ${WHITE}How would you like to select a URL category?${NC}"
-    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Enter category name directly${NC}"
-    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
-    read -rp "  Select [0-2]: " method_choice
+    read -rp "  Enter URL category name or select [0-1]: " cat_input
     
-    local selected_category=""
-    
-    case "${method_choice}" in
+    case "${cat_input}" in
         0|"")
             log_info "Cancelled."
             press_enter_to_continue
             return
             ;;
         1)
-            # Direct entry
-            while true; do
-                echo ""
-                read -rp "  Enter URL category name (or 'q' to cancel): " selected_category
-                
-                if [ -z "${selected_category}" ]; then
-                    log_warn "No category name provided."
-                    continue
-                fi
-                
-                if [ "${selected_category}" == "q" ] || [ "${selected_category}" == "Q" ]; then
-                    log_info "Cancelled."
-                    press_enter_to_continue
-                    return
-                fi
-                
-                # Verify category exists
-                if url_category_exists "${selected_category}"; then
-                    break
-                fi
-                
-                # Try with sslo-urlCat prefix
-                local sslo_name="sslo-urlCat${selected_category}"
-                if url_category_exists "${sslo_name}"; then
-                    log_info "Found as SSLO category: ${sslo_name}"
-                    selected_category="${sslo_name}"
-                    break
-                fi
-                
-                log_error "Category '${selected_category}' not found."
-                continue
-            done
-            ;;
-        2)
             # List all categories
             log_step "Retrieving URL categories..."
             local categories
@@ -3279,7 +3182,6 @@ menu_delete_url_category() {
                 return
             fi
             
-            # Display available categories
             echo ""
             echo -e "  ${WHITE}Available URL Categories:${NC}"
             echo -e "  ${CYAN}─────────────────────────────────────────────────────────────${NC}"
@@ -3294,7 +3196,6 @@ menu_delete_url_category() {
             echo -e "      ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
             
-            # Select category
             read -rp "  Select URL category [0-$((${#cat_array[@]}))] : " cat_choice
             
             if [ "${cat_choice}" == "0" ] || [ -z "${cat_choice}" ]; then
@@ -3312,9 +3213,23 @@ menu_delete_url_category() {
             selected_category="${cat_array[$((cat_choice - 1))]}"
             ;;
         *)
-            log_warn "Invalid selection."
-            press_enter_to_continue
-            return
+            # Direct name entry
+            selected_category="${cat_input}"
+            
+            if url_category_exists "${selected_category}"; then
+                : # found
+            else
+                # Try with sslo-urlCat prefix
+                local sslo_name="sslo-urlCat${selected_category}"
+                if url_category_exists "${sslo_name}"; then
+                    log_info "Found as SSLO category: ${sslo_name}"
+                    selected_category="${sslo_name}"
+                else
+                    log_error "Category '${selected_category}' not found."
+                    press_enter_to_continue
+                    return
+                fi
+            fi
             ;;
     esac
     
@@ -3490,58 +3405,21 @@ menu_export_url_category() {
         return
     fi
     
-    # Offer choice: enter name directly or list all
+    # Select URL category: enter name, list, or cancel
+    local selected_category=""
     echo ""
-    echo -e "  ${WHITE}How would you like to select a URL category?${NC}"
-    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Enter category name directly${NC}"
-    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
-    read -rp "  Select [0-2]: " method_choice
+    read -rp "  Enter URL category name or select [0-1]: " cat_input
     
-    local selected_category=""
-    
-    case "${method_choice}" in
+    case "${cat_input}" in
         0|"")
             log_info "Cancelled."
             press_enter_to_continue
             return
             ;;
         1)
-            # Direct entry
-            while true; do
-                echo ""
-                read -rp "  Enter URL category name (or 'q' to cancel): " selected_category
-                
-                if [ -z "${selected_category}" ]; then
-                    log_warn "No category name provided."
-                    continue
-                fi
-                
-                if [ "${selected_category}" == "q" ] || [ "${selected_category}" == "Q" ]; then
-                    log_info "Cancelled."
-                    press_enter_to_continue
-                    return
-                fi
-                
-                # Verify category exists
-                if url_category_exists "${selected_category}"; then
-                    break
-                fi
-                
-                # Try with sslo-urlCat prefix
-                local sslo_name="sslo-urlCat${selected_category}"
-                if url_category_exists "${sslo_name}"; then
-                    log_info "Found as SSLO category: ${sslo_name}"
-                    selected_category="${sslo_name}"
-                    break
-                fi
-                
-                log_error "Category '${selected_category}' not found."
-                continue
-            done
-            ;;
-        2)
             # List all categories
             log_step "Retrieving URL categories..."
             local categories
@@ -3553,7 +3431,6 @@ menu_export_url_category() {
                 return
             fi
             
-            # Display available categories
             echo ""
             echo -e "  ${WHITE}Available URL Categories:${NC}"
             echo -e "  ${CYAN}─────────────────────────────────────────────────────────────${NC}"
@@ -3568,7 +3445,6 @@ menu_export_url_category() {
             echo -e "      ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
             
-            # Select category
             read -rp "  Select URL category [0-$((${#cat_array[@]}))] : " cat_choice
             
             if [ "${cat_choice}" == "0" ] || [ -z "${cat_choice}" ]; then
@@ -3586,9 +3462,22 @@ menu_export_url_category() {
             selected_category="${cat_array[$((cat_choice - 1))]}"
             ;;
         *)
-            log_warn "Invalid selection."
-            press_enter_to_continue
-            return
+            # Direct name entry
+            selected_category="${cat_input}"
+            
+            if url_category_exists "${selected_category}"; then
+                : # found
+            else
+                local sslo_name="sslo-urlCat${selected_category}"
+                if url_category_exists "${sslo_name}"; then
+                    log_info "Found as SSLO category: ${sslo_name}"
+                    selected_category="${sslo_name}"
+                else
+                    log_error "Category '${selected_category}' not found."
+                    press_enter_to_continue
+                    return
+                fi
+            fi
             ;;
     esac
     
@@ -3722,39 +3611,6 @@ get_url_category_entries() {
 get_url_category_count() {
     local cat_name="$1"
     get_url_category_count_remote "${cat_name}"
-}
-
-# Format URL for SSLO datagroup (domain-only format)
-# Strips protocol, converts wildcard to leading dot, removes path
-# Input: https://\*.example.com/ or https://www.example.com/path
-# Output: .example.com or www.example.com
-format_url_for_sslo() {
-    local url="$1"
-    local domain
-    
-    # Remove protocol
-    domain="${url#http://}"
-    domain="${domain#https://}"
-    
-    # Handle wildcards: \* or * at start becomes leading dot
-    domain="${domain#\\*}"
-    domain="${domain#\*}"
-    if [[ "${domain}" != .* && "${url}" == *"*"* ]]; then
-        domain=".${domain}"
-    fi
-    
-    # Remove path (everything after first /)
-    domain="${domain%%/*}"
-    
-    # Remove port if present
-    if [[ "${domain}" =~ ^(.+):[0-9]+$ ]]; then
-        domain="${BASH_REMATCH[1]}"
-    fi
-    
-    # Remove any trailing dots
-    domain="${domain%.}"
-    
-    echo "${domain}"
 }
 
 # Format domain/URL for URL category (F5 URL category format)
@@ -5298,12 +5154,12 @@ menu_fleet_looking_glass() {
             else
                 partition="${PARTITION_LIST[0]}"
             fi
-            echo ""
-            read -rp "  Enter datagroup name (or 'q' to cancel): " object_name
-            if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
+            local dg_selection
+            dg_selection=$(select_datagroup "${partition}" "Enter datagroup name") || true
+            if [ -z "${dg_selection}" ]; then
                 return
             fi
-            object_name=$(strip_partition_prefix "${object_name}")
+            object_name=$(echo "${dg_selection}" | cut -d'|' -f1)
             ;;
         2)
             object_type="urlcat"
@@ -5679,9 +5535,9 @@ menu_fleet_looking_glass() {
     done
 }
 
-# Option 7: Fleet Backup
+# Option 7: Backup
 menu_fleet_backup() {
-    log_section "Fleet Backup"
+    log_section "Backup"
     
     # Require fleet config
     if [ ${#FLEET_HOSTS[@]} -eq 0 ]; then
@@ -5712,12 +5568,12 @@ menu_fleet_backup() {
             else
                 partition="${PARTITION_LIST[0]}"
             fi
-            echo ""
-            read -rp "  Enter datagroup name (or 'q' to cancel): " object_name
-            if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
+            local dg_selection
+            dg_selection=$(select_datagroup "${partition}" "Enter datagroup name") || true
+            if [ -z "${dg_selection}" ]; then
                 return
             fi
-            object_name=$(strip_partition_prefix "${object_name}")
+            object_name=$(echo "${dg_selection}" | cut -d'|' -f1)
             ;;
         2)
             object_type="urlcat"
@@ -5925,54 +5781,21 @@ menu_edit_datagroup_or_category() {
                 return
             fi
             
-            # Category selection
-            echo ""
-            echo -e "  ${WHITE}How would you like to select a URL category?${NC}"
-            echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Enter category name directly${NC}"
-            echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
-            echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
-            echo ""
-            read -rp "  Select [0-2]: " method_choice
-            
+            # Select URL category: enter name, list, or cancel
             local selected_category=""
+            echo ""
+            echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
+    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
+            echo ""
+            read -rp "  Enter URL category name or select [0-1]: " cat_input
             
-            case "${method_choice}" in
+            case "${cat_input}" in
                 0|"")
                     log_info "Cancelled."
                     press_enter_to_continue
                     return
                     ;;
                 1)
-                    while true; do
-                        echo ""
-                        read -rp "  Enter URL category name (or 'q' to cancel): " selected_category
-                        
-                        if [ -z "${selected_category}" ]; then
-                            log_warn "No category name provided."
-                            continue
-                        fi
-                        
-                        if [ "${selected_category}" == "q" ] || [ "${selected_category}" == "Q" ]; then
-                            log_info "Cancelled."
-                            press_enter_to_continue
-                            return
-                        fi
-                        
-                        if url_category_exists "${selected_category}"; then
-                            break
-                        fi
-                        
-                        local sslo_name="sslo-urlCat${selected_category}"
-                        if url_category_exists "${sslo_name}"; then
-                            log_info "Found as SSLO category: ${sslo_name}"
-                            selected_category="${sslo_name}"
-                            break
-                        fi
-                        
-                        log_error "Category '${selected_category}' not found."
-                    done
-                    ;;
-                2)
                     log_step "Retrieving URL categories..."
                     local categories
                     categories=$(get_url_category_list)
@@ -6014,9 +5837,22 @@ menu_edit_datagroup_or_category() {
                     selected_category="${cat_array[$((cat_choice - 1))]}"
                     ;;
                 *)
-                    log_warn "Invalid selection."
-                    press_enter_to_continue
-                    return
+                    # Direct name entry
+                    selected_category="${cat_input}"
+                    
+                    if url_category_exists "${selected_category}"; then
+                        : # found
+                    else
+                        local sslo_name="sslo-urlCat${selected_category}"
+                        if url_category_exists "${sslo_name}"; then
+                            log_info "Found as SSLO category: ${sslo_name}"
+                            selected_category="${sslo_name}"
+                        else
+                            log_error "Category '${selected_category}' not found."
+                            press_enter_to_continue
+                            return
+                        fi
+                    fi
                     ;;
             esac
             
@@ -6033,79 +5869,440 @@ menu_edit_datagroup_or_category() {
     esac
 }
 
-main() {
-    # Session setup
+# =============================================================================
+# OPTION 8: BOOTSTRAP
+# =============================================================================
+
+menu_bootstrap() {
+    log_section "Bootstrap"
+    
     while true; do
-        # Reset session variables
-        REMOTE_HOST=""
-        REMOTE_USER=""
-        REMOTE_PASS=""
-        REMOTE_HOSTNAME=""
-        FLEET_SITES=()
-        FLEET_HOSTS=()
-        FLEET_UNIQUE_SITES=()
-        PARTITION_CACHE=()
-        URL_CATEGORY_DB_CACHED=""
-        
-        # Clear screen
-        clear
-        
-        # Welcome banner
         echo ""
-        echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v4.6                        ${NC}${CYAN}║${NC}"
-        echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
-        echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "  ${WHITE}Bootstrap Options:${NC}"
+        echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Create Bootstrap config${NC}"
+        echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Import Bootstrap config${NC}"
+        echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
         echo ""
-        echo -e "    ${YELLOW}1${NC}${WHITE})${NC}  ${WHITE}Connect to BIG-IP${NC}"
-        echo -e "    ${YELLOW}0${NC}${WHITE})${NC}  ${WHITE}Exit${NC}"
-        echo ""
+        local choice
+        read -rp "  Select [0-2]: " choice
         
-        local start_choice
-        read -rp "  Select [0-1]: " start_choice
+        case "${choice}" in
+            1) menu_bootstrap_create ;;
+            2) menu_bootstrap_import; return ;;
+            *)
+                log_info "Cancelled."
+                press_enter_to_continue
+                return
+                ;;
+        esac
+    done
+}
+
+menu_bootstrap_create() {
+    local bootstrap_file="${BACKUP_DIR}/bootstrap.conf"
+    
+    if [ -f "${bootstrap_file}" ]; then
+        log_warn "Bootstrap config already exists: ${bootstrap_file}"
+        log_info "Delete or rename the existing file to create a new one."
+        return
+    fi
+    
+    cat > "${bootstrap_file}" 2>/dev/null << 'BOOTSTRAP_TEMPLATE'
+# DGCat-Admin Bootstrap Configuration
+# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
+#
+# This file defines datagroups and URL categories to create across your fleet.
+# Use Import Bootstrap to validate and deploy.
+#
+# Format: object|name|attribute
+#
+# object:    dg  = Datagroup
+#            cat = URL Category
+#
+# name:      Must start with a letter. No spaces allowed.
+#
+# attribute: For dg:  string, address, integer
+#            For cat: allow, block, confirm
+#
+# Examples:
+# dg|bypass-clients|address
+# dg|bypass-servers|address
+# dg|bypass-clients-troubleshoot|address
+# dg|bypass-servers-troubleshoot|address
+# cat|Bypass-hosts|allow
+# cat|Pinners|allow
+# cat|IPS-Only|allow
+# cat|DLP-Only|allow
+BOOTSTRAP_TEMPLATE
+    
+    if [ -f "${bootstrap_file}" ]; then
+        log_ok "Bootstrap config created: ${bootstrap_file}"
+        log_info "Edit the file to define your objects, then use Import to deploy."
+    else
+        log_error "Could not create bootstrap config. Check backup directory permissions."
+    fi
+}
+
+menu_bootstrap_import() {
+    local bootstrap_file="${BACKUP_DIR}/bootstrap.conf"
+    
+    if [ ! -f "${bootstrap_file}" ]; then
+        log_error "Bootstrap config not found: ${bootstrap_file}"
+        log_info "Use 'Create Bootstrap config' to generate a template."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Parse and validate
+    local line_num=0
+    local errors=0
+    local -a dg_names=()
+    local -a dg_types=()
+    local -a cat_names=()
+    local -a cat_actions=()
+    local -a seen_dg_names=()
+    local -a seen_cat_names=()
+    
+    while IFS= read -r line; do
+        line_num=$((line_num + 1))
         
-        if [ "${start_choice}" == "0" ]; then
-            echo ""
-            echo -e "  ${WHITE}Exiting.${NC}"
-            echo -e "  ${CYAN}Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools${NC}"
-            echo ""
-            exit 0
+        # Skip comments and empty lines
+        [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+        [[ "${line}" =~ ^[[:space:]]*$ ]] && continue
+        
+        # Split on pipe
+        local obj name attr
+        IFS='|' read -r obj name attr <<< "${line}"
+        obj=$(echo "${obj}" | tr -d ' ')
+        name=$(echo "${name}" | tr -d ' ')
+        attr=$(echo "${attr}" | tr -d ' ')
+        
+        # Validate field count
+        if [ -z "${obj}" ] || [ -z "${name}" ] || [ -z "${attr}" ]; then
+            log_error "Line ${line_num}: Expected format object|name|attribute"
+            errors=$((errors + 1))
+            continue
         fi
         
-        # Try to create backup/log directory
-        mkdir -p "${BACKUP_DIR}" 2>/dev/null
+        # Validate object type
+        if [ "${obj}" != "dg" ] && [ "${obj}" != "cat" ]; then
+            log_error "Line ${line_num}: Invalid object '${obj}'. Must be 'dg' or 'cat'."
+            errors=$((errors + 1))
+            continue
+        fi
         
-        # Update timestamp for new session
-        TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-        LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
+        # Validate name - no spaces
+        if [[ "${name}" =~ [[:space:]] ]]; then
+            log_error "Line ${line_num}: Name '${name}' contains spaces."
+            errors=$((errors + 1))
+            continue
+        fi
         
-        # Initialize log (if logging enabled and directory is writable)
-        if [ "${LOGGING_ENABLED}" -eq 1 ]; then
-            if touch "${LOGFILE}" 2>/dev/null; then
-                echo "DGCat-Admin - F5 BIG-IP Administration Tool" > "${LOGFILE}"
-                echo "Started: $(date)" >> "${LOGFILE}"
-                echo "Mode: REST API" >> "${LOGFILE}"
-                echo "Target: (pending connection)" >> "${LOGFILE}"
+        # Validate name - must start with a letter
+        if [[ "${name}" =~ ^[^a-zA-Z] ]]; then
+            log_error "Line ${line_num}: Name '${name}' must start with a letter."
+            errors=$((errors + 1))
+            continue
+        fi
+        
+        # Validate attribute and check for duplicates
+        if [ "${obj}" == "dg" ]; then
+            if [ "${attr}" != "string" ] && [ "${attr}" != "address" ] && [ "${attr}" != "integer" ]; then
+                log_error "Line ${line_num}: Invalid attribute '${attr}' for datagroup. Must be string, address, or integer."
+                errors=$((errors + 1))
+                continue
             fi
+            
+            # Check for duplicate dg name
+            local dup=false
+            for ((di=0; di<${#seen_dg_names[@]}; di++)); do
+                if [ "${seen_dg_names[$di]}" == "${name}" ]; then
+                    dup=true
+                    break
+                fi
+            done
+            if [ "${dup}" == "true" ]; then
+                log_error "Line ${line_num}: Duplicate datagroup name '${name}'."
+                errors=$((errors + 1))
+                continue
+            fi
+            
+            seen_dg_names+=("${name}")
+            dg_names+=("${name}")
+            dg_types+=("${attr}")
+            
+        elif [ "${obj}" == "cat" ]; then
+            if [ "${attr}" != "allow" ] && [ "${attr}" != "block" ] && [ "${attr}" != "confirm" ]; then
+                log_error "Line ${line_num}: Invalid attribute '${attr}' for URL category. Must be allow, block, or confirm."
+                errors=$((errors + 1))
+                continue
+            fi
+            
+            # Check for duplicate cat name
+            local dup=false
+            for ((di=0; di<${#seen_cat_names[@]}; di++)); do
+                if [ "${seen_cat_names[$di]}" == "${name}" ]; then
+                    dup=true
+                    break
+                fi
+            done
+            if [ "${dup}" == "true" ]; then
+                log_error "Line ${line_num}: Duplicate URL category name '${name}'."
+                errors=$((errors + 1))
+                continue
+            fi
+            
+            seen_cat_names+=("${name}")
+            cat_names+=("${name}")
+            cat_actions+=("${attr}")
         fi
         
-        # Run pre-flight checks (mode-specific)
-        preflight_checks
+    done < <(sed "1s/^$(printf '\357\273\277')//" "${bootstrap_file}" | tr -d '\r')
+    
+    if [ ${errors} -gt 0 ]; then
+        echo ""
+        log_error "${errors} validation error(s) found. Fix bootstrap.conf and try again."
+        press_enter_to_continue
+        return
+    fi
+    
+    local total_objects=$(( ${#dg_names[@]} + ${#cat_names[@]} ))
+    if [ ${total_objects} -eq 0 ]; then
+        log_warn "No entries found in bootstrap.conf."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Display plan
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  BOOTSTRAP PLAN${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    
+    if [ ${#dg_names[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${WHITE}Datagroups (${#dg_names[@]}):${NC}"
+        for ((i=0; i<${#dg_names[@]}; i++)); do
+            printf "    ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}\n" "${dg_names[$i]}" "${dg_types[$i]}"
+        done
+    fi
+    
+    if [ ${#cat_names[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${WHITE}URL Categories (${#cat_names[@]}):${NC}"
+        for ((i=0; i<${#cat_names[@]}; i++)); do
+            printf "    ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}\n" "${cat_names[$i]}" "${cat_actions[$i]}"
+        done
+    fi
+    
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  Total: ${total_objects} objects${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    
+    # Get partition for datagroups
+    local partition=""
+    if [ ${#dg_names[@]} -gt 0 ]; then
+        if [ ${#PARTITION_LIST[@]} -gt 1 ]; then
+            partition=$(select_partition "Select partition for datagroups")
+            if [ -z "${partition}" ]; then
+                log_info "Cancelled."
+                press_enter_to_continue
+                return
+            fi
+        else
+            partition="${PARTITION_LIST[0]}"
+        fi
+    fi
+    
+    # Select deployment scope
+    local -a deploy_targets=()
+    if fleet_available; then
+        local scope_result
+        scope_result=$(select_deploy_scope "bootstrap" "bootstrap.conf" "true") || true
+        if [ -z "${scope_result}" ]; then
+            log_info "Cancelled."
+            press_enter_to_continue
+            return
+        fi
+        while IFS= read -r t; do
+            deploy_targets+=("${t}")
+        done <<< "${scope_result}"
+    else
+        deploy_targets=("${REMOTE_HOST}")
+    fi
+    
+    if [ ${#deploy_targets[@]} -eq 0 ]; then
+        log_info "No targets selected."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Confirm
+    echo ""
+    log_info "Targets: ${#deploy_targets[@]} host(s)"
+    for t in "${deploy_targets[@]}"; do
+        log_info "  ${t}"
+    done
+    echo ""
+    local confirm
+    read -rp "  Proceed? (yes/no) [no]: " confirm
+    if [ "${confirm}" != "yes" ]; then
+        log_info "Cancelled."
+        press_enter_to_continue
+        return
+    fi
+    
+    # Deploy to all targets
+    local orig_host="${REMOTE_HOST}"
+    local total_ok=0 total_fail=0 total_skip=0
+    
+    for host in "${deploy_targets[@]}"; do
+        REMOTE_HOST="${host}"
+        local host_site
+        host_site=$(get_host_site "${host}" 2>/dev/null) || true
         
-        # Update log with target host if applicable
-        if [ "${LOGGING_ENABLED}" -eq 1 ] && [ -n "${REMOTE_HOST}" ]; then
-            echo "Target: ${REMOTE_HOST}" >> "${LOGFILE}" 2>/dev/null
+        # Test connectivity
+        if ! api_get "/mgmt/tm/sys/version" >/dev/null 2>&1; then
+            log_error "${host} (${host_site}) - Connection failed. Skipped."
+            total_skip=$((total_skip + 1))
+            continue
         fi
         
-        # Brief pause after preflight checks
-        sleep 2
+        # Create objects
+        bootstrap_create_objects "${partition}" dg_names dg_types cat_names cat_actions
+        local rc=$?
         
+        # Save on target
+        save_config >/dev/null 2>&1
+        
+        if [ ${rc} -eq 0 ]; then
+            total_ok=$((total_ok + 1))
+        else
+            total_fail=$((total_fail + 1))
+        fi
+    done
+    
+    REMOTE_HOST="${orig_host}"
+    
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    log_info "Bootstrap: ${total_ok} succeeded, ${total_fail} failed, ${total_skip} skipped"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    
+    press_enter_to_continue
+}
+
+# Create bootstrap objects on current host
+# Args: partition, dg_names_ref, dg_types_ref, cat_names_ref, cat_actions_ref
+bootstrap_create_objects() {
+    local partition="$1"
+    local -n _dg_names=$2
+    local -n _dg_types=$3
+    local -n _cat_names=$4
+    local -n _cat_actions=$5
+    
+    local created=0 skipped=0 failed=0
+    
+    echo ""
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${WHITE}  BOOTSTRAP: ${REMOTE_HOST}${NC}"
+    echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
+    
+    # Create datagroups
+    for ((i=0; i<${#_dg_names[@]}; i++)); do
+        local name="${_dg_names[$i]}"
+        local type="${_dg_types[$i]}"
+        local api_type="${type}"
+        [ "${api_type}" == "address" ] && api_type="ip"
+        
+        local existing_class
+        existing_class=$(datagroup_exists "${partition}" "${name}")
+        if [ -n "${existing_class}" ]; then
+            log_info "Datagroup '${name}' already exists. Skipped."
+            skipped=$((skipped + 1))
+            continue
+        fi
+        
+        log_step "Creating datagroup '${name}' (${type})..."
+        if create_internal_datagroup "${partition}" "${name}" "${api_type}"; then
+            log_ok "Created."
+            created=$((created + 1))
+        else
+            log_error "Failed to create '${name}'. HTTP ${API_HTTP_CODE}"
+            failed=$((failed + 1))
+        fi
+    done
+    
+    # Create URL categories
+    for ((i=0; i<${#_cat_names[@]}; i++)); do
+        local name="${_cat_names[$i]}"
+        local action="${_cat_actions[$i]}"
+        
+        if url_category_exists "${name}"; then
+            log_info "URL category '${name}' already exists. Skipped."
+            skipped=$((skipped + 1))
+            continue
+        fi
+        
+        log_step "Creating URL category '${name}' (${action})..."
+        if create_url_category_remote "${name}" "${action}" "[]"; then
+            log_ok "Created."
+            created=$((created + 1))
+        else
+            log_error "Failed to create '${name}'. HTTP ${API_HTTP_CODE}"
+            failed=$((failed + 1))
+        fi
+    done
+    
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    log_info "Result: ${created} created, ${skipped} skipped, ${failed} failed"
+    
+    return ${failed}
+}
+
+main() {
+    # Clear screen and show banner
+    clear
+    echo ""
+    echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.0                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Create backup/log directory
+    mkdir -p "${BACKUP_DIR}" 2>/dev/null
+    
+    # Initialize timestamp and log
+    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+    LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
+    if [ "${LOGGING_ENABLED}" -eq 1 ]; then
+        if touch "${LOGFILE}" 2>/dev/null; then
+            echo "DGCat-Admin - F5 BIG-IP Administration Tool" > "${LOGFILE}"
+            echo "Started: $(date)" >> "${LOGFILE}"
+            echo "Mode: REST API" >> "${LOGFILE}"
+        fi
+    fi
+    
+    # Run pre-flight checks (runs once)
+    preflight_checks
+    
+    # Update log with target host
+    if [ "${LOGGING_ENABLED}" -eq 1 ] && [ -n "${REMOTE_HOST}" ]; then
+        echo "Target: ${REMOTE_HOST}" >> "${LOGFILE}" 2>/dev/null
+    fi
+    
+    # Brief pause after preflight checks
+    sleep 2
+    
+    # Session loop — option 0 returns here for new connection
+    while true; do
         # Main menu loop
-        local return_to_session_start=false
         while true; do
             show_main_menu
             
-            read -rp "  Select option [0-7]: " choice
+            read -rp "  Select option [0-8]: " choice
             
             case "${choice}" in
                 1) menu_create_empty ;;
@@ -6115,14 +6312,8 @@ main() {
                 5) menu_edit_datagroup_or_category ;;
                 6) menu_fleet_looking_glass ;;
                 7) menu_fleet_backup ;;
+                8) menu_bootstrap ;;
                 0)
-                    log_section "Session End"
-                    log_info "Session ended: $(date)"
-                    if [ "${LOGGING_ENABLED}" -eq 1 ]; then
-                        log_info "Log file: ${LOGFILE}"
-                    fi
-                    echo ""
-                    return_to_session_start=true
                     break
                     ;;
                 *)
@@ -6132,10 +6323,51 @@ main() {
             esac
         done
         
-        # If we broke out of menu loop, continue to new session
-        if [ "${return_to_session_start}" == "true" ]; then
-            continue
+        # Clear screen and reset connection variables
+        clear
+        REMOTE_HOST=""
+        REMOTE_USER=""
+        REMOTE_PASS=""
+        REMOTE_HOSTNAME=""
+        PARTITION_CACHE=()
+        URL_CATEGORY_DB_CACHED=""
+        
+        # Re-connect (setup_remote_connection handles exit on "0")
+        while true; do
+            if setup_remote_connection; then
+                break
+            fi
+            echo ""
+            read -rp "  Retry connection? (yes/no) [yes]: " retry
+            retry="${retry:-yes}"
+            if [ "${retry}" != "yes" ]; then
+                log_info "Exiting."
+                echo -e "  ${CYAN}Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools${NC}"
+                exit 0
+            fi
+        done
+        
+        # Validate partitions on new host
+        log_step "Validating partitions on target system..."
+        local invalid_count=0
+        for partition in "${PARTITION_LIST[@]}"; do
+            if ! partition_exists "${partition}"; then
+                log_warn "Partition '${partition}' not found on ${REMOTE_HOST}"
+                invalid_count=$((invalid_count + 1))
+            fi
+        done
+        if [ ${invalid_count} -eq 0 ]; then
+            log_ok "All partitions verified"
         fi
+        
+        # Check URL category database
+        if url_category_db_available; then
+            log_ok "URL category database available"
+        else
+            log_info "URL category database not available (URL category features disabled)"
+        fi
+        
+        sleep 2
     done
 }
 

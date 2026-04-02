@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 4.6
+# Version: 5.0
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -19,7 +19,7 @@
 #
 # =============================================================================
 
-#Requires -Version 5.1
+# Requires -Version 5.1
 
 # =============================================================================
 # CONFIGURATION
@@ -27,7 +27,7 @@
 
 # Backup settings
 $script:BACKUP_DIR = Join-Path $PSScriptRoot "dgcat-admin-backups"
-$script:MAX_BACKUPS = 30
+$script:MAX_BACKUPS = 10
 $script:BACKUPS_ENABLED = 0
 
 # Session logging (set to 1 to enable log file creation)
@@ -43,7 +43,7 @@ $script:API_TIMEOUT = 60
 $script:PARTITIONS = @("Common")
 
 # Protected system datagroups - DO NOT MODIFY
-$script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol")
+$script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol", "sys_APM_MS_Office_OFBA_DG")
 
 # CSV preview lines
 $script:PREVIEW_LINES = 5
@@ -353,7 +353,7 @@ function Invoke-F5Delete {
 # -----------------------------------------------------------------------------
 
 function Initialize-RemoteConnection {
-    Write-LogSection "REST API Connection Setup"
+    Write-LogSection "DGCat Connection Setup"
     
     # Show fleet hosts for quick selection if fleet is loaded
     if ($script:FleetHosts.Count -gt 0) {
@@ -734,58 +734,89 @@ function Get-AllDatagroupList {
     return @($all | Sort-Object { $_.Partition }, { $_.Name })
 }
 
-function Show-PartitionDatagroups {
-    param([string]$Partition, [bool]$ShowSystem = $false)
+function Select-Datagroup {
+    param([string]$Partition, [string]$Prompt = "Enter datagroup name", [string]$Mode = "existing")
+    # Modes: existing (must exist), any (accept new or existing), new (must not exist)
     
+    # Pull datagroup list
     Write-Host "  [....] Retrieving datagroups..." -ForegroundColor White
     $datagroups = @(Get-AllDatagroupList | Where-Object { $_.Partition -eq $Partition })
     
-    if ($datagroups.Count -eq 0) {
+    if ($datagroups.Count -eq 0 -and $Mode -eq "existing") {
         Write-LogInfo "No datagroups found in partition '$Partition'."
-        return $false
-    }
-    
-    Write-Host ""
-    Write-LogInfo "Available datagroups in partition '$Partition':"
-    Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-    
-    foreach ($dg in $datagroups) {
-        $marker = ""
-        if ($ShowSystem -and (Test-ProtectedDatagroup -Name $dg.Name)) {
-            $marker = " [SYSTEM]"
-        }
-        $line = "    {0,-35} ({1})" -f $dg.Name, $dg.Class
-        Write-Host $line -NoNewline -ForegroundColor White
-        if ($marker) { Write-Host $marker -ForegroundColor Yellow } else { Write-Host "" }
-    }
-    
-    Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-    return $true
-}
-
-function Select-Datagroup {
-    param([string]$Partition, [string]$Prompt = "Enter datagroup name")
-    
-    if (-not (Show-PartitionDatagroups -Partition $Partition -ShowSystem $true)) {
         return $null
+    }
+    
+    # Filter out system datagroups
+    $filteredDatagroups = @($datagroups | Where-Object { -not (Test-ProtectedDatagroup -Name $_.Name) })
+    
+    if ($filteredDatagroups.Count -eq 0 -and $Mode -eq "existing") {
+        Write-LogInfo "No datagroups found in partition '$Partition'."
+        return $null
+    }
+    
+    # Display list
+    if ($filteredDatagroups.Count -gt 0) {
+        Write-Host ""
+        Write-LogInfo "Available datagroups in partition '$Partition':"
+        Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+        
+        for ($i = 0; $i -lt $filteredDatagroups.Count; $i++) {
+            $dg = $filteredDatagroups[$i]
+            $line = "{0,-35} ({1})" -f $dg.Name, $dg.Class
+            if ($Mode -eq "new") {
+                Write-Host "    $line" -ForegroundColor White
+            } else {
+                Write-Host -NoNewline "    "; Write-Host -NoNewline ($i + 1).ToString().PadLeft(3) -ForegroundColor Yellow; Write-Host -NoNewline ") " -ForegroundColor White
+                Write-Host $line -ForegroundColor White
+            }
+        }
+        
+        Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
     }
     
     while ($true) {
         Write-Host ""
-        $dgName = Read-Host "  $Prompt (or 'q' to cancel)"
+        $dgInput = Read-Host "  $Prompt (or 'q' to cancel)"
         
-        if ([string]::IsNullOrWhiteSpace($dgName) -or $dgName -eq 'q' -or $dgName -eq 'Q') {
+        if ([string]::IsNullOrWhiteSpace($dgInput) -or $dgInput -eq 'q' -or $dgInput -eq 'Q') {
             Write-LogInfo "Cancelled."
             return $null
         }
         
-        $dgName = Remove-PartitionPrefix -Name $dgName
-        
-        if (Test-DatagroupExistsRemote -Partition $Partition -Name $dgName) {
-            return @{ Name = $dgName; Class = "internal" }
+        # Check if input is a number
+        $num = 0
+        if ([int]::TryParse($dgInput, [ref]$num) -and $num -ge 1 -and $num -le $filteredDatagroups.Count) {
+            if ($Mode -eq "new") {
+                Write-LogError "Datagroup '$($filteredDatagroups[$num - 1].Name)' already exists. Enter a new name."
+                continue
+            }
+            $sel = $filteredDatagroups[$num - 1]
+            return @{ Name = $sel.Name; Class = $sel.Class }
         }
         
-        Write-LogError "Datagroup '$dgName' does not exist in partition '$Partition'. Try again."
+        if ([int]::TryParse($dgInput, [ref]$num)) {
+            Write-LogError "Invalid selection. Try again."
+            continue
+        }
+        
+        # Direct name entry - check against in-memory list
+        $dgName = Remove-PartitionPrefix -Name $dgInput
+        $found = $datagroups | Where-Object { $_.Name -eq $dgName } | Select-Object -First 1
+        
+        if ($found) {
+            if ($Mode -eq "new") {
+                Write-LogError "Datagroup '$dgName' already exists. Enter a new name."
+                continue
+            }
+            return @{ Name = $found.Name; Class = $found.Class }
+        } else {
+            if ($Mode -eq "existing") {
+                Write-LogError "Datagroup '$dgName' does not exist in partition '$Partition'. Try again."
+                continue
+            }
+            return @{ Name = $dgName; Class = "" }
+        }
     }
 }
 
@@ -1015,7 +1046,7 @@ function Backup-RemoteUrlCategory {
 $script:DeployErrorMsg = ""
 
 function Select-DeployScope {
-    param([string]$ObjectType, [string]$ObjectName)
+    param([string]$ObjectType, [string]$ObjectName, [bool]$IncludeSelf = $false)
     
     Write-Host ""
     Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
@@ -1038,7 +1069,11 @@ function Select-DeployScope {
     
     switch ($scopeType) {
         "1" {
-            $targets = @($script:FleetHosts | Where-Object { $_ -ne $script:RemoteHost })
+            if ($IncludeSelf) {
+                $targets = @($script:FleetHosts)
+            } else {
+                $targets = @($script:FleetHosts | Where-Object { $_ -ne $script:RemoteHost })
+            }
         }
         "2" {
             Write-Host ""
@@ -1058,8 +1093,10 @@ function Select-DeployScope {
                 if ([int]::TryParse($sel, [ref]$num) -and $num -ge 1 -and $num -le $script:FleetUniqueSites.Count) {
                     $selectedSite = $script:FleetUniqueSites[$num - 1]
                     for ($i = 0; $i -lt $script:FleetHosts.Count; $i++) {
-                        if ($script:FleetSites[$i] -eq $selectedSite -and $script:FleetHosts[$i] -ne $script:RemoteHost) {
-                            $targets += $script:FleetHosts[$i]
+                        if ($script:FleetSites[$i] -eq $selectedSite) {
+                            if ($IncludeSelf -or $script:FleetHosts[$i] -ne $script:RemoteHost) {
+                                $targets += $script:FleetHosts[$i]
+                            }
                         }
                     }
                 }
@@ -1079,7 +1116,7 @@ function Select-DeployScope {
                 $num = 0
                 if ([int]::TryParse($sel, [ref]$num) -and $num -ge 1 -and $num -le $script:FleetHosts.Count) {
                     $idx = $num - 1
-                    if ($script:FleetHosts[$idx] -ne $script:RemoteHost) {
+                    if ($IncludeSelf -or $script:FleetHosts[$idx] -ne $script:RemoteHost) {
                         $targets += $script:FleetHosts[$idx]
                     }
                 }
@@ -1663,7 +1700,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v4.6                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.0                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -1706,7 +1743,12 @@ function Show-MainMenu {
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
     Write-Host "7" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
-    Write-Host "  Fleet Backup                                         " -NoNewline -ForegroundColor White
+    Write-Host "  Backup                                               " -NoNewline -ForegroundColor White
+    Write-Host "║" -ForegroundColor Cyan
+    Write-Host "  ║" -NoNewline -ForegroundColor Cyan
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "8" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+    Write-Host "  Bootstrap                                            " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║                                                            ║" -ForegroundColor Cyan
     Write-Host "  ╠════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
@@ -1754,26 +1796,13 @@ function Invoke-CreateEmptyDatagroup {
         return
     }
     
-    Write-Host ""
-    $dgName = Read-Host "  Enter datagroup name (or 'q' to cancel)"
-    if ([string]::IsNullOrWhiteSpace($dgName) -or $dgName -eq 'q') {
-        Write-LogInfo "Cancelled."
-        Press-EnterToContinue
-        return
-    }
+    $selection = Select-Datagroup -Partition $partition -Prompt "Enter new datagroup name" -Mode "new"
+    if ($null -eq $selection) { Press-EnterToContinue; return }
     
-    $dgName = Remove-PartitionPrefix -Name $dgName
+    $dgName = $selection.Name
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "The name '$dgName' is reserved for a BIG-IP system datagroup."
-        Press-EnterToContinue
-        return
-    }
-    
-    # Check if already exists
-    if (Test-DatagroupExistsRemote -Partition $partition -Name $dgName) {
-        Write-LogError "Datagroup '$dgName' already exists in partition '$partition'."
-        Write-LogInfo "Use the editor (option 5) to modify existing datagroups."
         Press-EnterToContinue
         return
     }
@@ -1908,9 +1937,9 @@ function Invoke-CreateFromCsv {
     Write-Host ""
     Write-Host "  What would you like to create?" -ForegroundColor White
     Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "Datagroup (LTM data-group for iRules/policies)" -ForegroundColor White
+    Write-Host "Datagroup" -ForegroundColor White
     Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "URL Category (Custom URL category for SSLO/SWG)" -ForegroundColor White
+    Write-Host "URL Category" -ForegroundColor White
     Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
     Write-Host "Cancel" -ForegroundColor White
     Write-Host ""
@@ -1936,15 +1965,10 @@ function Invoke-CreateDatagroup {
         return
     }
     
-    Write-Host ""
-    $dgName = Read-Host "  Enter datagroup name (or 'q' to cancel)"
-    if ([string]::IsNullOrWhiteSpace($dgName) -or $dgName -eq 'q') {
-        Write-LogInfo "Cancelled."
-        Press-EnterToContinue
-        return
-    }
+    $selection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name" -Mode "any"
+    if ($null -eq $selection) { Press-EnterToContinue; return }
     
-    $dgName = Remove-PartitionPrefix -Name $dgName
+    $dgName = $selection.Name
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "The name '$dgName' is reserved for a BIG-IP system datagroup."
@@ -2432,19 +2456,10 @@ function Invoke-DeleteDatagroup {
     $partition = Select-Partition -Prompt "Select partition containing datagroup to delete"
     if ([string]::IsNullOrWhiteSpace($partition)) { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
     
-    if (-not (Show-PartitionDatagroups -Partition $partition -ShowSystem $true)) { Press-EnterToContinue; return }
+    $selection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name to delete"
+    if ($null -eq $selection) { Press-EnterToContinue; return }
     
-    Write-Host ""
-    $dgName = Read-Host "  Enter datagroup name to delete (or 'q' to cancel)"
-    if ([string]::IsNullOrWhiteSpace($dgName) -or $dgName -eq 'q') { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
-    
-    $dgName = Remove-PartitionPrefix -Name $dgName
-    
-    if (-not (Test-DatagroupExistsRemote -Partition $partition -Name $dgName)) {
-        Write-LogError "Datagroup '$dgName' does not exist in partition '$partition'."
-        Press-EnterToContinue
-        return
-    }
+    $dgName = $selection.Name
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "Datagroup '$dgName' is a protected BIG-IP system datagroup."
@@ -2503,38 +2518,17 @@ function Invoke-DeleteUrlCategory {
     }
     
     Write-Host ""
-    Write-Host "  How would you like to select a URL category?" -ForegroundColor White
-    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "Enter category name directly" -ForegroundColor White
-    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "List all categories" -ForegroundColor White
-    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "Cancel" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " List all categories" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
     Write-Host ""
-    $methodChoice = Read-Host "  Select [0-2]"
+    $catInput = Read-Host "  Enter URL category name or select [0-1]"
     
     $selectedCategory = ""
     
-    switch ($methodChoice) {
+    switch ($catInput) {
         "0" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
         "" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
         "1" {
-            while ($true) {
-                Write-Host ""
-                $selectedCategory = Read-Host "  Enter URL category name (or 'q' to cancel)"
-                if ([string]::IsNullOrWhiteSpace($selectedCategory)) { Write-LogWarn "No category name provided."; continue }
-                if ($selectedCategory -eq 'q') { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
-                if (Test-UrlCategoryExistsRemote -Name $selectedCategory) { break }
-                $ssloName = "sslo-urlCat$selectedCategory"
-                if (Test-UrlCategoryExistsRemote -Name $ssloName) {
-                    Write-LogInfo "Found as SSLO category: $ssloName"
-                    $selectedCategory = $ssloName
-                    break
-                }
-                Write-LogError "Category '$selectedCategory' not found."
-            }
-        }
-        "2" {
             Write-LogStep "Retrieving URL categories..."
             $categories = Get-UrlCategoryListRemote
             if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Press-EnterToContinue; return }
@@ -2558,7 +2552,20 @@ function Invoke-DeleteUrlCategory {
                 $selectedCategory = $categories[$num - 1]
             } else { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
         }
-        default { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
+        default {
+            $selectedCategory = $catInput
+            if (-not (Test-UrlCategoryExistsRemote -Name $selectedCategory)) {
+                $ssloName = "sslo-urlCat$selectedCategory"
+                if (Test-UrlCategoryExistsRemote -Name $ssloName) {
+                    Write-LogInfo "Found as SSLO category: $ssloName"
+                    $selectedCategory = $ssloName
+                } else {
+                    Write-LogError "Category '$selectedCategory' not found."
+                    Press-EnterToContinue
+                    return
+                }
+            }
+        }
     }
     
     $urlCount = Get-UrlCategoryCountRemote -Name $selectedCategory
@@ -2677,39 +2684,18 @@ function Invoke-ExportUrlCategory {
         return
     }
     
-    # Select category (same pattern as delete)
+    # Select category
     Write-Host ""
-    Write-Host "  How would you like to select a URL category?" -ForegroundColor White
-    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "Enter category name directly" -ForegroundColor White
-    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "List all categories" -ForegroundColor White
-    Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "Cancel" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " List all categories" -ForegroundColor White
+    Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
     Write-Host ""
-    $methodChoice = Read-Host "  Select [0-2]"
+    $catInput = Read-Host "  Enter URL category name or select [0-1]"
     
     $selectedCategory = ""
-    switch ($methodChoice) {
+    switch ($catInput) {
         "0" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
         "" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
         "1" {
-            while ($true) {
-                Write-Host ""
-                $selectedCategory = Read-Host "  Enter URL category name (or 'q' to cancel)"
-                if ([string]::IsNullOrWhiteSpace($selectedCategory)) { Write-LogWarn "No category name provided."; continue }
-                if ($selectedCategory -eq 'q') { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
-                if (Test-UrlCategoryExistsRemote -Name $selectedCategory) { break }
-                $ssloName = "sslo-urlCat$selectedCategory"
-                if (Test-UrlCategoryExistsRemote -Name $ssloName) {
-                    Write-LogInfo "Found as SSLO category: $ssloName"
-                    $selectedCategory = $ssloName
-                    break
-                }
-                Write-LogError "Category '$selectedCategory' not found."
-            }
-        }
-        "2" {
             Write-LogStep "Retrieving URL categories..."
             $categories = Get-UrlCategoryListRemote
             if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Press-EnterToContinue; return }
@@ -2732,7 +2718,20 @@ function Invoke-ExportUrlCategory {
                 $selectedCategory = $categories[$num - 1]
             } else { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
         }
-        default { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
+        default {
+            $selectedCategory = $catInput
+            if (-not (Test-UrlCategoryExistsRemote -Name $selectedCategory)) {
+                $ssloName = "sslo-urlCat$selectedCategory"
+                if (Test-UrlCategoryExistsRemote -Name $ssloName) {
+                    Write-LogInfo "Found as SSLO category: $ssloName"
+                    $selectedCategory = $ssloName
+                } else {
+                    Write-LogError "Category '$selectedCategory' not found."
+                    Press-EnterToContinue
+                    return
+                }
+            }
+        }
     }
     
     Write-LogInfo "Selected category: $selectedCategory"
@@ -2830,10 +2829,9 @@ function Invoke-FleetLookingGlass {
             } else {
                 $partition = $script:PARTITIONS[0]
             }
-            Write-Host ""
-            $objectName = Read-Host "  Enter datagroup name (or 'q' to cancel)"
-            if ([string]::IsNullOrWhiteSpace($objectName) -or $objectName -eq "q") { return }
-            $objectName = Remove-PartitionPrefix -Name $objectName
+            $dgSelection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name"
+            if ($null -eq $dgSelection) { return }
+            $objectName = $dgSelection.Name
         }
         "2" {
             $objectType = "urlcat"
@@ -3206,7 +3204,7 @@ function Invoke-FleetLookingGlass {
 # =============================================================================
 
 function Invoke-FleetBackup {
-    Write-LogSection "Fleet Backup"
+    Write-LogSection "Backup"
     
     if ($script:FleetHosts.Count -eq 0) {
         Write-LogError "No fleet configuration loaded. Configure fleet.conf to use this feature."
@@ -3238,10 +3236,9 @@ function Invoke-FleetBackup {
             } else {
                 $partition = $script:PARTITIONS[0]
             }
-            Write-Host ""
-            $objectName = Read-Host "  Enter datagroup name (or 'q' to cancel)"
-            if ([string]::IsNullOrWhiteSpace($objectName) -or $objectName -eq "q") { return }
-            $objectName = Remove-PartitionPrefix -Name $objectName
+            $dgSelection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name"
+            if ($null -eq $dgSelection) { return }
+            $objectName = $dgSelection.Name
         }
         "2" {
             $objectType = "urlcat"
@@ -3441,37 +3438,16 @@ function Invoke-EditMenu {
             
             # Category selection
             Write-Host ""
-            Write-Host "  How would you like to select a URL category?" -ForegroundColor White
-            Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-            Write-Host "Enter category name directly" -ForegroundColor White
-            Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-            Write-Host "List all categories" -ForegroundColor White
-            Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-            Write-Host "Cancel" -ForegroundColor White
+            Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " List all categories" -ForegroundColor White
+            Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
             Write-Host ""
-            $methodChoice = Read-Host "  Select [0-2]"
+            $catInput = Read-Host "  Enter URL category name or select [0-1]"
             
             $selectedCategory = ""
-            switch ($methodChoice) {
+            switch ($catInput) {
                 "0" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
                 "" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
                 "1" {
-                    while ($true) {
-                        Write-Host ""
-                        $selectedCategory = Read-Host "  Enter URL category name (or 'q' to cancel)"
-                        if ([string]::IsNullOrWhiteSpace($selectedCategory)) { Write-LogWarn "No category name provided."; continue }
-                        if ($selectedCategory -eq 'q') { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
-                        if (Test-UrlCategoryExistsRemote -Name $selectedCategory) { break }
-                        $ssloName = "sslo-urlCat$selectedCategory"
-                        if (Test-UrlCategoryExistsRemote -Name $ssloName) {
-                            Write-LogInfo "Found as SSLO category: $ssloName"
-                            $selectedCategory = $ssloName
-                            break
-                        }
-                        Write-LogError "Category '$selectedCategory' not found."
-                    }
-                }
-                "2" {
                     Write-LogStep "Retrieving URL categories..."
                     $categories = Get-UrlCategoryListRemote
                     if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Press-EnterToContinue; return }
@@ -3492,7 +3468,20 @@ function Invoke-EditMenu {
                         $selectedCategory = $categories[$num - 1]
                     } else { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
                 }
-                default { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
+                default {
+                    $selectedCategory = $catInput
+                    if (-not (Test-UrlCategoryExistsRemote -Name $selectedCategory)) {
+                        $ssloName = "sslo-urlCat$selectedCategory"
+                        if (Test-UrlCategoryExistsRemote -Name $ssloName) {
+                            Write-LogInfo "Found as SSLO category: $ssloName"
+                            $selectedCategory = $ssloName
+                        } else {
+                            Write-LogError "Category '$selectedCategory' not found."
+                            Press-EnterToContinue
+                            return
+                        }
+                    }
+                }
             }
             
             Invoke-EditorSubmenu -EditType "urlcat" -CatName $selectedCategory
@@ -4170,88 +4159,430 @@ function Invoke-EditorSubmenu {
 # MAIN
 # =============================================================================
 
+# =============================================================================
+# BOOTSTRAP FUNCTIONS
+# =============================================================================
+
+function Invoke-Bootstrap {
+    Write-LogSection "Bootstrap"
+    
+    while ($true) {
+        Write-Host ""
+        Write-Host "  Bootstrap Options:" -ForegroundColor White
+        Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Create Bootstrap config" -ForegroundColor White
+        Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Import Bootstrap config" -ForegroundColor White
+        Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
+        Write-Host ""
+        $choice = Read-Host "  Select [0-2]"
+        
+        switch ($choice) {
+            "1" { Invoke-BootstrapCreate }
+            "2" { Invoke-BootstrapImport; return }
+            default {
+                Write-LogInfo "Cancelled."
+                Press-EnterToContinue
+                return
+            }
+        }
+    }
+}
+
+function Invoke-BootstrapCreate {
+    $bootstrapFile = Join-Path $script:BACKUP_DIR "bootstrap.conf"
+    
+    if (Test-Path $bootstrapFile) {
+        Write-LogWarn "Bootstrap config already exists: $bootstrapFile"
+        Write-LogInfo "Delete or rename the existing file to create a new one."
+        return
+    }
+    
+    $template = @"
+# DGCat-Admin Bootstrap Configuration
+# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
+#
+# This file defines datagroups and URL categories to create across your fleet.
+# Use Import Bootstrap to validate and deploy.
+#
+# Format: object|name|attribute
+#
+# object:    dg  = Datagroup
+#            cat = URL Category
+#
+# name:      Must start with a letter. No spaces allowed.
+#
+# attribute: For dg:  string, address, integer
+#            For cat: allow, block, confirm
+#
+# Examples:
+# dg|bypass-clients|address
+# dg|bypass-servers|address
+# dg|bypass-clients-troubleshoot|address
+# dg|bypass-servers-troubleshoot|address
+# cat|Bypass-hosts|allow
+# cat|Pinners|allow
+# cat|IPS-Only|allow
+# cat|DLP-Only|allow
+"@
+    
+    try {
+        $template | Out-File -FilePath $bootstrapFile -Encoding UTF8
+        Write-LogOk "Bootstrap config created: $bootstrapFile"
+        Write-LogInfo "Edit the file to define your objects, then use Import to deploy."
+    } catch {
+        Write-LogError "Could not create bootstrap config. Check backup directory permissions."
+    }
+}
+
+function Invoke-BootstrapImport {
+    $bootstrapFile = Join-Path $script:BACKUP_DIR "bootstrap.conf"
+    
+    if (-not (Test-Path $bootstrapFile)) {
+        Write-LogError "Bootstrap config not found: $bootstrapFile"
+        Write-LogInfo "Use 'Create Bootstrap config' to generate a template."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Parse and validate
+    $lineNum = 0
+    $errors = 0
+    $dgNames = @()
+    $dgTypes = @()
+    $catNames = @()
+    $catActions = @()
+    $seenDgNames = @{}
+    $seenCatNames = @{}
+    
+    foreach ($line in (Get-Content $bootstrapFile)) {
+        $lineNum++
+        
+        # Skip comments and empty lines
+        if ($line -match '^\s*#' -or $line -match '^\s*$') { continue }
+        
+        # Split on pipe
+        $parts = $line.Split('|')
+        if ($parts.Count -lt 3) {
+            Write-LogError "Line ${lineNum}: Expected format object|name|attribute"
+            $errors++
+            continue
+        }
+        
+        $obj = $parts[0].Trim()
+        $name = $parts[1].Trim()
+        $attr = $parts[2].Trim()
+        
+        # Validate field count
+        if ([string]::IsNullOrWhiteSpace($obj) -or [string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($attr)) {
+            Write-LogError "Line ${lineNum}: Expected format object|name|attribute"
+            $errors++
+            continue
+        }
+        
+        # Validate object type
+        if ($obj -ne "dg" -and $obj -ne "cat") {
+            Write-LogError "Line ${lineNum}: Invalid object '$obj'. Must be 'dg' or 'cat'."
+            $errors++
+            continue
+        }
+        
+        # Validate name - no spaces
+        if ($name -match '\s') {
+            Write-LogError "Line ${lineNum}: Name '$name' contains spaces."
+            $errors++
+            continue
+        }
+        
+        # Validate name - must start with a letter
+        if ($name -match '^[^a-zA-Z]') {
+            Write-LogError "Line ${lineNum}: Name '$name' must start with a letter."
+            $errors++
+            continue
+        }
+        
+        # Validate attribute and check for duplicates
+        if ($obj -eq "dg") {
+            if ($attr -ne "string" -and $attr -ne "address" -and $attr -ne "integer") {
+                Write-LogError "Line ${lineNum}: Invalid attribute '$attr' for datagroup. Must be string, address, or integer."
+                $errors++
+                continue
+            }
+            
+            if ($seenDgNames.ContainsKey($name)) {
+                Write-LogError "Line ${lineNum}: Duplicate datagroup name '$name'."
+                $errors++
+                continue
+            }
+            
+            $seenDgNames[$name] = $true
+            $dgNames += $name
+            $dgTypes += $attr
+            
+        } elseif ($obj -eq "cat") {
+            if ($attr -ne "allow" -and $attr -ne "block" -and $attr -ne "confirm") {
+                Write-LogError "Line ${lineNum}: Invalid attribute '$attr' for URL category. Must be allow, block, or confirm."
+                $errors++
+                continue
+            }
+            
+            if ($seenCatNames.ContainsKey($name)) {
+                Write-LogError "Line ${lineNum}: Duplicate URL category name '$name'."
+                $errors++
+                continue
+            }
+            
+            $seenCatNames[$name] = $true
+            $catNames += $name
+            $catActions += $attr
+        }
+    }
+    
+    if ($errors -gt 0) {
+        Write-Host ""
+        Write-LogError "$errors validation error(s) found. Fix bootstrap.conf and try again."
+        Press-EnterToContinue
+        return
+    }
+    
+    $totalObjects = $dgNames.Count + $catNames.Count
+    if ($totalObjects -eq 0) {
+        Write-LogWarn "No entries found in bootstrap.conf."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Display plan
+    Write-Host ""
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "    BOOTSTRAP PLAN" -ForegroundColor White
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    
+    if ($dgNames.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Datagroups ($($dgNames.Count)):" -ForegroundColor White
+        for ($i = 0; $i -lt $dgNames.Count; $i++) {
+            $line = "    {0,-35} ({1})" -f $dgNames[$i], $dgTypes[$i]
+            Write-Host $line -ForegroundColor White
+        }
+    }
+    
+    if ($catNames.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  URL Categories ($($catNames.Count)):" -ForegroundColor White
+        for ($i = 0; $i -lt $catNames.Count; $i++) {
+            $line = "    {0,-35} ({1})" -f $catNames[$i], $catActions[$i]
+            Write-Host $line -ForegroundColor White
+        }
+    }
+    
+    Write-Host ""
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "    Total: $totalObjects objects" -ForegroundColor White
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    
+    # Get partition for datagroups
+    $partition = ""
+    if ($dgNames.Count -gt 0) {
+        if ($script:PARTITIONS.Count -gt 1) {
+            $partition = Select-Partition -Prompt "Select partition for datagroups"
+            if ([string]::IsNullOrWhiteSpace($partition)) {
+                Write-LogInfo "Cancelled."
+                Press-EnterToContinue
+                return
+            }
+        } else {
+            $partition = $script:PARTITIONS[0]
+        }
+    }
+    
+    # Select deployment scope
+    $deployTargets = @()
+    if (Test-FleetAvailable) {
+        $scopeResult = Select-DeployScope -ObjectType "bootstrap" -ObjectName "bootstrap.conf" -IncludeSelf $true
+        if ($scopeResult.Count -eq 0) {
+            Write-LogInfo "Cancelled."
+            Press-EnterToContinue
+            return
+        }
+        $deployTargets = @($scopeResult)
+    } else {
+        $deployTargets = @($script:RemoteHost)
+    }
+    
+    # Confirm
+    Write-Host ""
+    Write-LogInfo "Targets: $($deployTargets.Count) host(s)"
+    foreach ($t in $deployTargets) {
+        Write-LogInfo "  $t"
+    }
+    Write-Host ""
+    Write-Host "  Proceed? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirm = Read-Host
+    if ($confirm -ne "yes") {
+        Write-LogInfo "Cancelled."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Deploy to all targets
+    $origHost = $script:RemoteHost
+    $totalOk = 0; $totalFail = 0; $totalSkip = 0
+    
+    foreach ($host_ in $deployTargets) {
+        $script:RemoteHost = $host_
+        $hostSite = Get-HostSite -Hostname $host_
+        
+        # Test connectivity
+        $testResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/version"
+        if (-not $testResult.Success) {
+            Write-LogError "$host_ ($hostSite) - Connection failed. Skipped."
+            $totalSkip++
+            continue
+        }
+        
+        # Create objects
+        $rc = Invoke-BootstrapCreateObjects -Partition $partition -DgNames $dgNames -DgTypes $dgTypes -CatNames $catNames -CatActions $catActions
+        
+        # Save on target
+        Save-F5Config | Out-Null
+        
+        if ($rc -eq 0) {
+            $totalOk++
+        } else {
+            $totalFail++
+        }
+    }
+    
+    $script:RemoteHost = $origHost
+    
+    Write-Host ""
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-LogInfo "Bootstrap: $totalOk succeeded, $totalFail failed, $totalSkip skipped"
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    
+    Press-EnterToContinue
+}
+
+function Invoke-BootstrapCreateObjects {
+    param(
+        [string]$Partition,
+        [string[]]$DgNames,
+        [string[]]$DgTypes,
+        [string[]]$CatNames,
+        [string[]]$CatActions
+    )
+    
+    $created = 0; $skipped = 0; $failed = 0
+    
+    Write-Host ""
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "    BOOTSTRAP: $($script:RemoteHost)" -ForegroundColor White
+    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    
+    # Create datagroups
+    for ($i = 0; $i -lt $DgNames.Count; $i++) {
+        $name = $DgNames[$i]
+        $type = $DgTypes[$i]
+        $apiType = $type
+        if ($apiType -eq "address") { $apiType = "ip" }
+        
+        if (Test-DatagroupExistsRemote -Partition $Partition -Name $name) {
+            Write-LogInfo "Datagroup '$name' already exists. Skipped."
+            $skipped++
+            continue
+        }
+        
+        Write-LogStep "Creating datagroup '$name' ($type)..."
+        if (New-DatagroupRemote -Partition $Partition -Name $name -Type $apiType) {
+            Write-LogOk "Created."
+            $created++
+        } else {
+            Write-LogError "Failed to create '$name'."
+            $failed++
+        }
+    }
+    
+    # Create URL categories
+    for ($i = 0; $i -lt $CatNames.Count; $i++) {
+        $name = $CatNames[$i]
+        $action = $CatActions[$i]
+        
+        if (Test-UrlCategoryExistsRemote -Name $name) {
+            Write-LogInfo "URL category '$name' already exists. Skipped."
+            $skipped++
+            continue
+        }
+        
+        Write-LogStep "Creating URL category '$name' ($action)..."
+        if (New-UrlCategoryRemote -Name $name -DefaultAction $action -Urls @()) {
+            Write-LogOk "Created."
+            $created++
+        } else {
+            Write-LogError "Failed to create '$name'."
+            $failed++
+        }
+    }
+    
+    Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+    Write-LogInfo "Result: $created created, $skipped skipped, $failed failed"
+    
+    return $failed
+}
+
 function Main {
     # Initialize SSL bypass for self-signed BIG-IP management certs
     Initialize-SslBypass
     
+    # Welcome banner
+    Clear-Host
+    Write-Host ""
+    Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "  ║" -NoNewline -ForegroundColor Cyan
+    Write-Host "                    DGCAT-Admin v5.0                        " -NoNewline -ForegroundColor White
+    Write-Host "║" -ForegroundColor Cyan
+    Write-Host "  ║" -NoNewline -ForegroundColor Cyan
+    Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
+    Write-Host "║" -ForegroundColor Cyan
+    Write-Host "  ╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Setup backup directory and log
+    if (-not (Test-Path $script:BACKUP_DIR)) {
+        New-Item -Path $script:BACKUP_DIR -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    
+    $script:FLEET_CONFIG_FILE = Join-Path $script:BACKUP_DIR "fleet.conf"
+    $script:Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    
+    if ($script:LOGGING_ENABLED -eq 1) {
+        $script:LogFile = Join-Path $script:BACKUP_DIR "dgcat-admin-$($script:Timestamp).log"
+        try {
+            @(
+                "DGCat-Admin - F5 BIG-IP Administration Tool",
+                "Started: $(Get-Date)",
+                "Mode: REST API"
+            ) | Out-File -FilePath $script:LogFile -Encoding UTF8
+        } catch {}
+    } else {
+        $script:LogFile = ""
+    }
+    
+    # Run pre-flight checks (runs once)
+    Invoke-PreFlightChecks
+    
+    # Update log with target
+    if ($script:LogFile) {
+        try { "Target: $($script:RemoteHost)" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 } catch {}
+    }
+    
+    Start-Sleep -Seconds 2
+    
+    # Session loop — option 0 returns here for new connection
     while ($true) {
-        # Reset session variables
-        $script:RemoteHost = ""
-        $script:RemoteUser = ""
-        $script:RemotePass = ""
-        $script:RemoteHostname = ""
-        $script:AuthHeader = ""
-        $script:FleetSites = @()
-        $script:FleetHosts = @()
-        $script:FleetUniqueSites = @()
-        $script:PartitionCache = @{}
-        $script:UrlCategoryDbCached = ""
-        
-        # Welcome banner
-        Clear-Host
-        Write-Host ""
-        Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-        Write-Host "                    DGCAT-Admin v4.6                        " -NoNewline -ForegroundColor White
-        Write-Host "║" -ForegroundColor Cyan
-        Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-        Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
-        Write-Host "║" -ForegroundColor Cyan
-        Write-Host "  ╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host "  Connect to BIG-IP" -ForegroundColor White
-        Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host "  Exit" -ForegroundColor White
-        Write-Host ""
-        
-        $startChoice = Read-Host "  Select [0-1]"
-        if ($startChoice -eq "0") {
-            Write-Host ""
-            Write-Host "  Exiting." -ForegroundColor White
-            Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
-            Write-Host ""
-            exit 0
-        }
-        
-        # Setup backup directory and log
-        if (-not (Test-Path $script:BACKUP_DIR)) {
-            New-Item -Path $script:BACKUP_DIR -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-        }
-        
-        $script:FLEET_CONFIG_FILE = Join-Path $script:BACKUP_DIR "fleet.conf"
-        $script:Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        
-        # Initialize log (if logging enabled)
-        if ($script:LOGGING_ENABLED -eq 1) {
-            $script:LogFile = Join-Path $script:BACKUP_DIR "dgcat-admin-$($script:Timestamp).log"
-            try {
-                @(
-                    "DGCat-Admin - F5 BIG-IP Administration Tool",
-                    "Started: $(Get-Date)",
-                    "Mode: REST API",
-                    "Target: (pending connection)"
-                ) | Out-File -FilePath $script:LogFile -Encoding UTF8
-            } catch {}
-        } else {
-            $script:LogFile = ""
-        }
-        
-        # Run pre-flight checks
-        Invoke-PreFlightChecks
-        
-        # Update log with target
-        if ($script:LogFile) {
-            try { "Target: $($script:RemoteHost)" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 } catch {}
-        }
-        
-        # Brief pause after preflight checks
-        Start-Sleep -Seconds 2
-        
         # Main menu loop
-        $returnToStart = $false
+        $reconnect = $false
         while ($true) {
             Show-MainMenu
             
-            $choice = Read-Host "  Select option [0-7]"
+            $choice = Read-Host "  Select option [0-8]"
             
             switch ($choice) {
                 "1" { Invoke-CreateEmpty }
@@ -4261,14 +4592,9 @@ function Main {
                 "5" { Invoke-EditMenu }
                 "6" { Invoke-FleetLookingGlass }
                 "7" { Invoke-FleetBackup }
+                "8" { Invoke-Bootstrap }
                 "0" {
-                    Write-LogSection "Session End"
-                    Write-LogInfo "Session ended: $(Get-Date)"
-                    if ($script:LOGGING_ENABLED -eq 1) {
-                        Write-LogInfo "Log file: $($script:LogFile)"
-                    }
-                    Write-Host ""
-                    $returnToStart = $true
+                    $reconnect = $true
                     break
                 }
                 default {
@@ -4277,8 +4603,53 @@ function Main {
                 }
             }
             
-            if ($returnToStart) { break }
+            if ($reconnect) { break }
         }
+        
+        # Clear screen and reset connection variables
+        Clear-Host
+        $script:RemoteHost = ""
+        $script:RemoteUser = ""
+        $script:RemotePass = ""
+        $script:RemoteHostname = ""
+        $script:AuthHeader = ""
+        $script:PartitionCache = @{}
+        $script:UrlCategoryDbCached = ""
+        
+        # Re-connect (Initialize-RemoteConnection handles exit on "0")
+        while ($true) {
+            if (Initialize-RemoteConnection) { break }
+            Write-Host ""
+            $retry = Read-Host "  Retry connection? (yes/no) [yes]"
+            if ([string]::IsNullOrWhiteSpace($retry)) { $retry = "yes" }
+            if ($retry -ne "yes") {
+                Write-LogInfo "Exiting."
+                Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
+                exit 0
+            }
+        }
+        
+        # Validate partitions on new host
+        Write-LogStep "Validating partitions on target system..."
+        $invalidCount = 0
+        foreach ($partition in $script:PARTITIONS) {
+            if (-not (Test-PartitionExists -Partition $partition)) {
+                Write-LogWarn "Partition '$partition' not found on $($script:RemoteHost)"
+                $invalidCount++
+            }
+        }
+        if ($invalidCount -eq 0) {
+            Write-LogOk "All partitions verified"
+        }
+        
+        # Check URL category database
+        if (Test-UrlCategoryDbAvailable) {
+            Write-LogOk "URL category database available"
+        } else {
+            Write-LogInfo "URL category database not available (URL category features disabled)"
+        }
+        
+        Start-Sleep -Seconds 2
     }
 }
 
