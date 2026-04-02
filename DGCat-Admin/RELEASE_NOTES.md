@@ -1,9 +1,21 @@
+# DGCat-Admin v5.0 Release Notes - April 2 2026
+
+**Bootstrap (Option 8)**
+- Bootstrap will create objects across your entire fleet based on bootstrap.conf entries
+
+**UI**  
+- Datagroup selection now displays numbered lists across all operations for ease of selection
+- System datagroups are now hidden from selection list view
+- Removed legacy Connect to BIG-IP startup menu
+**Cleanup**
+- Removed 8 orphaned functions
+
 # DGCat-Admin v4.6 Release Notes - April 1 2026
 
-- **Fleet Backup (Option 7)** — Pull and save backups of a datagroup or URL category across the fleet. Supports scoping by all hosts, site, or individual host selection.
-- **Backup Disable** — `BACKUPS_ENABLED` config variable (default: off). Set to 1 to enable automatic pre-change backups. 
-- **Deploy Scope Redesign** — Deploy scope selection now matches Search and Fleet Backup with comma-separated site and host selection.
-- **Fleet Duplicate Detection** — fleet.conf is validated at startup for duplicate hostnames or IPs. Duplicates are displayed and the script halts until corrected.
+**Fleet Backup (Option 7)**
+- Pull and save backups of a datagroup or URL category across the fleet. Supports scoping by all hosts, site, or individual host selection.
+- Backups Disabled — `BACKUPS_ENABLED` config variable (default: off). Set to 1 to enable automatic pre-change backups. 
+- Deploy scope selection now matches Search and Fleet Backup with comma-separated site and host selection.
 
 ## Bug Fixes
 - **Bash Empty Array Handling** — All editor array operations converted to index-based loops to prevent unbound variable errors with `set -u` on empty datagroups.
