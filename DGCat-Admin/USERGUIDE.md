@@ -1,4 +1,4 @@
-# DGCat-Admin v4.x — User Guide
+# DGCat-Admin v5.x — User Guide
 
 ## Table of Contents
 
@@ -15,10 +15,11 @@
 11. [Fleet Deployment](#fleet-deployment)
 12. [Fleet Search](#fleet-search)
 13. [Fleet Backup](#fleet-backup)
-14. [CSV File Formats](#csv-file-formats)
-15. [Backup System](#backup-system)
-16. [Configuration Reference](#configuration-reference)
-17. [Troubleshooting](#troubleshooting)
+14. [Bootstrap](#bootstrap)
+15. [CSV File Formats](#csv-file-formats)
+16. [Backup System](#backup-system)
+17. [Configuration Reference](#configuration-reference)
+18. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -121,9 +122,9 @@ PARTITIONS="Common"
 
 ## Connecting to a BIG-IP
 
-When you start the tool, you see a welcome screen with the option to connect or exit. Selecting connect takes you through pre-flight checks and then to the connection prompt.
+When you start the tool, it displays a welcome banner and runs pre-flight checks (dependency validation, partition configuration, and fleet loading). After pre-flight completes, the connection prompt appears.
 
-If you have a fleet configuration file, the tool loads it first and displays your fleet hosts as numbered options:
+If you have a fleet configuration file, the tool displays your fleet hosts as numbered options:
 
 ```
   Fleet hosts:
@@ -158,7 +159,7 @@ After a successful connection, you see the main menu:
 
 <img width="636" height="396" alt="Image" src="https://github.com/user-attachments/assets/0899bdbb-4d23-45f7-a396-13b1a73fd11e" />
 
-Each option is described in detail in the following sections. 
+Each option is described in detail in the following sections. Option 0 returns to the host selection screen where you can connect to a different BIG-IP without restarting the tool or re-running pre-flight checks.
 
 ---
 
@@ -166,7 +167,7 @@ Each option is described in detail in the following sections.
 
 **Menu option 1** creates an empty datagroup or URL category on the BIG-IP. This is useful for preparing objects that will be populated later through the editor, CSV import, or fleet deployment.
 
-For datagroups, you select a partition, provide a name, and choose a type (string, address, or integer). The tool checks that the name doesn't already exist and isn't a protected system datagroup.
+For datagroups, you select a partition and the tool displays existing datagroups for reference. Type a name for the new datagroup and choose a type (string, address, or integer). If the name matches an existing datagroup, the tool rejects it immediately without an API call — the list is already in memory. Protected system datagroups are hidden from the list.
 
 For URL categories, you provide a name and select a default action (allow, block, or confirm). The tool sanitizes the name to remove characters that aren't valid in F5 object names.
 
@@ -378,7 +379,7 @@ Status meanings in the deploy summary: **OK** means the deployment succeeded. **
 
 ### What Fleet Deploy Will Not Do
 
-Fleet deployment does not create objects that don't exist on target hosts. If you're deploying a datagroup and one of your fleet members doesn't have that datagroup, it is skipped with a status of `SKIP`. The assumption is that you're synchronizing existing objects across devices that are already configured, not bootstrapping new environments, but if you want to bootstrap new environments simply connect to each host directly, make the container datagroup or URL category, and then deploy content from your "source of truth" Big-IP.
+Fleet deployment does not create objects that don't exist on target hosts. If you're deploying a datagroup and one of your fleet members doesn't have that datagroup, it is skipped with a status of `SKIP`. The assumption is that you're synchronizing existing objects across devices that are already configured. To provision new environments with the required datagroups and URL categories, use the Bootstrap feature (menu option 8).
 
 Note: All fleet operations use the same cached credentials you used to connect to the initial Big-IP. If a fleet Big-IP requires different credentials, it will show as a connection failure during validation.
 
@@ -478,6 +479,47 @@ The tool connects to each selected host, pulls the object's current state, and w
 ```
 
 Backup files are organized by site in the backup directory and follow the same naming convention as pre-deploy backups.
+
+---
+
+## Bootstrap
+
+**Menu option 8** creates datagroups and URL categories in bulk from a configuration manifest. This is designed for standing up new environments, rebuilding after a migration, or ensuring a standard set of objects exists across your fleet.
+
+### Bootstrap Configuration
+
+The bootstrap manifest is a file called `bootstrap.conf` stored in the backup directory. It uses pipe-delimited format with three fields per line:
+
+```
+object|name|attribute
+```
+
+- **object** — `dg` for datagroup, `cat` for URL category
+- **name** — must start with a letter, no spaces allowed
+- **attribute** — `string`, `address`, or `integer` for datagroups; `allow`, `block`, or `confirm` for URL categories
+
+Lines starting with `#` are comments. Example:
+
+```
+dg|bypass-clients|address
+dg|bypass-servers|address
+dg|troubleshoot|address
+cat|Bypass-hosts|allow
+cat|Pinners|allow
+cat|IPS-Only|allow
+```
+
+### Creating the Config
+
+Select option 1 from the Bootstrap submenu to generate a boilerplate `bootstrap.conf` with format instructions and examples. If the file already exists, the tool warns you and does not overwrite it.
+
+### Importing and Deploying
+
+Select option 2 to import. The tool validates every line — object type, name format, attribute match, and duplicate detection. If any line fails validation, the entire file is rejected with line-specific error messages.
+
+After validation, the tool displays a plan summary showing all datagroups and URL categories that will be created, with their types and actions.
+
+You then select a partition for the datagroups, followed by deployment scope using the standard scope selection (all hosts, by site, or by host). The connected host is included as a selectable target — bootstrap does not auto-apply to any host. Objects that already exist on a target are skipped.
 
 ---
 
