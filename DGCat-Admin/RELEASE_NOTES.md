@@ -1,7 +1,7 @@
 # DGCat-Admin v5.0 Release Notes - April 2 2026
 
 **Bootstrap (Option 8)**
-- Bootstrap will create objects across your entire fleet based on bootstrap.conf entries
+- Bootstrap will create objects across your entire fleet based on bootstrap.conf entries; useful for multi-site initial configuration
 
 **UI**  
 - Datagroup selection now displays numbered lists across all operations for ease of selection
