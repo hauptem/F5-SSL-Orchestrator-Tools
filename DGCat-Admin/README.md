@@ -1,4 +1,4 @@
-# DGCat-Admin v4.6 — F5 BIG-IP Datagroup & URL Category Manager
+# DGCat-Admin v5.0 — F5 BIG-IP Datagroup & URL Category Manager
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
@@ -32,7 +32,8 @@ DGCat-Admin makes managing those site lists very easy.
 - Want to take a custom URL category and convert it to a datagroup?
 - Want to take a datagroup and convert it to a custom URL category?
 - Want to search your entire fleet non-destructively and find a needle in a stack of needles?
-- **New in 4.6** Backup datagroups or URL categories from your entire topology 
+- Backup datagroups or URL categories from your entire topology
+- **New in 5.0** Bootstrap an entire fleet with datagroups and URL categories from a single config file
 
 **This tool was designed specifically for those purposes.**
 
