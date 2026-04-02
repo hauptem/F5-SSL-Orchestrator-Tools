@@ -1,7 +1,8 @@
 # DGCat-Admin v5.0 Release Notes - April 2 2026
 
 **Bootstrap (Option 8)**
-- Bootstrap will create objects across your entire fleet based on bootstrap.conf entries; useful for multi-site initial configuration
+- Bootstrap will create datagroups and URL Categories across your entire fleet based on bootstrap.conf entries; useful for multi-site initial configuration
+- Look in bootstrap.conf in the dgcat-admin-backups folder after selecting bootstrap - create bootstrap.conf
 
 **UI**  
 - Datagroup selection now displays numbered lists across all operations for ease of selection
