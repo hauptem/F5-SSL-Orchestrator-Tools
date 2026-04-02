@@ -34,6 +34,8 @@ BACKUPS_ENABLED=0
 
 # Session logging (set to 1 to enable log file creation)
 LOGGING_ENABLED=0
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
 
 # API timeout settings (seconds)
 # Connect timeout: max time to establish TCP connection to a BIG-IP
@@ -41,18 +43,13 @@ LOGGING_ENABLED=0
 API_CONNECT_TIMEOUT=10
 API_REQUEST_TIMEOUT=60
 
-# Logging
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
-
 # Partitions to manage (comma-separated, no spaces)
 # Add additional partitions as needed, e.g., "Common,SSLO_Partition,DMZ"
 # WARNING: Only include partitions you intend to manage with this tool
 PARTITIONS="Common"
 
-# Protected system datagroups - DO NOT MODIFY
-# These are pre-configured BIG-IP datagroups that must not be modified or deleted
-# Attempting to change these can produce adverse system results
+# Protected system datagroups or datagroups to mask from the tool
+# These are BIG-IP datagroups that must not be modified or deleted
 PROTECTED_DATAGROUPS=(
     "private_net"
     "images"
@@ -864,6 +861,73 @@ build_records_json_remote() {
     '
 }
 
+# Build tmsh-style record string for incremental add
+# Input: key|value lines via stdin
+# Output: tmsh record string (e.g., "key1 { data value1 } key2")
+build_tmsh_records_add() {
+    local result=""
+    while IFS='|' read -r key value; do
+        [ -z "${key}" ] && continue
+        if [ -n "${value}" ]; then
+            result="${result} ${key} { data ${value} }"
+        else
+            result="${result} ${key}"
+        fi
+    done
+    echo "${result}"
+}
+
+# Build tmsh-style key string for incremental delete
+# Input: key names, one per line
+# Output: space-separated keys
+build_tmsh_records_delete() {
+    local result=""
+    while IFS= read -r key; do
+        [ -z "${key}" ] && continue
+        result="${result} ${key}"
+    done
+    echo "${result}"
+}
+
+# URL-encode a tmsh options string for REST API query parameter
+urlencode_options() {
+    echo "$1" | sed 's/ /%20/g; s/{/%7B/g; s/}/%7D/g; s/"/%22/g'
+}
+
+# Add records to datagroup incrementally using ?options=records add
+# Args: partition, name, tmsh_records (from build_tmsh_records_add)
+# Returns: 0 on success, 1 on failure
+add_datagroup_records_incremental() {
+    local partition="$1"
+    local dg_name="$2"
+    local tmsh_records="$3"
+    
+    local options
+    options=$(urlencode_options "records add {${tmsh_records} }")
+    
+    if api_patch "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}?options=${options}" "{\"name\":\"${dg_name}\",\"partition\":\"${partition}\"}"; then
+        return 0
+    fi
+    return 1
+}
+
+# Delete records from datagroup incrementally using ?options=records delete
+# Args: partition, name, tmsh_keys (from build_tmsh_records_delete)
+# Returns: 0 on success, 1 on failure
+delete_datagroup_records_incremental() {
+    local partition="$1"
+    local dg_name="$2"
+    local tmsh_keys="$3"
+    
+    local options
+    options=$(urlencode_options "records delete {${tmsh_keys} }")
+    
+    if api_patch "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}?options=${options}" "{\"name\":\"${dg_name}\",\"partition\":\"${partition}\"}"; then
+        return 0
+    fi
+    return 1
+}
+
 # -----------------------------------------------------------------------------
 # URL Category Functions
 # -----------------------------------------------------------------------------
@@ -1496,38 +1560,51 @@ deploy_internal_datagroup_to_host() {
     local orig_host="${REMOTE_HOST}"
     REMOTE_HOST="${host}"
     
-    local final_records_json="${records_json}"
-    
     if [ "${deploy_mode}" == "merge" ]; then
-        # Pull current records from target host
-        local target_records
-        if ! target_records=$(get_internal_datagroup_records_remote "${partition}" "${dg_name}"); then
-            DEPLOY_ERROR_MSG="Failed to read target records (HTTP ${API_HTTP_CODE})"
+        # tmsh modify mode: add then delete using ?options= API
+        local merge_errors=0
+        
+        # Additions first
+        if [ "${additions_json}" != "[]" ] && [ -n "${additions_json}" ]; then
+            local add_tmsh
+            add_tmsh=$(echo "${additions_json}" | jq -r '.[] | .name + "|" + (.data // "")' | build_tmsh_records_add)
+            if [ -n "${add_tmsh}" ]; then
+                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}"; then
+                    echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Adding records${NC}"
+                    merge_errors=$((merge_errors + 1))
+                fi
+            fi
+        fi
+        
+        # Deletions second
+        if [ -n "${deletions_list}" ]; then
+            local del_tmsh
+            del_tmsh=$(echo "${deletions_list}" | build_tmsh_records_delete)
+            if [ -n "${del_tmsh}" ]; then
+                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}"; then
+                    echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Deleting records${NC}"
+                    merge_errors=$((merge_errors + 1))
+                fi
+            fi
+        fi
+        
+        if [ ${merge_errors} -gt 0 ]; then
+            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
+            DEPLOY_ERROR_MSG="tmsh modify completed with ${merge_errors} error(s)"
             REMOTE_HOST="${orig_host}"
             return 1
         fi
-        
-        # Build merged result: start with target, remove deletions, add additions
-        # Use jq to merge: target records - deletions + additions
-        local delete_array
-        delete_array=$(echo "${deletions_list}" | jq -R -s 'split("\n") | map(select(length > 0))')
-        
-        local target_json
-        target_json=$(echo "${target_records}" | build_records_json_remote "${dg_type}")
-        
-        final_records_json=$(printf '%s\n%s\n%s' "${target_json}" "${additions_json}" "${delete_array}" | jq -sc '
-            .[0] as $target | .[1] as $additions | .[2] as $deletions |
-            ($target | map(select(.name as $n | $deletions | index($n) | not))) + $additions | unique_by(.name)')
+        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
+    else
+        # Full replace mode
+        if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
+            DEPLOY_ERROR_MSG="Failed to apply records (HTTP ${API_HTTP_CODE})"
+            REMOTE_HOST="${orig_host}"
+            return 1
+        fi
+        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
     fi
-    
-    # Apply records
-    if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${final_records_json}"; then
-        echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
-        DEPLOY_ERROR_MSG="Failed to apply records (HTTP ${API_HTTP_CODE})"
-        REMOTE_HOST="${orig_host}"
-        return 1
-    fi
-    echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
     
     # Save config
     if ! save_config_remote; then
@@ -2664,6 +2741,8 @@ menu_create_datagroup() {
     
     local dg_name
     dg_name=$(echo "${selection}" | cut -d'|' -f1)
+    local selection_class
+    selection_class=$(echo "${selection}" | cut -d'|' -f2)
     
     # Check if this name matches a protected system datagroup
     if is_protected_datagroup "${dg_name}"; then
@@ -2673,17 +2752,14 @@ menu_create_datagroup() {
         return
     fi
     
-    # Check if already exists
-    local existing_class
-    existing_class=$(datagroup_exists "${partition}" "${dg_name}")
-    
+    # Determine if datagroup exists (class is populated from selection)
     local dg_class
     local dg_type
     local restore_mode=""
     
-    if [ -n "${existing_class}" ]; then
+    if [ -n "${selection_class}" ]; then
         # Datagroup exists - this is a restore operation
-        dg_class="${existing_class}"
+        dg_class="${selection_class}"
         dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
         
         local current_count
@@ -4595,24 +4671,88 @@ editor_submenu() {
                     fi
                 fi
                 
-                # Apply changes atomically
+                # Apply changes
                 if [ "${edit_type}" == "datagroup" ]; then
-                    log_step "Applying changes to datagroup..."
+                    # Select apply mode for datagroups
+                    echo ""
+                    echo -e "  ${WHITE}Select apply mode:${NC}"
+                    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Full Replace  - PATCH entire record set via REST${NC}"
+                    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}tmsh Modify  - Add/delete only changed records (tmsh passthrough)${NC}"
+                    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
+                    echo ""
+                    local apply_mode_choice
+                    read -rp "  Select [0-2]: " apply_mode_choice
                     
-                    local records_json
-                    records_json=$(
-                        for ((i=0; i<${#working_keys[@]}; i++)); do
-                            echo "${working_keys[$i]}|${working_values[$i]:-}"
-                        done | build_records_json_remote "${dg_type}"
-                    )
-                    
-                    if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
-                        log_ok "Changes applied successfully."
-                    else
-                        log_error "Failed to apply changes. HTTP ${API_HTTP_CODE}"
-                        press_enter_to_continue
-                        continue
-                    fi
+                    case "${apply_mode_choice}" in
+                        1)
+                            log_step "Applying changes to datagroup (full replace)..."
+                            local records_json
+                            records_json=$(
+                                for ((i=0; i<${#working_keys[@]}; i++)); do
+                                    echo "${working_keys[$i]}|${working_values[$i]:-}"
+                                done | build_records_json_remote "${dg_type}"
+                            )
+                            if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+                                log_ok "Changes applied successfully."
+                            else
+                                log_error "Failed to apply changes. HTTP ${API_HTTP_CODE}"
+                                press_enter_to_continue
+                                continue
+                            fi
+                            ;;
+                        2)
+                            log_step "Applying changes to datagroup (tmsh modify)..."
+                            local inc_errors=0
+                            
+                            # Additions first
+                            if [ ${#additions[@]} -gt 0 ]; then
+                                local add_tmsh
+                                add_tmsh=$(
+                                    for add_key in "${additions[@]}"; do
+                                        # Look up value from working arrays
+                                        local add_val=""
+                                        for ((vi=0; vi<${#working_keys[@]}; vi++)); do
+                                            if [ "${working_keys[$vi]}" == "${add_key}" ]; then
+                                                add_val="${working_values[$vi]:-}"
+                                                break
+                                            fi
+                                        done
+                                        echo "${add_key}|${add_val}"
+                                    done | build_tmsh_records_add
+                                )
+                                if add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}"; then
+                                    log_ok "${#additions[@]} record(s) added."
+                                else
+                                    log_error "Failed to add records. HTTP ${API_HTTP_CODE}"
+                                    inc_errors=$((inc_errors + 1))
+                                fi
+                            fi
+                            
+                            # Deletions second
+                            if [ ${#deletions[@]} -gt 0 ]; then
+                                local del_tmsh
+                                del_tmsh=$(printf '%s\n' "${deletions[@]}" | build_tmsh_records_delete)
+                                if delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}"; then
+                                    log_ok "${#deletions[@]} record(s) deleted."
+                                else
+                                    log_error "Failed to delete records. HTTP ${API_HTTP_CODE}"
+                                    inc_errors=$((inc_errors + 1))
+                                fi
+                            fi
+                            
+                            if [ ${inc_errors} -gt 0 ]; then
+                                log_error "tmsh modify completed with errors."
+                                press_enter_to_continue
+                                continue
+                            fi
+                            log_ok "Changes applied successfully."
+                            ;;
+                        *)
+                            log_info "Cancelled."
+                            press_enter_to_continue
+                            continue
+                            ;;
+                    esac
                 else
                     # URL category - apply only the changes (not full replace)
                     log_step "Applying changes to URL category..."
@@ -4965,23 +5105,68 @@ editor_submenu() {
                 # Apply to current device
                 local current_device_success=false
                 if [ "${edit_type}" == "datagroup" ]; then
-                    local current_records_json
-                    current_records_json=$(
-                        for ((i=0; i<${#working_keys[@]}; i++)); do
-                            echo "${working_keys[$i]}|${working_values[$i]:-}"
-                        done | build_records_json_remote "${dg_type}"
-                    )
-                    
-                    if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${current_records_json}"; then
-                        echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
-                        if save_config_remote; then
-                            echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Saving configuration${NC}"
-                            current_device_success=true
+                    if [ "${deploy_mode}" == "merge" ]; then
+                        # tmsh modify: add then delete
+                        local inc_errors=0
+                        if [ ${#deploy_additions[@]} -gt 0 ]; then
+                            local add_tmsh
+                            add_tmsh=$(
+                                for add_key in "${deploy_additions[@]}"; do
+                                    local add_val=""
+                                    for ((vi=0; vi<${#working_keys[@]}; vi++)); do
+                                        if [ "${working_keys[$vi]}" == "${add_key}" ]; then
+                                            add_val="${working_values[$vi]:-}"
+                                            break
+                                        fi
+                                    done
+                                    echo "${add_key}|${add_val}"
+                                done | build_tmsh_records_add
+                            )
+                            if [ -n "${add_tmsh}" ]; then
+                                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}"; then
+                                    inc_errors=$((inc_errors + 1))
+                                fi
+                            fi
+                        fi
+                        if [ ${#deploy_deletions[@]} -gt 0 ]; then
+                            local del_tmsh
+                            del_tmsh=$(printf '%s\n' "${deploy_deletions[@]}" | build_tmsh_records_delete)
+                            if [ -n "${del_tmsh}" ]; then
+                                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}"; then
+                                    inc_errors=$((inc_errors + 1))
+                                fi
+                            fi
+                        fi
+                        if [ ${inc_errors} -eq 0 ]; then
+                            echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes (tmsh modify)${NC}"
+                            if save_config_remote; then
+                                echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Saving configuration${NC}"
+                                current_device_success=true
+                            else
+                                echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Saving configuration${NC}"
+                            fi
                         else
-                            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Saving configuration${NC}"
+                            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes (tmsh modify)${NC}"
                         fi
                     else
-                        echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
+                        # Full replace
+                        local current_records_json
+                        current_records_json=$(
+                            for ((i=0; i<${#working_keys[@]}; i++)); do
+                                echo "${working_keys[$i]}|${working_values[$i]:-}"
+                            done | build_records_json_remote "${dg_type}"
+                        )
+                        if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${current_records_json}"; then
+                            echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
+                            if save_config_remote; then
+                                echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Saving configuration${NC}"
+                                current_device_success=true
+                            else
+                                echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Saving configuration${NC}"
+                            fi
+                        else
+                            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
+                        fi
                     fi
                 else
                     local current_urls_json

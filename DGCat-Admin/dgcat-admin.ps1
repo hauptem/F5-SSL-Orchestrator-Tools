@@ -19,7 +19,7 @@
 #
 # =============================================================================
 
-# Requires -Version 5.1
+#Requires -Version 5.1
 
 # =============================================================================
 # CONFIGURATION
@@ -42,7 +42,8 @@ $script:API_TIMEOUT = 60
 # WARNING: Only include partitions you intend to manage with this tool
 $script:PARTITIONS = @("Common")
 
-# Protected system datagroups - DO NOT MODIFY
+# Protected system datagroups or datagroups to mask from the tool
+# These are BIG-IP datagroups that must not be modified or deleted
 $script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol", "sys_APM_MS_Office_OFBA_DG")
 
 # CSV preview lines
@@ -557,6 +558,56 @@ function ConvertTo-RecordsJson {
         }
     }
     return $records
+}
+
+# Build tmsh-style record string for incremental add
+# Returns: "key1 { data value1 } key2"
+function ConvertTo-TmshRecordsAdd {
+    param([array]$Keys, [array]$Values)
+    $result = ""
+    for ($i = 0; $i -lt $Keys.Count; $i++) {
+        if ([string]::IsNullOrWhiteSpace($Keys[$i])) { continue }
+        if ($Values[$i]) {
+            $result += " $($Keys[$i]) { data $($Values[$i]) }"
+        } else {
+            $result += " $($Keys[$i])"
+        }
+    }
+    return $result
+}
+
+# Build tmsh-style key string for incremental delete
+# Returns: "key1 key2 key3"
+function ConvertTo-TmshRecordsDelete {
+    param([string[]]$Keys)
+    $result = ""
+    foreach ($key in $Keys) {
+        if ([string]::IsNullOrWhiteSpace($key)) { continue }
+        $result += " $key"
+    }
+    return $result
+}
+
+# Add records to datagroup incrementally using ?options=records add
+function Add-DatagroupRecordsIncremental {
+    param([string]$Partition, [string]$Name, [string]$TmshRecords)
+    
+    $options = [System.Uri]::EscapeDataString("records add {$TmshRecords }")
+    $body = @{ name = $Name; partition = $Partition }
+    
+    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}?options=$options" -Body $body
+    return $result.Success
+}
+
+# Delete records from datagroup incrementally using ?options=records delete
+function Remove-DatagroupRecordsIncremental {
+    param([string]$Partition, [string]$Name, [string]$TmshKeys)
+    
+    $options = [System.Uri]::EscapeDataString("records delete {$TmshKeys }")
+    $body = @{ name = $Name; partition = $Partition }
+    
+    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}?options=$options" -Body $body
+    return $result.Success
 }
 
 # -----------------------------------------------------------------------------
@@ -1139,47 +1190,55 @@ function Deploy-DatagroupToHost {
     $origHost = $script:RemoteHost
     $script:RemoteHost = $HostName
     
-    $finalRecords = $RecordsJson
-    
     if ($DeployMode -eq "merge") {
-        # Pull current records from target
-        $targetRecords = Get-DatagroupRecordsRemote -Partition $Partition -Name $DgName
-        if ($null -eq $targetRecords) {
-            $script:DeployErrorMsg = "Failed to read target records"
+        # tmsh modify mode: add then delete
+        $mergeErrors = 0
+        
+        # Additions first
+        if ($AdditionsJson.Count -gt 0) {
+            $addKeys = @(); $addValues = @()
+            foreach ($rec in $AdditionsJson) {
+                $addKeys += $rec.name
+                $addValues += $(if ($rec.data) { $rec.data } else { "" })
+            }
+            $addTmsh = ConvertTo-TmshRecordsAdd -Keys $addKeys -Values $addValues
+            if ($addTmsh) {
+                if (-not (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshRecords $addTmsh)) {
+                    Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Adding records" -ForegroundColor White
+                    $mergeErrors++
+                }
+            }
+        }
+        
+        # Deletions second
+        if ($DeletionsList.Count -gt 0) {
+            $delTmsh = ConvertTo-TmshRecordsDelete -Keys $DeletionsList
+            if ($delTmsh) {
+                if (-not (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshKeys $delTmsh)) {
+                    Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Deleting records" -ForegroundColor White
+                    $mergeErrors++
+                }
+            }
+        }
+        
+        if ($mergeErrors -gt 0) {
+            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
+            $script:DeployErrorMsg = "tmsh modify completed with $mergeErrors error(s)"
             $script:RemoteHost = $origHost
             return $false
         }
-        
-        # Build merged result: target - deletions + additions
-        $merged = @{}
-        foreach ($rec in $targetRecords) {
-            if ($DeletionsList -notcontains $rec.Key) {
-                $merged[$rec.Key] = $rec.Value
-            }
+        Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
+    } else {
+        # Full replace
+        $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $RecordsJson
+        if (-not $result.Success) {
+            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
+            $script:DeployErrorMsg = "Failed to apply records (HTTP $($result.StatusCode))"
+            $script:RemoteHost = $origHost
+            return $false
         }
-        foreach ($rec in $AdditionsJson) {
-            $merged[$rec.name] = $(if ($rec.data) { $rec.data } else { "" })
-        }
-        
-        $finalRecords = @()
-        foreach ($key in $merged.Keys) {
-            if ($merged[$key]) {
-                $finalRecords += @{ name = $key; data = $merged[$key] }
-            } else {
-                $finalRecords += @{ name = $key }
-            }
-        }
+        Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
     }
-    
-    # Apply records
-    $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $finalRecords
-    if (-not $result.Success) {
-        Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
-        $script:DeployErrorMsg = "Failed to apply records (HTTP $($result.StatusCode))"
-        $script:RemoteHost = $origHost
-        return $false
-    }
-    Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
     
     # Save config
     if (-not (Save-F5Config)) {
@@ -1976,8 +2035,8 @@ function Invoke-CreateDatagroup {
         return
     }
     
-    # Check if exists
-    $exists = Test-DatagroupExistsRemote -Partition $partition -Name $dgName
+    # Determine if datagroup exists (class is populated from selection)
+    $exists = (-not [string]::IsNullOrWhiteSpace($selection.Class))
     $dgType = ""
     $restoreMode = ""
     
@@ -3826,15 +3885,73 @@ function Invoke-EditorSubmenu {
                 
                 # Apply
                 if ($EditType -eq "datagroup") {
-                    Write-LogStep "Applying changes to datagroup..."
-                    $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
-                    $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $records
-                    if ($result.Success) {
-                        Write-LogOk "Changes applied successfully."
-                    } else {
-                        Write-LogError "Failed to apply changes. HTTP $($result.StatusCode)"
-                        Press-EnterToContinue
-                        continue
+                    # Select apply mode
+                    Write-Host ""
+                    Write-Host "  Select apply mode:" -ForegroundColor White
+                    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Full Replace  - PATCH entire record set via REST" -ForegroundColor White
+                    Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " tmsh Modify  - Add/delete only changed records (tmsh passthrough)" -ForegroundColor White
+                    Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
+                    Write-Host ""
+                    $applyModeChoice = Read-Host "  Select [0-2]"
+                    
+                    switch ($applyModeChoice) {
+                        "1" {
+                            Write-LogStep "Applying changes to datagroup (full replace)..."
+                            $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
+                            $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $records
+                            if ($result.Success) {
+                                Write-LogOk "Changes applied successfully."
+                            } else {
+                                Write-LogError "Failed to apply changes. HTTP $($result.StatusCode)"
+                                Press-EnterToContinue
+                                continue
+                            }
+                        }
+                        "2" {
+                            Write-LogStep "Applying changes to datagroup (tmsh modify)..."
+                            $incErrors = 0
+                            
+                            # Additions first
+                            if ($changes.Additions.Count -gt 0) {
+                                $addKeys = @()
+                                $addValues = @()
+                                foreach ($addKey in $changes.Additions) {
+                                    $idx = $workingKeys.IndexOf($addKey)
+                                    $addKeys += $addKey
+                                    $addValues += $(if ($idx -ge 0) { $workingValues[$idx] } else { "" })
+                                }
+                                $addTmsh = ConvertTo-TmshRecordsAdd -Keys $addKeys -Values $addValues
+                                if (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshRecords $addTmsh) {
+                                    Write-LogOk "$($changes.Additions.Count) record(s) added."
+                                } else {
+                                    Write-LogError "Failed to add records."
+                                    $incErrors++
+                                }
+                            }
+                            
+                            # Deletions second
+                            if ($changes.Deletions.Count -gt 0) {
+                                $delTmsh = ConvertTo-TmshRecordsDelete -Keys $changes.Deletions
+                                if (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshKeys $delTmsh) {
+                                    Write-LogOk "$($changes.Deletions.Count) record(s) deleted."
+                                } else {
+                                    Write-LogError "Failed to delete records."
+                                    $incErrors++
+                                }
+                            }
+                            
+                            if ($incErrors -gt 0) {
+                                Write-LogError "tmsh modify completed with errors."
+                                Press-EnterToContinue
+                                continue
+                            }
+                            Write-LogOk "Changes applied successfully."
+                        }
+                        default {
+                            Write-LogInfo "Cancelled."
+                            Press-EnterToContinue
+                            continue
+                        }
                     }
                 } else {
                     Write-LogStep "Applying changes to URL category..."
