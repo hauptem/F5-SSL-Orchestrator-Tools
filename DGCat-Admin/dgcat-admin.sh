@@ -6197,10 +6197,10 @@ menu_bootstrap_import() {
 # Args: partition, dg_names_ref, dg_types_ref, cat_names_ref, cat_actions_ref
 bootstrap_create_objects() {
     local partition="$1"
-    local -n _dg_names=$2
-    local -n _dg_types=$3
-    local -n _cat_names=$4
-    local -n _cat_actions=$5
+    local _dg_names_ref=$2
+    local _dg_types_ref=$3
+    local _cat_names_ref=$4
+    local _cat_actions_ref=$5
     
     local created=0 skipped=0 failed=0
     
@@ -6210,9 +6210,10 @@ bootstrap_create_objects() {
     echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
     
     # Create datagroups
-    for ((i=0; i<${#_dg_names[@]}; i++)); do
-        local name="${_dg_names[$i]}"
-        local type="${_dg_types[$i]}"
+    eval "local dg_count=\${#${_dg_names_ref}[@]}"
+    for ((i=0; i<dg_count; i++)); do
+        eval "local name=\"\${${_dg_names_ref}[$i]}\""
+        eval "local type=\"\${${_dg_types_ref}[$i]}\""
         local api_type="${type}"
         [ "${api_type}" == "address" ] && api_type="ip"
         
@@ -6235,9 +6236,10 @@ bootstrap_create_objects() {
     done
     
     # Create URL categories
-    for ((i=0; i<${#_cat_names[@]}; i++)); do
-        local name="${_cat_names[$i]}"
-        local action="${_cat_actions[$i]}"
+    eval "local cat_count=\${#${_cat_names_ref}[@]}"
+    for ((i=0; i<cat_count; i++)); do
+        eval "local name=\"\${${_cat_names_ref}[$i]}\""
+        eval "local action=\"\${${_cat_actions_ref}[$i]}\""
         
         if url_category_exists "${name}"; then
             log_info "URL category '${name}' already exists. Skipped."
