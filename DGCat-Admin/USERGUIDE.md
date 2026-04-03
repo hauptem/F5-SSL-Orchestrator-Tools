@@ -34,7 +34,7 @@ Both versions require network access to the BIG-IP management interface on port 
 
 The tool was designed for environments running SSL Orchestrator (SSLO), where datagroups and URL categories are the primary mechanism for classifying traffic in security policies. However, it works equally well for any BIG-IP deployment that uses datagroups or custom URL categories.
 
-DGCat-Admin supports managing a single device or an entire fleet of BIG-IPs. Changes can be made interactively through a built-in editor and pushed to multiple devices in a single operation, with pre-deployment validation and automatic backups at every step.
+DGCat-Admin supports managing a single device or an entire fleet of BIG-IPs. Changes can be made interactively through a built-in editor and pushed to multiple devices in a single operation, with pre-deployment validation and automatic backups at every step (if enabled).
 
 ---
 
