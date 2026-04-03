@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.0
+# Version: 5.1
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -34,8 +34,6 @@ BACKUPS_ENABLED=0
 
 # Session logging (set to 1 to enable log file creation)
 LOGGING_ENABLED=0
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
 
 # API timeout settings (seconds)
 # Connect timeout: max time to establish TCP connection to a BIG-IP
@@ -43,18 +41,23 @@ LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
 API_CONNECT_TIMEOUT=10
 API_REQUEST_TIMEOUT=60
 
+# Logging
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
+
 # Partitions to manage (comma-separated, no spaces)
 # Add additional partitions as needed, e.g., "Common,SSLO_Partition,DMZ"
 # WARNING: Only include partitions you intend to manage with this tool
 PARTITIONS="Common"
 
-# Protected system datagroups or datagroups to mask from the tool
-# These are BIG-IP datagroups that must not be modified or deleted
+# Protected system datagroups - DO NOT MODIFY
+# These are pre-configured BIG-IP datagroups that must not be modified or deleted
+# Attempting to change these can produce adverse system results
 PROTECTED_DATAGROUPS=(
     "private_net"
     "images"
     "aol"
-	"sys_APM_MS_Office_OFBA_DG"
+    "sys_APM_MS_Office_OFBA_DG"
 )
 
 # CSV preview lines
@@ -2481,7 +2484,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.0                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.1                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -4676,8 +4679,8 @@ editor_submenu() {
                     # Select apply mode for datagroups
                     echo ""
                     echo -e "  ${WHITE}Select apply mode:${NC}"
-                    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Full Replace  - PATCH entire record set via REST${NC}"
-                    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}tmsh Modify  - Add/delete only changed records (tmsh passthrough)${NC}"
+                    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}tmsh Modify   - Add/delete only changed records (tmsh passthrough)${NC}"
+                    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Full Replace  - PATCH entire record set via REST${NC}"
                     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                     echo ""
                     local apply_mode_choice
@@ -4685,22 +4688,6 @@ editor_submenu() {
                     
                     case "${apply_mode_choice}" in
                         1)
-                            log_step "Applying changes to datagroup (full replace)..."
-                            local records_json
-                            records_json=$(
-                                for ((i=0; i<${#working_keys[@]}; i++)); do
-                                    echo "${working_keys[$i]}|${working_values[$i]:-}"
-                                done | build_records_json_remote "${dg_type}"
-                            )
-                            if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
-                                log_ok "Changes applied successfully."
-                            else
-                                log_error "Failed to apply changes. HTTP ${API_HTTP_CODE}"
-                                press_enter_to_continue
-                                continue
-                            fi
-                            ;;
-                        2)
                             log_step "Applying changes to datagroup (tmsh modify)..."
                             local inc_errors=0
                             
@@ -4746,6 +4733,22 @@ editor_submenu() {
                                 continue
                             fi
                             log_ok "Changes applied successfully."
+                            ;;
+                        2)
+                            log_step "Applying changes to datagroup (full replace)..."
+                            local records_json
+                            records_json=$(
+                                for ((i=0; i<${#working_keys[@]}; i++)); do
+                                    echo "${working_keys[$i]}|${working_values[$i]:-}"
+                                done | build_records_json_remote "${dg_type}"
+                            )
+                            if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+                                log_ok "Changes applied successfully."
+                            else
+                                log_error "Failed to apply changes. HTTP ${API_HTTP_CODE}"
+                                press_enter_to_continue
+                                continue
+                            fi
                             ;;
                         *)
                             log_info "Cancelled."
@@ -6097,7 +6100,7 @@ menu_bootstrap_create() {
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
 # This file defines datagroups and URL categories to create across your fleet.
-# Use Import Bootstrap to validate and deploy.
+# Use 'Import Bootstrap' to validate and then deploy.
 #
 # Format: object|name|attribute
 #
@@ -6106,14 +6109,15 @@ menu_bootstrap_create() {
 #
 # name:      Must start with a letter. No spaces allowed.
 #
-# attribute: For dg:  string, address, integer
-#            For cat: allow, block, confirm
+# Permitted attributes: 
+# dg:  string, address, integer
+# cat: allow, block, confirm
 #
 # Examples:
 # dg|bypass-clients|address
 # dg|bypass-servers|address
-# dg|bypass-clients-troubleshoot|address
-# dg|bypass-servers-troubleshoot|address
+# dg|bypass-host|string
+# dg|bypass-port|integer
 # cat|Bypass-hosts|allow
 # cat|Pinners|allow
 # cat|IPS-Only|allow
@@ -6453,7 +6457,7 @@ main() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.0                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.1                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""

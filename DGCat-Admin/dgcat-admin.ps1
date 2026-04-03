@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.0
+# Version: 5.1
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -19,7 +19,7 @@
 #
 # =============================================================================
 
-# Requires -Version 5.1
+#Requires -Version 5.1
 
 # =============================================================================
 # CONFIGURATION
@@ -42,8 +42,7 @@ $script:API_TIMEOUT = 60
 # WARNING: Only include partitions you intend to manage with this tool
 $script:PARTITIONS = @("Common")
 
-# Protected system datagroups or datagroups to mask from the tool
-# These are BIG-IP datagroups that must not be modified or deleted
+# Protected system datagroups - DO NOT MODIFY
 $script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol", "sys_APM_MS_Office_OFBA_DG")
 
 # CSV preview lines
@@ -1759,7 +1758,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.0                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.1                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -3888,26 +3887,14 @@ function Invoke-EditorSubmenu {
                     # Select apply mode
                     Write-Host ""
                     Write-Host "  Select apply mode:" -ForegroundColor White
-                    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Full Replace  - PATCH entire record set via REST" -ForegroundColor White
-                    Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " tmsh Modify  - Add/delete only changed records (tmsh passthrough)" -ForegroundColor White
+                    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " tmsh Modify   - Add/delete only changed records (tmsh passthrough)" -ForegroundColor White
+                    Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Full Replace  - PATCH entire record set via REST" -ForegroundColor White
                     Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
                     Write-Host ""
                     $applyModeChoice = Read-Host "  Select [0-2]"
                     
                     switch ($applyModeChoice) {
                         "1" {
-                            Write-LogStep "Applying changes to datagroup (full replace)..."
-                            $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
-                            $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $records
-                            if ($result.Success) {
-                                Write-LogOk "Changes applied successfully."
-                            } else {
-                                Write-LogError "Failed to apply changes. HTTP $($result.StatusCode)"
-                                Press-EnterToContinue
-                                continue
-                            }
-                        }
-                        "2" {
                             Write-LogStep "Applying changes to datagroup (tmsh modify)..."
                             $incErrors = 0
                             
@@ -3946,6 +3933,18 @@ function Invoke-EditorSubmenu {
                                 continue
                             }
                             Write-LogOk "Changes applied successfully."
+                        }
+                        "2" {
+                            Write-LogStep "Applying changes to datagroup (full replace)..."
+                            $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
+                            $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $records
+                            if ($result.Success) {
+                                Write-LogOk "Changes applied successfully."
+                            } else {
+                                Write-LogError "Failed to apply changes. HTTP $($result.StatusCode)"
+                                Press-EnterToContinue
+                                continue
+                            }
                         }
                         default {
                             Write-LogInfo "Cancelled."
@@ -4318,7 +4317,7 @@ function Invoke-BootstrapCreate {
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
 # This file defines datagroups and URL categories to create across your fleet.
-# Use Import Bootstrap to validate and deploy.
+# Use 'Import Bootstrap' to validate and then deploy.
 #
 # Format: object|name|attribute
 #
@@ -4327,14 +4326,15 @@ function Invoke-BootstrapCreate {
 #
 # name:      Must start with a letter. No spaces allowed.
 #
-# attribute: For dg:  string, address, integer
-#            For cat: allow, block, confirm
+# Permitted attributes: 
+# dg:  string, address, integer
+# cat: allow, block, confirm
 #
 # Examples:
 # dg|bypass-clients|address
 # dg|bypass-servers|address
-# dg|bypass-clients-troubleshoot|address
-# dg|bypass-servers-troubleshoot|address
+# dg|bypass-host|string
+# dg|bypass-port|integer
 # cat|Bypass-hosts|allow
 # cat|Pinners|allow
 # cat|IPS-Only|allow
@@ -4653,7 +4653,7 @@ function Main {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.0                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.1                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
