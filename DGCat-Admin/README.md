@@ -25,7 +25,7 @@ DGCat-Admin provides a single interface for all of these operations. You can imp
 
 The tool handles the details that make these operations error-prone when done manually: type validation, backup before modification, format conversion between CSV and BIG-IP native formats, and atomic application of changes.
 
-DGCat-Admin makes managing those site lists very easy.
+DGCat-Admin makes managing Datagroups and URL Categories very easy.
 
 - Need to export a few massive datagroups or custom URL categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
 - Need to ingest a large number of subnets or hosts from an Excel spreadsheet into a datagroup for SSLO security policy use?
