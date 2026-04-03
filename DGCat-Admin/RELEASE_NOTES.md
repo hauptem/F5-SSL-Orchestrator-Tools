@@ -1,3 +1,11 @@
+# DGCat-Admin v5.1 Release Notes - April 3 2026
+
+- Deploy merge uses incremental API calls instead of pull-modify-push
+- Deploy Step 2 (current device) respects deploy mode selection
+- Protected datagroup sys_APM_MS_Office_OFBA_DG added to filter list
+- MAX_BACKUPS reduced from 30 to 10
+- Bootstrap.conf boilerplate reformatted with updated examples
+
 # DGCat-Admin v5.0 Release Notes - April 2 2026
 
 **Bootstrap (Option 8)**
