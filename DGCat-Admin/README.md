@@ -32,7 +32,7 @@ DGCat-Admin makes managing those site lists very easy.
 - Want to take a custom URL category and convert it to a datagroup?
 - Want to take a datagroup and convert it to a custom URL category?
 - Want to search your entire fleet non-destructively and find a needle in a stack of needles?
-- Backup datagroups or URL categories from your entire topology
+**This tool was designed specifically for those purposes.**
 
 **New in 5.0**
   
@@ -40,7 +40,7 @@ DGCat-Admin makes managing those site lists very easy.
 - Make edits to datagroups without having to replace the entire datagroup contents (Option 5 Editor enhancement for writes and deploys)
   https://community.f5.com/discussions/technicalforum/update-an-internal-data-group-via-api/306520 
 
-**This tool was designed specifically for those purposes.**
+
 
 <img width="642" height="412" alt="Image" src="https://github.com/user-attachments/assets/9961997a-15a3-4ce6-8cb3-5049a6c33c89" />
 
