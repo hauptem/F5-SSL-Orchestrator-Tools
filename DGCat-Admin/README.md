@@ -35,9 +35,9 @@ DGCat-Admin makes managing those site lists very easy.
 
 **This tool was designed specifically for those purposes.**
 
-**New in 5.0**
+**New in version 5.0**
   
-- Bootstrap an entire fleet with datagroups and URL categories from a single config file
+- Bootstrap an entire fleet and create datagroups and URL categories from a single config file
 - Make edits to datagroups without having to replace the entire datagroup contents (Option 5 Editor enhancement for writes and deploys)
   https://community.f5.com/discussions/technicalforum/update-an-internal-data-group-via-api/306520 
 
