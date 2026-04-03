@@ -23,7 +23,7 @@
 - Backups Disabled — `BACKUPS_ENABLED` config variable (default: off). Set to 1 to enable automatic pre-change backups. 
 - Deploy scope selection now matches Search and Fleet Backup with comma-separated site and host selection.
 
-## Bug Fixes
+**Bug Fixes**
 - **Bash Empty Array Handling** — All editor array operations converted to index-based loops to prevent unbound variable errors with `set -u` on empty datagroups.
 
 # DGCat-Admin v4.5 Release Notes - March 31 2026
