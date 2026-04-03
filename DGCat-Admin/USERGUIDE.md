@@ -655,10 +655,10 @@ To enable log file creation, set `LOGGING_ENABLED` to `1` in the script configur
 ### Connection Issues
 
 **"Connection failed. Check hostname and network connectivity."**
-The tool could not reach the BIG-IP management interface. Verify that the hostname or IP is correct, that port 443 is open between your machine and the BIG-IP, and that the management interface is configured and accessible.
+The tool could not reach the BIG-IP management interface. Verify that the hostname or IP is correct, that port 443 is open between your machine and the BIG-IP, and that the management interface is accessible.
 
 **"Connection failed. HTTP 503"**
-The BIG-IP is reachable but the REST API service (restjavad) is unavailable. The GUI may still work because it runs through a separate service (httpd/tmui). Restart restjavad via SSH: `bigstart restart restjavad` and allow 30-60 seconds for it to initialize. Monitor with `bigstart status restjavad` until it shows `run`.
+The BIG-IP is reachable but the REST API service (restjavad) is unavailable. The GUI may still work because it runs through a separate service (httpd/tmui). Restart restjavad via SSH: `bigstart restart restjavad` and allow 30-60 seconds for it to initialize. Monitor with `bigstart status restjavad` until it shows `run` and try to reconnect.
 
 **"Authentication failed. Check username/password."**
 The BIG-IP rejected the credentials. Verify the username and password. The account needs administrative API access — typically the `admin` role. Accounts with limited roles may not have permission to query or modify datagroups.
@@ -666,10 +666,10 @@ The BIG-IP rejected the credentials. Verify the username and password. The accou
 ### Import Issues
 
 **"CIDR alignment errors detected"**
-One or more CIDR entries in your CSV have non-zero host bits for their prefix length (e.g., `10.159.55.0/16` should be `10.159.0.0/16`). The tool shows up to five examples with corrected values. Fix the entries in your CSV and reimport. BIG-IP will reject misaligned CIDRs so the import is blocked before the API call.
+One or more CIDR entries in your CSV have non-zero host bits for their prefix length (e.g., `10.159.55.0/16` should be `10.159.0.0/16`). The tool shows up to five examples with corrected values. Fix the entries in your CSV and reimport. BIG-IP will reject misaligned CIDRs so the import is blocked before the API call is made.
 
 **"X duplicate entries removed, Y unique entries"**
-Your CSV contained duplicate keys or URLs. The tool automatically removes duplicates before applying. The reported count reflects what will land in the datagroup or URL category. No action needed.
+Your CSV contained duplicate keys or URLs. The tool automatically removes duplicates before applying. The reported count reflects what will land in the datagroup or URL category.
 
 **"Failed to populate URL category"**
 The URL category was created but the API timed out while applying URLs. This can happen with very large URL categories (>10000 records). The category likely contains the data — verify in the GUI or by viewing it in the tool. If it is empty, retry using overwrite mode. If timeouts persist, increase `API_REQUEST_TIMEOUT` (bash) or `$script:API_TIMEOUT` (PowerShell) in the script header. The default is 60 seconds.
@@ -682,13 +682,13 @@ The partition listed in your `PARTITIONS` configuration does not exist on the BI
 ### Fleet Issues
 
 **"Duplicate hosts detected in fleet.conf"**
-The tool found the same hostname or IP listed more than once in `fleet.conf`. Both conflicting entries are displayed in `fleet.conf` format so you can locate them. The script halts until `fleet.conf` is corrected or deleted. This check prevents a host from receiving duplicate deployments or being counted twice in search results.
+The tool found the same hostname or IP listed more than once in `fleet.conf`. Both conflicting entries are displayed so you can locate them. The script halts until `fleet.conf` is corrected or deleted. 
 
 **"No fleet hosts passed validation. No changes have been made."**
-Every target host either failed to connect or didn't have the target object. Verify network connectivity and credentials. Remember that fleet deployment uses the same credentials you used to connect to the primary device.
+Every target host either failed to connect or didn't have the target object. Verify network connectivity and credentials. Remember that fleet deployment uses the same credentials you used to connect to the initial Big-IP.
 
 **Hosts showing "Object not found" during validation.**
-The host is reachable and credentials are valid, but the target datagroup or URL category does not exist on that host. Create the object on the target host first, then redeploy.
+The host is reachable and credentials are valid, but the target datagroup or URL category does not exist on that host. Create the object on the target host first, then reattempt.
 
 **Hosts showing "Connection failed" during validation.**
 The host is unreachable or restjavad is down. Verify network connectivity and REST API availability on the target. See the 503 guidance above.
@@ -699,7 +699,7 @@ The host failed pre-deploy validation — either it was unreachable, the target 
 ### Editor Issues
 
 **"No changes to apply" when you expected changes.**
-The editor compares your working state against the state that was loaded when you opened it (or last applied). If you applied changes with `w` and then didn't make further edits, the tool correctly reports no pending changes. Use `D` to deploy the current state to the fleet even without pending changes.
+The editor compares your working state against the state that was loaded when you opened it (or last applied). If you applied changes with `w` and then didn't make further edits, the tool correctly reports no pending changes. Use `D` to deploy the current state to the fleet even without pending changes on the connected host.
 
 **Bash editor warning: "This dataset has X entries"**
 Datasets over 8,000 entries will cause the bash editor to become very slow or unresponsive due to interpreter limitations. Import, export, and deploy operations are unaffected. Use the PowerShell version for interactive editing of large datasets. PowerShell has been tested with 20,000 entries without performance issues.
