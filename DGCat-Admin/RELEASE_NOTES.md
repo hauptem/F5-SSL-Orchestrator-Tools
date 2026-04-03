@@ -2,7 +2,7 @@
 
 - Deploy merge uses incremental API calls instead of pull-modify-push
 - Deploy Step 2 (current device) respects deploy mode selection
-- Protected datagroup sys_APM_MS_Office_OFBA_DG added to filter list
+- System datagroup sys_APM_MS_Office_OFBA_DG added to protected/filter list
 - MAX_BACKUPS reduced from 30 to 10
 - Bootstrap.conf boilerplate reformatted with updated examples
 
