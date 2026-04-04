@@ -155,7 +155,7 @@ If the connection fails, you're given the option to retry or exit. Common failur
 
 ## The Main Menu
 
-<img width="642" height="412" alt="Image" src="https://github.com/user-attachments/assets/9961997a-15a3-4ce6-8cb3-5049a6c33c89" />
+<img width="609" height="418" alt="Image" src="https://github.com/user-attachments/assets/76e9c7d0-1434-4ed9-8b95-9504c47354ae" />
 
 ---
 
