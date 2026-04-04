@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.1
+# Version: 5.2
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -407,6 +407,11 @@ select_datagroup() {
                 echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_name}' does not exist in partition '${partition}'. Try again.${NC}" >&2
                 continue
             fi
+            # Validate TMOS naming rules for new names
+            if ! [[ "${dg_name}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores.${NC}" >&2
+                continue
+            fi
             echo "${dg_name}|"
             return 0
         fi
@@ -668,6 +673,7 @@ preflight_checks_rest_api() {
 # DC2|bigip02-mgmt.dc2.example.com
 #
 # Site names: letters, numbers, dashes, underscores only
+# Hosts: IPv4 address or FQDN (IPv6 not supported)
 FLEET_TEMPLATE
             log_info "Fleet config template created: ${FLEET_CONFIG_FILE}"
         else
@@ -1138,6 +1144,81 @@ delete_url_category() {
 # FLEET MANAGEMENT FUNCTIONS
 # =============================================================================
 
+# Validate a fleet host entry (IPv4 address or FQDN)
+# Args: host string
+# Sets: FLEET_VALIDATE_ERROR with reason on failure
+# Returns: 0 if valid, 1 if invalid
+FLEET_VALIDATE_ERROR=""
+
+validate_fleet_host() {
+    local host="$1"
+    FLEET_VALIDATE_ERROR=""
+    
+    # Check for protocol prefix
+    if [[ "${host}" =~ ^https?:// ]]; then
+        FLEET_VALIDATE_ERROR="Remove protocol prefix (http:// or https://)"
+        return 1
+    fi
+    
+    # Check for path component
+    if [[ "${host}" == *"/"* ]]; then
+        FLEET_VALIDATE_ERROR="Remove path component"
+        return 1
+    fi
+    
+    # Check for spaces or tabs
+    if [[ "${host}" =~ [[:space:]] ]]; then
+        FLEET_VALIDATE_ERROR="Hostname cannot contain spaces"
+        return 1
+    fi
+    
+    # Check for IPv6 (contains colon) - must come before port check since
+    # IPv6 addresses always contain colons and would match the port regex
+    if [[ "${host}" == *":"* ]]; then
+        # But allow one trailing :NNN that looks like a port on a non-IPv6 string
+        # IPv6 always has :: or multiple colons; a single trailing :port on IPv4/FQDN does not
+        local colon_count="${host//[^:]/}"
+        if [ ${#colon_count} -gt 1 ] || [[ "${host}" == *"::"* ]]; then
+            FLEET_VALIDATE_ERROR="IPv6 is not supported. Use an IPv4 address or FQDN"
+            return 1
+        fi
+        # Single colon - treat as port suffix on IPv4/FQDN
+        FLEET_VALIDATE_ERROR="Remove port number (tool connects on port 443)"
+        return 1
+    fi
+    
+    # Determine if IP or FQDN based on character content
+    if [[ "${host}" =~ ^[0-9.]+$ ]]; then
+        # IPv4 validation - must be exactly four octets 0-255
+        if ! [[ "${host}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+            FLEET_VALIDATE_ERROR="Invalid IPv4 address (expected N.N.N.N)"
+            return 1
+        fi
+        local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}"
+        if [ "${a}" -gt 255 ] || [ "${b}" -gt 255 ] || [ "${c}" -gt 255 ] || [ "${d}" -gt 255 ]; then
+            FLEET_VALIDATE_ERROR="Invalid IPv4 address: octet exceeds 255"
+            return 1
+        fi
+        return 0
+    fi
+    
+    # FQDN validation
+    if ! [[ "${host}" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        FLEET_VALIDATE_ERROR="Invalid hostname: use letters, numbers, dots, hyphens only"
+        return 1
+    fi
+    if [[ "${host}" =~ ^[.-] ]] || [[ "${host}" =~ [.-]$ ]]; then
+        FLEET_VALIDATE_ERROR="Invalid hostname: cannot start or end with a dot or hyphen"
+        return 1
+    fi
+    if [[ "${host}" == *".."* ]]; then
+        FLEET_VALIDATE_ERROR="Invalid hostname: consecutive dots"
+        return 1
+    fi
+    
+    return 0
+}
+
 # Load fleet configuration from file
 # Populates FLEET_SITES, FLEET_HOSTS, and FLEET_UNIQUE_SITES arrays
 # Returns: 0 on success, 1 if file not found or empty
@@ -1152,9 +1233,13 @@ load_fleet_config() {
     
     local -A seen_sites=()
     local -A seen_hosts=()
-    local -a duplicate_hosts=()
+    local -a error_lines=()
+    local -a error_msgs=()
+    local line_num=0
     
     while IFS= read -r line || [ -n "${line}" ]; do
+        line_num=$((line_num + 1))
+        
         # Skip empty lines and comments
         [ -z "${line}" ] && continue
         [[ "${line}" =~ ^[[:space:]]*# ]] && continue
@@ -1168,23 +1253,32 @@ load_fleet_config() {
         site=$(echo "${line}" | cut -d'|' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         host=$(echo "${line}" | cut -d'|' -f2 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         
-        # Validate format
+        # Skip lines without both fields
         if [ -z "${site}" ] || [ -z "${host}" ]; then
             continue
         fi
         
         # Validate site ID (alphanumeric, dash, underscore only)
         if ! [[ "${site}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            error_lines+=("Line ${line_num}: ${line}")
+            error_msgs+=("Invalid site ID '${site}': use letters, numbers, dashes, underscores only")
+            continue
+        fi
+        
+        # Validate host (IPv4 or FQDN)
+        if ! validate_fleet_host "${host}"; then
+            error_lines+=("Line ${line_num}: ${line}")
+            error_msgs+=("${FLEET_VALIDATE_ERROR}")
             continue
         fi
         
         # Check for duplicate hosts
         if [ -n "${seen_hosts[${host}]+x}" ]; then
-            duplicate_hosts+=("${seen_hosts[${host}]}|${host}")
-            duplicate_hosts+=("${site}|${host}")
+            error_lines+=("Line ${line_num}: ${line}")
+            error_msgs+=("Duplicate host '${host}' (first appeared on line ${seen_hosts[${host}]})")
             continue
         fi
-        seen_hosts["${host}"]="${site}"
+        seen_hosts["${host}"]="${line_num}"
         
         FLEET_SITES+=("${site}")
         FLEET_HOSTS+=("${host}")
@@ -1196,15 +1290,16 @@ load_fleet_config() {
         fi
     done < <(sed "1s/^$(printf '\357\273\277')//" "${FLEET_CONFIG_FILE}" | tr -d '\r')
     
-    # Halt on duplicate hosts
-    if [ ${#duplicate_hosts[@]} -gt 0 ]; then
+    # Halt on validation errors
+    if [ ${#error_lines[@]} -gt 0 ]; then
         echo ""
-        log_error "Duplicate hosts detected in fleet.conf:"
+        log_error "fleet.conf validation failed:"
         echo ""
-        for dup in "${duplicate_hosts[@]}"; do
-            echo -e "          ${WHITE}${dup}${NC}"
+        for ((i=0; i<${#error_lines[@]}; i++)); do
+            echo -e "          ${WHITE}${error_lines[$i]}${NC}"
+            echo -e "          ${RED}${error_msgs[$i]}${NC}"
+            echo ""
         done
-        echo ""
         echo -e "          ${WHITE}Correct fleet.conf and restart.${NC}"
         echo ""
         exit 1
@@ -2445,6 +2540,145 @@ analyze_entry_types() {
     fi
 }
 
+# Validate address-type datagroup entries are valid IPv4 or IPv4/CIDR
+# Args: keys_array_name
+# Outputs: error_count|entry (reason)|... (pipe-delimited, max 5 examples)
+validate_address_entries() {
+    local keys_name=$1
+    eval "local total=\${#${keys_name}[@]}"
+    
+    local error_count=0
+    local examples=""
+    
+    for ((i=0; i<total; i++)); do
+        eval "local entry=\"\${${keys_name}[$i]}\""
+        
+        # Detect IPv6
+        if [[ "${entry}" == *":"* ]]; then
+            error_count=$((error_count + 1))
+            if [ ${error_count} -le 5 ]; then
+                examples="${examples}|${entry} (IPv6 not supported)"
+            fi
+            continue
+        fi
+        
+        # Must match IPv4 or IPv4/CIDR
+        if [[ "${entry}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(/([0-9]{1,2}))?$ ]]; then
+            local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}"
+            local prefix="${BASH_REMATCH[6]}"
+            
+            # Validate octets 0-255
+            if [ "${a}" -gt 255 ] || [ "${b}" -gt 255 ] || [ "${c}" -gt 255 ] || [ "${d}" -gt 255 ]; then
+                error_count=$((error_count + 1))
+                if [ ${error_count} -le 5 ]; then
+                    examples="${examples}|${entry} (octet exceeds 255)"
+                fi
+                continue
+            fi
+            
+            # Validate prefix 0-32 if CIDR
+            if [ -n "${prefix}" ] && [ "${prefix}" -gt 32 ]; then
+                error_count=$((error_count + 1))
+                if [ ${error_count} -le 5 ]; then
+                    examples="${examples}|${entry} (prefix exceeds /32)"
+                fi
+                continue
+            fi
+        else
+            error_count=$((error_count + 1))
+            if [ ${error_count} -le 5 ]; then
+                examples="${examples}|${entry} (invalid IPv4 format)"
+            fi
+        fi
+    done
+    
+    echo "${error_count}${examples}"
+}
+
+# Validate integer-type datagroup entries are valid integers
+# Args: keys_array_name
+# Outputs: error_count|entry1|entry2|... (pipe-delimited, max 5 examples)
+validate_integer_entries() {
+    local keys_name=$1
+    eval "local total=\${#${keys_name}[@]}"
+    
+    local error_count=0
+    local examples=""
+    
+    for ((i=0; i<total; i++)); do
+        eval "local entry=\"\${${keys_name}[$i]}\""
+        
+        if ! [[ "${entry}" =~ ^-?[0-9]+$ ]]; then
+            error_count=$((error_count + 1))
+            if [ ${error_count} -le 5 ]; then
+                examples="${examples}|${entry}"
+            fi
+        fi
+    done
+    
+    echo "${error_count}${examples}"
+}
+
+# Validate URL category CSV entries are valid domains
+# Checks raw entries before format conversion
+# Args: keys_array_name
+# Outputs: error_count|entry (reason)|... (pipe-delimited, max 5 examples)
+validate_url_csv_entries() {
+    local keys_name=$1
+    eval "local total=\${#${keys_name}[@]}"
+    
+    local error_count=0
+    local examples=""
+    
+    for ((i=0; i<total; i++)); do
+        eval "local entry=\"\${${keys_name}[$i]}\""
+        
+        # Strip protocol if present
+        local domain="${entry#http://}"
+        domain="${domain#https://}"
+        
+        # Strip path if present
+        domain="${domain%%/*}"
+        
+        # Must not be empty after stripping
+        if [ -z "${domain}" ]; then
+            error_count=$((error_count + 1))
+            if [ ${error_count} -le 5 ]; then
+                examples="${examples}|${entry} (empty after removing protocol/path)"
+            fi
+            continue
+        fi
+        
+        # Must not contain spaces
+        if [[ "${domain}" =~ [[:space:]] ]]; then
+            error_count=$((error_count + 1))
+            if [ ${error_count} -le 5 ]; then
+                examples="${examples}|${entry} (contains spaces)"
+            fi
+            continue
+        fi
+        
+        # Valid characters only: alphanumeric, dots, hyphens, asterisks, underscores
+        if ! [[ "${domain}" =~ ^[a-zA-Z0-9.*_-]+$ ]]; then
+            error_count=$((error_count + 1))
+            if [ ${error_count} -le 5 ]; then
+                examples="${examples}|${entry} (invalid characters)"
+            fi
+            continue
+        fi
+        
+        # No consecutive dots
+        if [[ "${domain}" == *".."* ]]; then
+            error_count=$((error_count + 1))
+            if [ ${error_count} -le 5 ]; then
+                examples="${examples}|${entry} (consecutive dots)"
+            fi
+        fi
+    done
+    
+    echo "${error_count}${examples}"
+}
+
 # Preview CSV file contents
 preview_csv_file() {
     local filepath="$1"
@@ -2484,7 +2718,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.1                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.2                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -2626,11 +2860,11 @@ menu_create_empty_url_category() {
         return
     fi
     
-    # Sanitize name
-    local original_name="${cat_name}"
-    cat_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    if [ "${cat_name}" != "${original_name}" ]; then
-        log_info "Category name sanitized to: ${cat_name}"
+    # Validate TMOS naming rules
+    if ! [[ "${cat_name}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
+        log_error "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
+        press_enter_to_continue
+        return
     fi
     
     # Check if already exists
@@ -2875,82 +3109,9 @@ menu_create_datagroup() {
         csv_path="${temp_csv}"
     fi
     
-    # Preview the file
-    preview_csv_file "${csv_path}"
-    
-    # Early type detection - scan first column for mismatches
-    local detected_addresses=0
-    local detected_integers=0
-    local detected_other=0
-    while IFS= read -r line; do
-        [ -z "${line}" ] && continue
-        [[ "${line}" =~ ^[[:space:]]*# ]] && continue
-        # Get first column only (bash builtins - no subprocess)
-        local first_col="${line%%,*}"
-        first_col="${first_col#"${first_col%%[![:space:]]*}"}"
-        first_col="${first_col%"${first_col##*[![:space:]]}"}"
-        [ -z "${first_col}" ] && continue
-        
-        if is_integer_format "${first_col}"; then
-            detected_integers=$((detected_integers + 1))
-        elif is_address_format "${first_col}"; then
-            detected_addresses=$((detected_addresses + 1))
-        else
-            detected_other=$((detected_other + 1))
-        fi
-    done < "${csv_path}"
-    
-    local total_detected=$((detected_addresses + detected_integers + detected_other))
-    
-    # Warn if type doesn't match detected content
-    if [ ${total_detected} -gt 0 ]; then
-        local mismatch_warning=""
-        if [ "${dg_type}" == "string" ] && [ ${detected_addresses} -eq ${total_detected} ]; then
-            mismatch_warning="All entries appear to be IP addresses. Did you mean to select 'address' type?"
-        elif [ "${dg_type}" == "string" ] && [ ${detected_integers} -eq ${total_detected} ]; then
-            mismatch_warning="All entries appear to be integers. Did you mean to select 'integer' type?"
-        elif [ "${dg_type}" == "address" ] && [ ${detected_addresses} -eq 0 ]; then
-            mismatch_warning="No entries appear to be IP addresses. Did you mean to select a different type?"
-        elif [ "${dg_type}" == "integer" ] && [ ${detected_integers} -eq 0 ]; then
-            mismatch_warning="No entries appear to be integers. Did you mean to select a different type?"
-        fi
-        
-        if [ -n "${mismatch_warning}" ]; then
-            echo ""
-            log_warn "${mismatch_warning}"
-            read -rp "  Continue anyway? (yes/no) [no]: " continue_choice
-            if [ "${continue_choice}" != "yes" ]; then
-                log_info "Aborted by user."
-                [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
-                press_enter_to_continue
-                return
-            fi
-            echo ""
-        fi
-    fi
-    
-    # Ask about format
-    echo -e "  ${WHITE}What does this file contain?${NC}"
-    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Keys only (e.g., domains, subnets)${NC}"
-    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Keys and Values (e.g., domain,action)${NC}"
-    echo ""
-    read -rp "  Select [1-2]: " format_choice
-    
-    local csv_format
-    case "${format_choice}" in
-        1) csv_format="keys_only" ;;
-        2) csv_format="keys_values" ;;
-        *)
-            log_warn "Invalid selection."
-            [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
-            press_enter_to_continue
-            return
-            ;;
-    esac
-    
-    # Parse the CSV
+    # Parse the CSV (always as keys_values - first column is the key, second is optional value)
     log_step "Parsing CSV file..."
-    if ! parse_csv_file "${csv_path}" "${csv_format}"; then
+    if ! parse_csv_file "${csv_path}" "keys_values"; then
         log_error "Failed to parse CSV file."
         [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
         press_enter_to_continue
@@ -2958,28 +3119,62 @@ menu_create_datagroup() {
     fi
     log_ok "Parsed ${#CSV_KEYS[@]} entries"
     
-    # Check for type mismatches
-    local mismatch_result
-    mismatch_result=$(analyze_entry_types "${dg_type}" CSV_KEYS)
-    local mismatch_count mismatch_type mismatch_pct
-    IFS='|' read -r mismatch_count mismatch_type mismatch_pct <<< "${mismatch_result}"
-    
-    if [ "${mismatch_count}" -gt 0 ]; then
-        echo ""
-        log_warn "Type mismatch detected!"
-        log_warn "Datagroup type is '${dg_type}' but ${mismatch_count} entries (${mismatch_pct}%) appear to be '${mismatch_type}' format."
-        echo ""
-        read -rp "  Continue anyway? (yes/no) [no]: " continue_choice
-        if [ "${continue_choice}" != "yes" ]; then
-            log_info "Aborted by user."
+    # Validate address entries (address type only) - hard block
+    if [ "${dg_type}" == "address" ] || [ "${dg_type}" == "ip" ]; then
+        local addr_result
+        addr_result=$(validate_address_entries CSV_KEYS)
+        local addr_error_count
+        addr_error_count=$(echo "${addr_result}" | cut -d'|' -f1)
+        
+        if [ "${addr_error_count}" -gt 0 ]; then
+            echo ""
+            log_error "Invalid address entries detected"
+            log_error "${addr_error_count} entries are not valid IPv4 addresses or CIDR notation"
+            echo ""
+            IFS='|' read -ra addr_parts <<< "${addr_result}"
+            for ((idx=1; idx<${#addr_parts[@]}; idx++)); do
+                echo -e "          ${WHITE}${addr_parts[$idx]}${NC}"
+            done
+            if [ "${addr_error_count}" -gt 5 ]; then
+                echo -e "          ${WHITE}... and $((addr_error_count - 5)) more${NC}"
+            fi
+            echo ""
+            log_error "Correct these entries in your CSV and reimport."
             [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
             press_enter_to_continue
             return
         fi
     fi
     
-    # Check for CIDR alignment errors (address type only)
-    if [ "${dg_type}" == "address" ]; then
+    # Validate integer entries (integer type only) - hard block
+    if [ "${dg_type}" == "integer" ]; then
+        local int_result
+        int_result=$(validate_integer_entries CSV_KEYS)
+        local int_error_count
+        int_error_count=$(echo "${int_result}" | cut -d'|' -f1)
+        
+        if [ "${int_error_count}" -gt 0 ]; then
+            echo ""
+            log_error "Invalid integer entries detected"
+            log_error "${int_error_count} entries are not valid integers"
+            echo ""
+            IFS='|' read -ra int_parts <<< "${int_result}"
+            for ((idx=1; idx<${#int_parts[@]}; idx++)); do
+                echo -e "          ${WHITE}${int_parts[$idx]}${NC}"
+            done
+            if [ "${int_error_count}" -gt 5 ]; then
+                echo -e "          ${WHITE}... and $((int_error_count - 5)) more${NC}"
+            fi
+            echo ""
+            log_error "Correct these entries in your CSV and reimport."
+            [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+            press_enter_to_continue
+            return
+        fi
+    fi
+    
+    # Check for CIDR alignment errors (address type only) - hard block
+    if [ "${dg_type}" == "address" ] || [ "${dg_type}" == "ip" ]; then
         local cidr_result
         cidr_result=$(validate_cidr_alignment CSV_KEYS)
         local cidr_error_count
@@ -3003,6 +3198,59 @@ menu_create_datagroup() {
             [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
             press_enter_to_continue
             return
+        fi
+    fi
+    
+    # Preview the file (only reached if validation passed)
+    preview_csv_file "${csv_path}"
+    
+    # Ask about format
+    echo -e "  ${WHITE}What does this file contain?${NC}"
+    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Keys only (e.g., domains, subnets)${NC}"
+    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Keys and Values (e.g., domain,action)${NC}"
+    echo ""
+    read -rp "  Select [1-2]: " format_choice
+    
+    case "${format_choice}" in
+        1)
+            # Keys only - discard values by clearing the array
+            CSV_VALUES=()
+            for ((i=0; i<${#CSV_KEYS[@]}; i++)); do
+                CSV_VALUES+=("")
+            done
+            ;;
+        2)
+            # Keys and values - already populated correctly
+            :
+            ;;
+        *)
+            log_warn "Invalid selection."
+            [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+            press_enter_to_continue
+            return
+            ;;
+    esac
+    
+    # Check for type mismatches (string type only - advisory)
+    # Address and integer types already passed hard validation above
+    if [ "${dg_type}" == "string" ]; then
+        local mismatch_result
+        mismatch_result=$(analyze_entry_types "${dg_type}" CSV_KEYS)
+        local mismatch_count mismatch_type mismatch_pct
+        IFS='|' read -r mismatch_count mismatch_type mismatch_pct <<< "${mismatch_result}"
+        
+        if [ "${mismatch_count}" -gt 0 ]; then
+            echo ""
+            log_warn "Type mismatch detected!"
+            log_warn "Datagroup type is '${dg_type}' but ${mismatch_count} entries (${mismatch_pct}%) appear to be '${mismatch_type}' format."
+            echo ""
+            read -rp "  Continue anyway? (yes/no) [no]: " continue_choice
+            if [ "${continue_choice}" != "yes" ]; then
+                log_info "Aborted by user."
+                [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+                press_enter_to_continue
+                return
+            fi
         fi
     fi
     
@@ -3735,12 +3983,11 @@ menu_create_url_category() {
         return
     fi
     
-    # Sanitize name (URL categories typically use sslo-urlCat prefix for SSLO)
-    local original_name="${cat_name}"
-    cat_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    
-    if [ "${cat_name}" != "${original_name}" ]; then
-        log_info "Category name sanitized to: ${cat_name}"
+    # Validate TMOS naming rules
+    if ! [[ "${cat_name}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
+        log_error "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
+        press_enter_to_continue
+        return
     fi
     
     # Check if category already exists
@@ -3837,9 +4084,6 @@ menu_create_url_category() {
         csv_path="${temp_csv}"
     fi
     
-    # Preview the file
-    preview_csv_file "${csv_path}"
-    
     # Parse CSV - keys only (domains)
     log_step "Parsing CSV file..."
     if ! parse_csv_file "${csv_path}" "keys_only"; then
@@ -3849,6 +4093,34 @@ menu_create_url_category() {
         return
     fi
     log_ok "Parsed ${#CSV_KEYS[@]} entries"
+    
+    # Validate domain entries
+    local url_result
+    url_result=$(validate_url_csv_entries CSV_KEYS)
+    local url_error_count
+    url_error_count=$(echo "${url_result}" | cut -d'|' -f1)
+    
+    if [ "${url_error_count}" -gt 0 ]; then
+        echo ""
+        log_error "Invalid domain entries detected"
+        log_error "${url_error_count} entries are not valid domain names"
+        echo ""
+        IFS='|' read -ra url_parts <<< "${url_result}"
+        for ((idx=1; idx<${#url_parts[@]}; idx++)); do
+            echo -e "          ${WHITE}${url_parts[$idx]}${NC}"
+        done
+        if [ "${url_error_count}" -gt 5 ]; then
+            echo -e "          ${WHITE}... and $((url_error_count - 5)) more${NC}"
+        fi
+        echo ""
+        log_error "Correct these entries in your CSV and reimport."
+        [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
+        press_enter_to_continue
+        return
+    fi
+    
+    # Preview the file (only reached if validation passed)
+    preview_csv_file "${csv_path}"
     
     # Convert domains to URL category format and preview
     echo ""
@@ -4366,6 +4638,41 @@ editor_submenu() {
                         continue
                     fi
                     
+                    # Validate entry format based on datagroup type
+                    if [ "${dg_type}" == "address" ] || [ "${dg_type}" == "ip" ]; then
+                        if [[ "${new_key}" == *":"* ]]; then
+                            log_error "IPv6 is not supported. Use an IPv4 address or CIDR."
+                            press_enter_to_continue
+                            continue
+                        fi
+                        if [[ "${new_key}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(/([0-9]{1,2}))?$ ]]; then
+                            local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}"
+                            local prefix="${BASH_REMATCH[6]}"
+                            if [ "${a}" -gt 255 ] || [ "${b}" -gt 255 ] || [ "${c}" -gt 255 ] || [ "${d}" -gt 255 ]; then
+                                log_error "Invalid IPv4 address: octet exceeds 255."
+                                press_enter_to_continue
+                                continue
+                            fi
+                            if [ -n "${prefix}" ] && [ "${prefix}" -gt 32 ]; then
+                                log_error "Invalid CIDR: prefix exceeds /32."
+                                press_enter_to_continue
+                                continue
+                            fi
+                        else
+                            log_error "Invalid entry. Expected IPv4 address (N.N.N.N) or CIDR (N.N.N.N/M)."
+                            press_enter_to_continue
+                            continue
+                        fi
+                    fi
+                    
+                    if [ "${dg_type}" == "integer" ]; then
+                        if ! [[ "${new_key}" =~ ^-?[0-9]+$ ]]; then
+                            log_error "Invalid entry. Expected an integer value."
+                            press_enter_to_continue
+                            continue
+                        fi
+                    fi
+                    
                     local new_value=""
                     read -rp "  Enter value (optional, press Enter to skip): " new_value
                     
@@ -4380,6 +4687,31 @@ editor_submenu() {
                     
                     if [ -z "${new_url}" ]; then
                         log_warn "No URL provided."
+                        press_enter_to_continue
+                        continue
+                    fi
+                    
+                    # Validate domain format before conversion
+                    local check_domain="${new_url#http://}"
+                    check_domain="${check_domain#https://}"
+                    check_domain="${check_domain%%/*}"
+                    if [ -z "${check_domain}" ]; then
+                        log_error "Invalid entry: empty after removing protocol/path."
+                        press_enter_to_continue
+                        continue
+                    fi
+                    if [[ "${check_domain}" =~ [[:space:]] ]]; then
+                        log_error "Invalid entry: contains spaces."
+                        press_enter_to_continue
+                        continue
+                    fi
+                    if ! [[ "${check_domain}" =~ ^[a-zA-Z0-9.*_-]+$ ]]; then
+                        log_error "Invalid entry: contains invalid characters."
+                        press_enter_to_continue
+                        continue
+                    fi
+                    if [[ "${check_domain}" == *".."* ]]; then
+                        log_error "Invalid entry: consecutive dots."
                         press_enter_to_continue
                         continue
                     fi
@@ -6162,9 +6494,9 @@ menu_bootstrap_import() {
         # Split on pipe
         local obj name attr
         IFS='|' read -r obj name attr <<< "${line}"
-        obj=$(echo "${obj}" | tr -d ' ')
-        name=$(echo "${name}" | tr -d ' ')
-        attr=$(echo "${attr}" | tr -d ' ')
+        obj=$(echo "${obj}" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+        name=$(echo "${name}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        attr=$(echo "${attr}" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
         
         # Validate field count
         if [ -z "${obj}" ] || [ -z "${name}" ] || [ -z "${attr}" ]; then
@@ -6180,16 +6512,9 @@ menu_bootstrap_import() {
             continue
         fi
         
-        # Validate name - no spaces
-        if [[ "${name}" =~ [[:space:]] ]]; then
-            log_error "Line ${line_num}: Name '${name}' contains spaces."
-            errors=$((errors + 1))
-            continue
-        fi
-        
-        # Validate name - must start with a letter
-        if [[ "${name}" =~ ^[^a-zA-Z] ]]; then
-            log_error "Line ${line_num}: Name '${name}' must start with a letter."
+        # Validate name - TMOS naming rules
+        if ! [[ "${name}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
+            log_error "Line ${line_num}: Invalid name '${name}'. Must start with a letter and contain only letters, numbers, dashes, underscores."
             errors=$((errors + 1))
             continue
         fi
@@ -6457,7 +6782,7 @@ main() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.1                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.2                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""

@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.1
+# Version: 5.2
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -211,6 +211,96 @@ function Test-CidrAlignment {
         }
     }
     
+    return $errors
+}
+
+# Validate address-type datagroup entries are valid IPv4 or IPv4/CIDR
+# Returns: array of @{ Entry; Reason } for invalid entries
+function Test-AddressEntries {
+    param([string[]]$Keys)
+    
+    $errors = @()
+    foreach ($entry in $Keys) {
+        # Detect IPv6
+        if ($entry.Contains(':')) {
+            $errors += @{ Entry = $entry; Reason = "IPv6 not supported" }
+            continue
+        }
+        
+        # Must match IPv4 or IPv4/CIDR
+        if ($entry -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(/(\d{1,2}))?$') {
+            $octets = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
+            $badOctet = $false
+            foreach ($o in $octets) {
+                if ($o -gt 255) {
+                    $errors += @{ Entry = $entry; Reason = "octet exceeds 255" }
+                    $badOctet = $true
+                    break
+                }
+            }
+            if ($badOctet) { continue }
+            
+            if ($Matches[6] -and [int]$Matches[6] -gt 32) {
+                $errors += @{ Entry = $entry; Reason = "prefix exceeds /32" }
+                continue
+            }
+        } else {
+            $errors += @{ Entry = $entry; Reason = "invalid IPv4 format" }
+        }
+    }
+    return $errors
+}
+
+# Validate integer-type datagroup entries are valid integers
+# Returns: array of @{ Entry; Reason } for invalid entries
+function Test-IntegerEntries {
+    param([string[]]$Keys)
+    
+    $errors = @()
+    foreach ($entry in $Keys) {
+        if ($entry -notmatch '^-?[0-9]+$') {
+            $errors += @{ Entry = $entry; Reason = "not a valid integer" }
+        }
+    }
+    return $errors
+}
+
+# Validate URL category CSV entries are valid domains
+# Checks raw entries before format conversion
+# Returns: array of @{ Entry; Reason } for invalid entries
+function Test-UrlCsvEntries {
+    param([string[]]$Keys)
+    
+    $errors = @()
+    foreach ($entry in $Keys) {
+        # Strip protocol
+        $domain = $entry -replace '^https?://', ''
+        # Strip path
+        $domain = $domain -replace '/.*$', ''
+        
+        # Must not be empty after stripping
+        if ([string]::IsNullOrWhiteSpace($domain)) {
+            $errors += @{ Entry = $entry; Reason = "empty after removing protocol/path" }
+            continue
+        }
+        
+        # Must not contain spaces
+        if ($domain -match '\s') {
+            $errors += @{ Entry = $entry; Reason = "contains spaces" }
+            continue
+        }
+        
+        # Valid characters only: alphanumeric, dots, hyphens, asterisks, underscores
+        if ($domain -notmatch '^[a-zA-Z0-9.*_-]+$') {
+            $errors += @{ Entry = $entry; Reason = "invalid characters" }
+            continue
+        }
+        
+        # No consecutive dots
+        if ($domain.Contains('..')) {
+            $errors += @{ Entry = $entry; Reason = "consecutive dots" }
+        }
+    }
     return $errors
 }
 
@@ -865,6 +955,11 @@ function Select-Datagroup {
                 Write-LogError "Datagroup '$dgName' does not exist in partition '$Partition'. Try again."
                 continue
             }
+            # Validate TMOS naming rules for new names
+            if ($dgName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') {
+                Write-LogError "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
+                continue
+            }
             return @{ Name = $dgName; Class = "" }
         }
     }
@@ -888,6 +983,67 @@ function Invoke-PromptSaveConfig {
 # FLEET MANAGEMENT FUNCTIONS
 # =============================================================================
 
+# Validate a fleet host entry (IPv4 address or FQDN)
+# Returns: empty string if valid, error message if invalid
+function Test-FleetHost {
+    param([string]$HostEntry)
+    
+    # Check for protocol prefix
+    if ($HostEntry -match '^https?://') {
+        return "Remove protocol prefix (http:// or https://)"
+    }
+    
+    # Check for path component
+    if ($HostEntry.Contains('/')) {
+        return "Remove path component"
+    }
+    
+    # Check for spaces or tabs
+    if ($HostEntry -match '\s') {
+        return "Hostname cannot contain spaces"
+    }
+    
+    # Check for IPv6 (contains colon) - must come before port check since
+    # IPv6 addresses always contain colons and would match the port regex
+    if ($HostEntry.Contains(':')) {
+        # IPv6 has :: or multiple colons; a single trailing :port on IPv4/FQDN does not
+        $colonCount = ($HostEntry.ToCharArray() | Where-Object { $_ -eq ':' }).Count
+        if ($colonCount -gt 1 -or $HostEntry.Contains('::')) {
+            return "IPv6 is not supported. Use an IPv4 address or FQDN"
+        }
+        # Single colon - treat as port suffix on IPv4/FQDN
+        return "Remove port number (tool connects on port 443)"
+    }
+    
+    # Determine if IP or FQDN based on character content
+    if ($HostEntry -match '^[0-9.]+$') {
+        # IPv4 validation - must be exactly four octets 0-255
+        if ($HostEntry -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$') {
+            $octets = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
+            foreach ($o in $octets) {
+                if ($o -gt 255) {
+                    return "Invalid IPv4 address: octet exceeds 255"
+                }
+            }
+            return ""
+        }
+        return "Invalid IPv4 address (expected N.N.N.N)"
+    }
+    
+    # FQDN validation
+    if ($HostEntry -notmatch '^[a-zA-Z0-9.-]+$') {
+        return "Invalid hostname: use letters, numbers, dots, hyphens only"
+    }
+    if ($HostEntry -match '^[.-]' -or $HostEntry -match '[.-]$') {
+        return "Invalid hostname: cannot start or end with a dot or hyphen"
+    }
+    if ($HostEntry.Contains('..')) {
+        return "Invalid hostname: consecutive dots"
+    }
+    
+    return ""
+}
+
 function Import-FleetConfig {
     $script:FleetSites = @()
     $script:FleetHosts = @()
@@ -897,10 +1053,12 @@ function Import-FleetConfig {
     
     $seenSites = @{}
     $seenHosts = @{}
-    $duplicateHosts = @()
+    $errors = @()
+    $lineNum = 0
     
-    foreach ($line in (Get-Content $script:FLEET_CONFIG_FILE)) {
-        $line = $line.Trim()
+    foreach ($rawLine in (Get-Content $script:FLEET_CONFIG_FILE)) {
+        $lineNum++
+        $line = $rawLine.Trim()
         if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) { continue }
         
         $parts = $line.Split('|')
@@ -910,15 +1068,26 @@ function Import-FleetConfig {
         $host_ = $parts[1].Trim()
         
         if ([string]::IsNullOrWhiteSpace($site) -or [string]::IsNullOrWhiteSpace($host_)) { continue }
-        if ($site -notmatch '^[a-zA-Z0-9_-]+$') { continue }
+        
+        # Validate site ID
+        if ($site -notmatch '^[a-zA-Z0-9_-]+$') {
+            $errors += @{ Line = $lineNum; Content = $line; Message = "Invalid site ID '${site}': use letters, numbers, dashes, underscores only" }
+            continue
+        }
+        
+        # Validate host (IPv4 or FQDN)
+        $hostError = Test-FleetHost -HostEntry $host_
+        if ($hostError) {
+            $errors += @{ Line = $lineNum; Content = $line; Message = $hostError }
+            continue
+        }
         
         # Check for duplicate hosts
         if ($seenHosts.ContainsKey($host_)) {
-            $duplicateHosts += "$($seenHosts[$host_])|$host_"
-            $duplicateHosts += "$site|$host_"
+            $errors += @{ Line = $lineNum; Content = $line; Message = "Duplicate host '$host_' (first appeared on line $($seenHosts[$host_]))" }
             continue
         }
-        $seenHosts[$host_] = $site
+        $seenHosts[$host_] = $lineNum
         
         $script:FleetSites += $site
         $script:FleetHosts += $host_
@@ -929,15 +1098,16 @@ function Import-FleetConfig {
         }
     }
     
-    # Halt on duplicate hosts
-    if ($duplicateHosts.Count -gt 0) {
+    # Halt on validation errors
+    if ($errors.Count -gt 0) {
         Write-Host ""
-        Write-LogError "Duplicate hosts detected in fleet.conf:"
+        Write-LogError "fleet.conf validation failed:"
         Write-Host ""
-        foreach ($dup in $duplicateHosts) {
-            Write-Host "          $dup" -ForegroundColor White
+        foreach ($err in $errors) {
+            Write-Host "          Line $($err.Line): $($err.Content)" -ForegroundColor White
+            Write-Host "          $($err.Message)" -ForegroundColor Red
+            Write-Host ""
         }
-        Write-Host ""
         Write-Host "          Correct fleet.conf and restart." -ForegroundColor White
         Write-Host ""
         exit 1
@@ -1686,7 +1856,8 @@ function Invoke-PreFlightChecks {
                 "# DC2|bigip01-mgmt.dc2.example.com",
                 "# DC2|bigip02-mgmt.dc2.example.com",
                 "#",
-                "# Site names: letters, numbers, dashes, underscores only"
+                "# Site names: letters, numbers, dashes, underscores only",
+                "# Hosts: IPv4 address or FQDN (IPv6 not supported)"
             )
             try {
                 $template | Out-File -FilePath $script:FLEET_CONFIG_FILE -Encoding UTF8
@@ -1758,7 +1929,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.1                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.2                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -1928,10 +2099,12 @@ function Invoke-CreateEmptyUrlCategory {
         return
     }
     
-    # Sanitize name
-    $originalName = $catName
-    $catName = $catName -replace '[^a-zA-Z0-9_-]', '_'
-    if ($catName -ne $originalName) { Write-LogInfo "Category name sanitized to: $catName" }
+    # Validate TMOS naming rules
+    if ($catName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') {
+        Write-LogError "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
+        Press-EnterToContinue
+        return
+    }
     
     # Check if already exists
     if (Test-UrlCategoryExistsRemote -Name $catName) {
@@ -2138,29 +2311,9 @@ function Invoke-CreateDatagroup {
         $csvPath = $tempCsv
     }
     
-    # Preview
-    Show-CsvPreview -FilePath $csvPath
-    
-    # Ask about format
-    Write-Host "  What does this file contain?" -ForegroundColor White
-    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "Keys only (e.g., domains, subnets)" -ForegroundColor White
-    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-    Write-Host "Keys and Values (e.g., domain,action)" -ForegroundColor White
-    Write-Host ""
-    $formatChoice = Read-Host "  Select [1-2]"
-    $csvFormat = switch ($formatChoice) { "1" { "keys_only" }; "2" { "keys_values" }; default { "" } }
-    
-    if ([string]::IsNullOrWhiteSpace($csvFormat)) {
-        Write-LogWarn "Invalid selection."
-        if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-        Press-EnterToContinue
-        return
-    }
-    
-    # Parse CSV
+    # Parse CSV (always as keys_values - first column is the key, second is optional value)
     Write-LogStep "Parsing CSV file..."
-    $parsed = Import-CsvDatagroup -FilePath $csvPath -Format $csvFormat
+    $parsed = Import-CsvDatagroup -FilePath $csvPath -Format "keys_values"
     if ($null -eq $parsed) {
         if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
         Press-EnterToContinue
@@ -2168,24 +2321,54 @@ function Invoke-CreateDatagroup {
     }
     Write-LogOk "Parsed $($parsed.Keys.Count) entries"
     
-    # Type mismatch check
-    $mismatch = Test-EntryTypes -ExpectedType $dgType -Keys $parsed.Keys
-    if ($mismatch.Count -gt 0) {
-        Write-Host ""
-        Write-LogWarn "Type mismatch detected!"
-        Write-LogWarn "Datagroup type is '$dgType' but $($mismatch.Count) entries ($($mismatch.Percent)%) appear to be '$($mismatch.Type)' format."
-        Write-Host ""
-        Write-Host "  Continue anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-        if ($cont -ne "yes") {
-            Write-LogInfo "Aborted by user."
+    # Validate address entries (address type only) - hard block
+    if ($dgType -eq "address" -or $dgType -eq "ip") {
+        $addrErrors = @(Test-AddressEntries -Keys $parsed.Keys)
+        if ($addrErrors.Count -gt 0) {
+            Write-Host ""
+            Write-LogError "Invalid address entries detected"
+            Write-LogError "$($addrErrors.Count) entries are not valid IPv4 addresses or CIDR notation"
+            Write-Host ""
+            $showCount = [Math]::Min($addrErrors.Count, 5)
+            for ($i = 0; $i -lt $showCount; $i++) {
+                Write-Host "          $($addrErrors[$i].Entry) ($($addrErrors[$i].Reason))" -ForegroundColor White
+            }
+            if ($addrErrors.Count -gt 5) {
+                Write-Host "          ... and $($addrErrors.Count - 5) more" -ForegroundColor White
+            }
+            Write-Host ""
+            Write-LogError "Correct these entries in your CSV and reimport."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
             Press-EnterToContinue
             return
         }
     }
     
-    # Check for CIDR alignment errors (address type only)
-    if ($dgType -eq "address") {
+    # Validate integer entries (integer type only) - hard block
+    if ($dgType -eq "integer") {
+        $intErrors = @(Test-IntegerEntries -Keys $parsed.Keys)
+        if ($intErrors.Count -gt 0) {
+            Write-Host ""
+            Write-LogError "Invalid integer entries detected"
+            Write-LogError "$($intErrors.Count) entries are not valid integers"
+            Write-Host ""
+            $showCount = [Math]::Min($intErrors.Count, 5)
+            for ($i = 0; $i -lt $showCount; $i++) {
+                Write-Host "          $($intErrors[$i].Entry)" -ForegroundColor White
+            }
+            if ($intErrors.Count -gt 5) {
+                Write-Host "          ... and $($intErrors.Count - 5) more" -ForegroundColor White
+            }
+            Write-Host ""
+            Write-LogError "Correct these entries in your CSV and reimport."
+            if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
+            Press-EnterToContinue
+            return
+        }
+    }
+    
+    # Check for CIDR alignment errors (address type only) - hard block
+    if ($dgType -eq "address" -or $dgType -eq "ip") {
         $cidrErrors = Test-CidrAlignment -Keys $parsed.Keys
         if ($cidrErrors.Count -gt 0) {
             Write-Host ""
@@ -2204,6 +2387,53 @@ function Invoke-CreateDatagroup {
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
             Press-EnterToContinue
             return
+        }
+    }
+    
+    # Preview the file (only reached if validation passed)
+    Show-CsvPreview -FilePath $csvPath
+    
+    # Ask about format
+    Write-Host "  What does this file contain?" -ForegroundColor White
+    Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
+    Write-Host "Keys only (e.g., domains, subnets)" -ForegroundColor White
+    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
+    Write-Host "Keys and Values (e.g., domain,action)" -ForegroundColor White
+    Write-Host ""
+    $formatChoice = Read-Host "  Select [1-2]"
+    
+    switch ($formatChoice) {
+        "1" {
+            # Keys only - discard values by clearing them
+            for ($i = 0; $i -lt $parsed.Values.Count; $i++) { $parsed.Values[$i] = "" }
+        }
+        "2" {
+            # Keys and values - already populated correctly
+        }
+        default {
+            Write-LogWarn "Invalid selection."
+            if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
+            Press-EnterToContinue
+            return
+        }
+    }
+    
+    # Type mismatch check (string type only - advisory)
+    # Address and integer types already passed hard validation above
+    if ($dgType -eq "string") {
+        $mismatch = Test-EntryTypes -ExpectedType $dgType -Keys $parsed.Keys
+        if ($mismatch.Count -gt 0) {
+            Write-Host ""
+            Write-LogWarn "Type mismatch detected!"
+            Write-LogWarn "Datagroup type is '$dgType' but $($mismatch.Count) entries ($($mismatch.Percent)%) appear to be '$($mismatch.Type)' format."
+            Write-Host ""
+            Write-Host "  Continue anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+            if ($cont -ne "yes") {
+                Write-LogInfo "Aborted by user."
+                if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
+                Press-EnterToContinue
+                return
+            }
         }
     }
     
@@ -2283,9 +2513,12 @@ function Invoke-CreateUrlCategory {
         return
     }
     
-    $originalName = $catName
-    $catName = $catName -replace '[^a-zA-Z0-9_-]', '_'
-    if ($catName -ne $originalName) { Write-LogInfo "Category name sanitized to: $catName" }
+    # Validate TMOS naming rules
+    if ($catName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') {
+        Write-LogError "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
+        Press-EnterToContinue
+        return
+    }
     
     # Check if exists
     $restoreMode = ""
@@ -2361,8 +2594,6 @@ function Invoke-CreateUrlCategory {
         $csvPath = $tempCsv
     }
     
-    Show-CsvPreview -FilePath $csvPath
-    
     # Parse CSV - keys only (domains)
     Write-LogStep "Parsing CSV file..."
     $parsed = Import-CsvDatagroup -FilePath $csvPath -Format "keys_only"
@@ -2372,6 +2603,29 @@ function Invoke-CreateUrlCategory {
         return
     }
     Write-LogOk "Parsed $($parsed.Keys.Count) entries"
+    
+    # Validate domain entries
+    $urlErrors = @(Test-UrlCsvEntries -Keys $parsed.Keys)
+    if ($urlErrors.Count -gt 0) {
+        Write-Host ""
+        Write-LogError "Invalid domain entries detected"
+        Write-LogError "$($urlErrors.Count) entries are not valid domain names"
+        Write-Host ""
+        $showCount = [Math]::Min($urlErrors.Count, 5)
+        for ($i = 0; $i -lt $showCount; $i++) {
+            Write-Host "          $($urlErrors[$i].Entry) ($($urlErrors[$i].Reason))" -ForegroundColor White
+        }
+        if ($urlErrors.Count -gt 5) {
+            Write-Host "          ... and $($urlErrors.Count - 5) more" -ForegroundColor White
+        }
+        Write-Host ""
+        Write-LogError "Correct these entries in your CSV and reimport."
+        if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
+        Press-EnterToContinue
+        return
+    }
+    
+    Show-CsvPreview -FilePath $csvPath
     
     # Convert domains to URL format
     $convertedUrls = @()
@@ -3751,6 +4005,37 @@ function Invoke-EditorSubmenu {
                     $newKey = Read-Host "  Enter new entry"
                     if ([string]::IsNullOrWhiteSpace($newKey)) { Write-LogWarn "No entry provided."; Press-EnterToContinue; continue }
                     if ($workingKeys -contains $newKey) { Write-LogWarn "Entry '$newKey' already exists."; Press-EnterToContinue; continue }
+                    
+                    # Validate entry format based on datagroup type
+                    if ($dgType -eq "address" -or $dgType -eq "ip") {
+                        if ($newKey.Contains(':')) {
+                            Write-LogError "IPv6 is not supported. Use an IPv4 address or CIDR."
+                            Press-EnterToContinue; continue
+                        }
+                        if ($newKey -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(/(\d{1,2}))?$') {
+                            $octets = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
+                            $badOctet = $false
+                            foreach ($o in $octets) {
+                                if ($o -gt 255) { Write-LogError "Invalid IPv4 address: octet exceeds 255."; $badOctet = $true; break }
+                            }
+                            if ($badOctet) { Press-EnterToContinue; continue }
+                            if ($Matches[6] -and [int]$Matches[6] -gt 32) {
+                                Write-LogError "Invalid CIDR: prefix exceeds /32."
+                                Press-EnterToContinue; continue
+                            }
+                        } else {
+                            Write-LogError "Invalid entry. Expected IPv4 address (N.N.N.N) or CIDR (N.N.N.N/M)."
+                            Press-EnterToContinue; continue
+                        }
+                    }
+                    
+                    if ($dgType -eq "integer") {
+                        if ($newKey -notmatch '^-?[0-9]+$') {
+                            Write-LogError "Invalid entry. Expected an integer value."
+                            Press-EnterToContinue; continue
+                        }
+                    }
+                    
                     $newValue = Read-Host "  Enter value (optional, press Enter to skip)"
                     $workingKeys.Add($newKey) | Out-Null
                     $workingValues.Add($newValue) | Out-Null
@@ -3759,6 +4044,27 @@ function Invoke-EditorSubmenu {
                     Write-Host ""
                     $newUrl = Read-Host "  Enter domain or URL to add"
                     if ([string]::IsNullOrWhiteSpace($newUrl)) { Write-LogWarn "No URL provided."; Press-EnterToContinue; continue }
+                    
+                    # Validate domain format before conversion
+                    $checkDomain = $newUrl -replace '^https?://', ''
+                    $checkDomain = $checkDomain -replace '/.*$', ''
+                    if ([string]::IsNullOrWhiteSpace($checkDomain)) {
+                        Write-LogError "Invalid entry: empty after removing protocol/path."
+                        Press-EnterToContinue; continue
+                    }
+                    if ($checkDomain -match '\s') {
+                        Write-LogError "Invalid entry: contains spaces."
+                        Press-EnterToContinue; continue
+                    }
+                    if ($checkDomain -notmatch '^[a-zA-Z0-9.*_-]+$') {
+                        Write-LogError "Invalid entry: contains invalid characters."
+                        Press-EnterToContinue; continue
+                    }
+                    if ($checkDomain.Contains('..')) {
+                        Write-LogError "Invalid entry: consecutive dots."
+                        Press-EnterToContinue; continue
+                    }
+                    
                     $formattedUrl = Format-DomainForUrlCategory -Domain $newUrl
                     if ($workingKeys -contains $formattedUrl) { Write-LogWarn "URL '$formattedUrl' already exists."; Press-EnterToContinue; continue }
                     Write-LogInfo "Will add: $formattedUrl"
@@ -4384,9 +4690,9 @@ function Invoke-BootstrapImport {
             continue
         }
         
-        $obj = $parts[0].Trim()
+        $obj = $parts[0].Trim().ToLower()
         $name = $parts[1].Trim()
-        $attr = $parts[2].Trim()
+        $attr = $parts[2].Trim().ToLower()
         
         # Validate field count
         if ([string]::IsNullOrWhiteSpace($obj) -or [string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($attr)) {
@@ -4402,16 +4708,9 @@ function Invoke-BootstrapImport {
             continue
         }
         
-        # Validate name - no spaces
-        if ($name -match '\s') {
-            Write-LogError "Line ${lineNum}: Name '$name' contains spaces."
-            $errors++
-            continue
-        }
-        
-        # Validate name - must start with a letter
-        if ($name -match '^[^a-zA-Z]') {
-            Write-LogError "Line ${lineNum}: Name '$name' must start with a letter."
+        # Validate name - TMOS naming rules
+        if ($name -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') {
+            Write-LogError "Line ${lineNum}: Invalid name '$name'. Must start with a letter and contain only letters, numbers, dashes, underscores."
             $errors++
             continue
         }
@@ -4653,7 +4952,7 @@ function Main {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.1                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.2                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
