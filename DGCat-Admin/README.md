@@ -35,15 +35,7 @@ DGCat-Admin makes managing Datagroups and URL Categories very easy.
 
 **This tool was designed specifically for those purposes.**
 
-**New in version 5.0**
-  
-- Bootstrap an entire fleet and create datagroups and URL categories from a single config file
-- Make edits to datagroups without having to replace the entire datagroup contents (Option 5 Editor enhancement for writes and deploys)
-  https://community.f5.com/discussions/technicalforum/update-an-internal-data-group-via-api/306520 
-
-
-
-<img width="642" height="412" alt="Image" src="https://github.com/user-attachments/assets/9961997a-15a3-4ce6-8cb3-5049a6c33c89" />
+<img width="609" height="418" alt="Image" src="https://github.com/user-attachments/assets/76e9c7d0-1434-4ed9-8b95-9504c47354ae" />
 
 ## Requirements
 
