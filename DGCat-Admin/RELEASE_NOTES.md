@@ -1,3 +1,8 @@
+# DGCat-Admin v5.2 Release Notes - April 4 2026
+
+- This release was focused on file input validation for fleet.conf, bootstrap.conf, and csv file import
+- Tried to incorporate as much input validation as possible to prevent the user being able to send bad data to the API and get rejected anyway
+
 # DGCat-Admin v5.1 Release Notes - April 3 2026
 
 - Deploy merge uses incremental API calls instead of pull-modify-push
