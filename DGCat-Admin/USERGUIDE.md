@@ -441,7 +441,7 @@ This tells you exactly which entries need attention and where. To remediate drif
 
 ---
 
-## Menu option 7 - Fleet Backup
+## Menu option 7 - Backup
 
 Pulls a backup of a datagroup or URL category from fleet hosts and saves each one locally. This is useful for capturing the current state of a policy object across your entire topology before a change window, or for auditing what each device has without modifying anything.
 
