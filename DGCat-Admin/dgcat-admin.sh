@@ -28,7 +28,7 @@ set -euo pipefail
 # =============================================================================
 
 # Backup settings
-BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
+BACKUP_DIR="dgcat-admin-backups"
 MAX_BACKUPS=10
 BACKUPS_ENABLED=0
 
