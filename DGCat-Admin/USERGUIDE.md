@@ -110,7 +110,7 @@ BACKUPS_ENABLED=0
 PARTITIONS="Common"
 ```
 
-**BACKUP_DIR** is where backups, logs, and the fleet configuration file are stored. The default path works well when running on a BIG-IP. If you're running from a different machine, change this to a local path.
+**BACKUP_DIR** is where backups, logs, and the fleet configuration file are stored. 
 
 **MAX_BACKUPS** controls how many backup files are retained per object. When the limit is exceeded, the oldest backups are removed automatically.
 
