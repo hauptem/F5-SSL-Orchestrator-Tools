@@ -104,8 +104,8 @@ There is no installation process, no dependencies beyond the above, and no confi
 The top of the script contains a configuration section with three settings you may want to adjust:
 
 ```bash
-BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
-MAX_BACKUPS=30
+BACKUP_DIR="dgcat-admin-backups"
+MAX_BACKUPS=10
 BACKUPS_ENABLED=0
 PARTITIONS="Common"
 ```
