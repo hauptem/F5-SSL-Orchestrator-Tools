@@ -2,6 +2,7 @@
 
 - This release was focused on file input validation for fleet.conf, bootstrap.conf, and csv file import
 - Tried to incorporate as much input validation as possible to prevent the user being able to send bad data to the API and get rejected anyway
+- Changed the bash backups location to be relative - matching the powershell
 
 # DGCat-Admin v5.1 Release Notes - April 3 2026
 
