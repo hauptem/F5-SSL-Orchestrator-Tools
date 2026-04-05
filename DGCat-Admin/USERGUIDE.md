@@ -159,9 +159,9 @@ If the connection fails, you're given the option to retry or exit. Common failur
 
 ---
 
-## Creating Datagroups and URL Categories
+## Menu option 1 - Creating Datagroups and URL Categories
 
-**Menu option 1** creates an empty datagroup or URL category on the BIG-IP. This is useful for preparing objects that will be populated later through the editor, CSV import, or fleet deployment.
+This is useful for preparing objects that will be populated later through the editor, CSV import, or fleet deployment.
 
 For datagroups, you select a partition and the tool displays existing datagroups for reference. Type a name for the new datagroup and choose a type (string, address, or integer). If the name matches an existing datagroup, the tool rejects it immediately without an API call — the list is already in memory. Protected system datagroups are hidden from the list.
 
@@ -171,9 +171,9 @@ After creation, the tool offers to save the BIG-IP configuration.
 
 ---
 
-## Creating and Updating from CSV
+## Menu option 2 - Creating and Updating from CSV
 
-**Menu option 2** imports a CSV file into a datagroup or URL category. The tool first asks whether you want to create a datagroup or a URL category.
+Imports a CSV file into a datagroup or URL category. 
 
 ### Creating or Updating a Datagroup
 
@@ -202,9 +202,9 @@ If the category already exists, you choose overwrite or merge, just like datagro
 
 ---
 
-## Deleting Datagroups and URL Categories
+## Menu option 3 - Deleting Datagroups and URL Categories
 
-**Menu option 3** deletes a datagroup or URL category. The tool shows the object's details (type, record count) and creates a backup before deletion. You must type `DELETE` (case-sensitive) to confirm.
+Deletes a datagroup or URL category. The tool shows the object's details (type, record count) and creates a backup before deletion. You must type `DELETE` (case-sensitive) to confirm.
 
 Deletion is permanent. The backup file can be used to recreate the object using the Create/Update from CSV option if needed.
 
@@ -212,9 +212,9 @@ Protected system datagroups cannot be deleted. The tool blocks the operation and
 
 ---
 
-## Exporting to CSV
+## *Menu option 4 - Exporting to CSV
 
-**Menu option 4** exports a datagroup or URL category to a CSV file.
+Exports a datagroup or URL category to a CSV file.
 
 For datagroups, the export includes a comment header with metadata (partition, type, export date) followed by `key,value` lines. The default export path is in the backup directory with a timestamped filename, but you can specify any path.
 
@@ -224,9 +224,9 @@ Exported files can be used directly as input for the Create/Update option, makin
 
 ---
 
-## The Interactive Editor
+## Menu option 5 - The Interactive Editor
 
-**Menu option 5** opens the interactive editor for a datagroup or URL category. This is where you view contents and make changes. The editor supports browsing, searching, and modifying entries with full pagination.
+This is where you view contents and make changes. The editor supports browsing, searching, and modifying entries with full pagination.
 
 ### How It Works
 
@@ -260,7 +260,7 @@ Press `w` to apply your changes to the current device. The tool shows a summary 
 
 For URL categories, the tool applies changes incrementally — only the specific additions and deletions are sent, not a full replacement. This minimizes the API impact and preserves any entries that weren't part of your edit session.
 
-### Deploying to Fleet
+### - Deploying to Fleet
 
 Press `D` to deploy changes to multiple BIG-IPs. This option is available when a fleet configuration is loaded. The full deployment workflow is described in the next section.
 
@@ -381,9 +381,9 @@ Note: All fleet operations use the same cached credentials you used to connect t
 
 ---
 
-## Fleet Search
+## Menu option 6 - Search
 
-**Menu option 6** queries a datagroup or URL category across your fleet and provides tools to search within the results and identify configuration drift between devices.
+Queries a datagroup or URL category across your fleet and provides tools to search within the results and identify configuration drift between devices.
 
 ### Selecting an Object
 
@@ -441,9 +441,9 @@ This tells you exactly which entries need attention and where. To remediate drif
 
 ---
 
-## Fleet Backup
+## Menu option 7 - Fleet Backup
 
-**Menu option 7** pulls a backup of a datagroup or URL category from fleet hosts and saves each one locally. This is useful for capturing the current state of a policy object across your entire topology before a change window, or for auditing what each device has without modifying anything.
+Pulls a backup of a datagroup or URL category from fleet hosts and saves each one locally. This is useful for capturing the current state of a policy object across your entire topology before a change window, or for auditing what each device has without modifying anything.
 
 ### Selecting an Object
 
@@ -478,9 +478,9 @@ Backup files are organized by site in the backup directory and follow the same n
 
 ---
 
-## Bootstrap
+## Menu option 8 - Bootstrap
 
-**Menu option 8** creates datagroups and URL categories in bulk from a configuration manifest. This is designed for standing up new environments, rebuilding after a migration, or ensuring a standard set of objects exists across your fleet. 
+Creates datagroups and URL categories in bulk from a configuration manifest. This is designed for standing up new environments, rebuilding after a migration, or ensuring a standard set of objects exists across your fleet. 
 
 ### Bootstrap Configuration
 
