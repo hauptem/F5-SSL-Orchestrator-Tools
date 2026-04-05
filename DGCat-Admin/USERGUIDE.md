@@ -212,7 +212,7 @@ Protected system datagroups cannot be deleted. The tool blocks the operation and
 
 ---
 
-## *Menu option 4 - Exporting to CSV
+## Menu option 4 - Exporting to CSV
 
 Exports a datagroup or URL category to a CSV file.
 
