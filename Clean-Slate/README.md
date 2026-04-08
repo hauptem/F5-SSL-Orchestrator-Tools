@@ -44,7 +44,6 @@ After the script completes, reinstall the SSLO RPM manually via the GUI:
 
 - Prompts for credentials instead of hardcoding them
 - Requires explicit confirmation before executing
-- Pre-flight checks (root, tmsh, restcurl, jq)
 - Backs up the SSLO RPM before deleting anything
 - Step-by-step logging with full log file output
 - Post-run verification of cleanup
