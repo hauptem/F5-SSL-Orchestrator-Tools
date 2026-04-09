@@ -25,7 +25,7 @@ C_BLUE="\033[0;34m"
 C_BOLD="\033[1m"
 
 info() { echo -e "${C_WHITE}[INFO]${C_RESET} ${C_WHITE}$*${C_RESET}"; }
-ok()   { echo -e "${C_GREEN}[OK]${C_RESET}   ${C_WHITE}$*${C_RESET}"; }
+ok()   { echo -e "${C_GREEN}[ OK ]${C_RESET}   ${C_WHITE}$*${C_RESET}"; }
 warn() { echo -e "${C_YELLOW}[WARN]${C_RESET} ${C_WHITE}$*${C_RESET}"; }
 fail() { echo -e "${C_RED}[FAIL]${C_RESET} ${C_WHITE}$*${C_RESET}" >&2; }
 
@@ -45,8 +45,8 @@ INSTALL_TOTAL=0
 
 render_banner() {
     echo -e "${C_BOLD}${C_BLUE}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    echo -e "${C_BOLD}${C_BLUE}║${C_RESET}  ${C_BOLD}${C_WHITE}F5 SSLO Service Extension Installer${C_RESET}                         ${C_BOLD}${C_BLUE}║${C_RESET}"
-    echo -e "${C_BOLD}${C_BLUE}║${C_RESET}  ${C_BOLD}${C_WHITE}Advanced Blocking Pages${C_RESET}                                     ${C_BOLD}${C_BLUE}║${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}║${C_RESET}  ${C_BOLD}${C_WHITE}F5 SSLO Service Extensions Installer:${C_RESET}                       ${C_BOLD}${C_BLUE}║${C_RESET}"
+    echo -e "${C_BOLD}${C_BLUE}║${C_RESET}  ${C_BOLD}${C_WHITE}Advanced Blocking Pages v1.0${C_RESET}                                ${C_BOLD}${C_BLUE}║${C_RESET}"
     echo -e "${C_BOLD}${C_BLUE}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
     echo
 }
@@ -68,12 +68,16 @@ render_progress() {
 ## step_screen TITLE
 step_screen() {
     local title="$1"
-    INSTALL_STEP=$(( INSTALL_STEP + 1 ))
     clear
     render_banner
     render_progress
     echo -e "${C_BOLD}${C_WHITE}${title}${C_RESET}"
     echo
+}
+
+## step_done - advance the progress bar after a step completes
+step_done() {
+    INSTALL_STEP=$(( INSTALL_STEP + 1 ))
 }
 
 ## sleep_with_countdown SECONDS MESSAGE
@@ -90,20 +94,10 @@ sleep_with_countdown() {
 
 
 ## ===========================================================================
-## Installer Banner
+## Preflight checks
 ## ===========================================================================
 clear
 render_banner
-echo -e "${C_WHITE}Based on Kevin Stewart's original script:${C_RESET}"
-echo -e "${C_WHITE}https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages${C_RESET}"
-echo
-echo -e "${C_WHITE}This installer is self contained for closed networks.${C_RESET}"
-echo
-
-
-## ===========================================================================
-## Preflight checks
-## ===========================================================================
 info "Running preflight checks"
 
 if [[ ! -f /VERSION ]] || ! grep -qi "BIG-IP" /VERSION 2>/dev/null; then
@@ -225,7 +219,8 @@ rest_delete() {
 ## ===========================================================================
 ## Top-level menu 
 ## ===========================================================================
-echo
+clear
+render_banner
 echo -e "${C_WHITE}What would you like to do?${C_RESET}"
 echo
 echo -e "  ${C_WHITE}1) Install${C_RESET}"
@@ -233,8 +228,8 @@ echo -e "  ${C_WHITE}2) Uninstall${C_RESET}"
 echo
 read -p "$(echo -e "${C_WHITE}Select (1 or 2): ${C_RESET}")" menu_choice
 case "${menu_choice}" in
-    1) MODE="install" ;;
-    2) MODE="uninstall" ;;
+    1) MODE=1 ;;
+    2) MODE=2 ;;
     *) abort "Invalid selection. Aborting." ;;
 esac
 echo
@@ -243,14 +238,14 @@ echo
 ## ===========================================================================
 ## Confirmation gate 
 ## ===========================================================================
-if [[ "${MODE}" == "install" ]]; then
+if [[ "${MODE}" == "1" ]]; then
     INSTALL_TOTAL=9
     echo -e "${C_WHITE}Objects to be created:${C_RESET}"
     echo -e "${C_WHITE}  - LTM iRule:        blocking-page-rule${C_RESET}"
     echo -e "${C_WHITE}  - LTM iRule:        sslo-tls-verify-rule${C_RESET}"
     echo -e "${C_WHITE}  - System iFile:     blocking-page-html${C_RESET}"
     echo -e "${C_WHITE}  - LTM iFile:        blocking-page-html${C_RESET}"
-    echo -e "${C_WHITE}  - iApps LX block: ssloS_Blocking_Page${C_RESET}"
+    echo -e "${C_WHITE}  - iAppsLX block: ssloS_Blocking_Page${C_RESET}"
     echo
     echo -e "${C_WHITE}To proceed, type CONFIRM (case sensitive). Anything else aborts.${C_RESET}"
     read -p "$(echo -e "${C_WHITE}Confirm: ${C_RESET}")" confirmation
@@ -260,7 +255,7 @@ if [[ "${MODE}" == "install" ]]; then
 else
     INSTALL_TOTAL=8
     echo -e "${C_WHITE}Objects to be removed:${C_RESET}"
-    echo -e "${C_WHITE}  - iApps LX block: ssloS_Blocking_Page${C_RESET}"
+    echo -e "${C_WHITE}  - iAppsLX block: ssloS_Blocking_Page${C_RESET}"
     echo -e "${C_WHITE}  - LTM iFile:        blocking-page-html${C_RESET}"
     echo -e "${C_WHITE}  - System iFile:     blocking-page-html${C_RESET}"
     echo -e "${C_WHITE}  - LTM iRule:        sslo-tls-verify-rule${C_RESET}"
@@ -280,7 +275,7 @@ echo
 ## ===========================================================================
 
 
-if [[ "${MODE}" == "uninstall" ]]; then
+if [[ "${MODE}" == "2" ]]; then
     ## ----- Uninstall path -----
     ##
 
@@ -291,8 +286,8 @@ if [[ "${MODE}" == "uninstall" ]]; then
     ## -----------------------------------------------------------------------
     ## Phase 1: Discovery
     ## -----------------------------------------------------------------------
-    step_screen "Discover existing blocking-page components"
-    info "Scanning the BIG-IP for blocking-page objects"
+    step_screen "Discover existing Blocking_Page components"
+    info "Scanning the BIG-IP for Blocking_Page objects"
     info "This may take a moment"
     echo
 
@@ -341,14 +336,14 @@ if [[ "${MODE}" == "uninstall" ]]; then
     echo
     info "Discovery results:"
     if (( HAS_BLOCK )); then
-        echo -e "  ${C_WHITE}* iApps LX block instance:      found (${BLOCK_STATE})${C_RESET}"
+        echo -e "  ${C_WHITE}* iAppsLX block instance:      found (${BLOCK_STATE})${C_RESET}"
     else
-        echo -e "  ${C_WHITE}* iApps LX block instance:      not present${C_RESET}"
+        echo -e "  ${C_WHITE}* iAppsLX block instance:      not present${C_RESET}"
     fi
     if (( HAS_APP_SERVICE )); then
-        echo -e "  ${C_WHITE}* iApps LX application service: found${C_RESET}"
+        echo -e "  ${C_WHITE}* iAppsLX application service: found${C_RESET}"
     else
-        echo -e "  ${C_WHITE}* iApps LX application service: not present${C_RESET}"
+        echo -e "  ${C_WHITE}* iAppsLX application service: not present${C_RESET}"
     fi
     if (( HAS_APP_FOLDER )); then
         echo -e "  ${C_WHITE}* .app folder:                  found${C_RESET}"
@@ -389,20 +384,21 @@ if [[ "${MODE}" == "uninstall" ]]; then
         echo
         exit 0
     fi
+    step_done
     sleep 2
 
     ## -----------------------------------------------------------------------
-    ## Phase 2: Remove the iApps LX block instance (if present)
+    ## Phase 2: Remove the iAppsLX block instance (if present)
     ## -----------------------------------------------------------------------
-    step_screen "Remove the iApps LX block instance"
+    step_screen "Remove the iAppsLX block instance"
     if (( HAS_BLOCK == 0 )); then
-        info "No iApps LX block instance to remove"
-        SKIPPED+=("iApps LX block instance: ssloS_Blocking_Page")
+        info "No iAppsLX block instance to remove"
+        SKIPPED+=("iAppsLX block instance: ssloS_Blocking_Page")
     else
-        info "Found iApps LX block instance in state: ${BLOCK_STATE}"
+        info "Found iAppsLX block instance in state: ${BLOCK_STATE}"
         case "${BLOCK_STATE}" in
             BOUND)
-                info "Triggering iApps LX unbind workflow"
+                info "Triggering iAppsLX unbind workflow"
                 if rest_patch "block state set to UNBINDING" \
                     "/mgmt/shared/iapp/blocks/${BLOCK_ID}" \
                     '{"state":"UNBINDING"}'; then
@@ -414,7 +410,7 @@ if [[ "${MODE}" == "uninstall" ]]; then
                 sleep_with_countdown 15 "Waiting for unbind to complete:"
                 ;;
             UNBOUND|ERROR)
-                info "Phase 3 will remove the iApps LX application service"
+                info "Phase 3 will remove the iAppsLX application service"
                 ;;
             *)
                 warn "Unexpected state '${BLOCK_STATE}' - trying unbind"
@@ -425,39 +421,41 @@ if [[ "${MODE}" == "uninstall" ]]; then
                 ;;
         esac
 
-        if rest_delete "iApps LX block instance deleted" \
+        if rest_delete "iAppsLX block instance deleted" \
             "/mgmt/shared/iapp/blocks/${BLOCK_ID}"; then
-            REMOVED+=("iApps LX block instance: ssloS_Blocking_Page")
+            REMOVED+=("iAppsLX block instance: ssloS_Blocking_Page")
         else
-            FAILED+=("iApps LX block instance: ssloS_Blocking_Page (delete failed)")
+            FAILED+=("iAppsLX block instance: ssloS_Blocking_Page (delete failed)")
         fi
     fi
+    step_done
     sleep 1
 
     ## -----------------------------------------------------------------------
-    ## Phase 3: Delete the iApps LX application service for the .app folder
+    ## Phase 3: Delete the iAppsLX application service for the .app folder
     ## -----------------------------------------------------------------------
-    ## This is the authoritative iApps LX framework cleanup. Deleting the
+    ## This is the authoritative iAppsLX framework cleanup. Deleting the
     ## application service tears down the entire .app folder including the
     ## connector profile, the -t-4 virtual, and any other objects the
     ## framework created inside it. 
-    step_screen "Delete the iApps LX application service"
+    step_screen "Delete the iAppsLX application service"
 
     if rest_get "/mgmt/tm/sys/application/service/~Common~ssloS_Blocking_Page.app~ssloS_Blocking_Page"; then
-        if rest_delete "iApps LX application service deleted" \
+        if rest_delete "iAppsLX application service deleted" \
             "/mgmt/tm/sys/application/service/~Common~ssloS_Blocking_Page.app~ssloS_Blocking_Page"; then
-            REMOVED+=("iApps LX application service: ssloS_Blocking_Page")
+            REMOVED+=("iAppsLX application service: ssloS_Blocking_Page")
             sleep_with_countdown 10 "Waiting for .app folder teardown:"
         else
-            FAILED+=("iApps LX application service: ssloS_Blocking_Page (delete failed)")
+            FAILED+=("iAppsLX application service: ssloS_Blocking_Page (delete failed)")
         fi
     else
-        info "iApps LX application service not present"
+        info "iAppsLX application service not present"
         if (( HAS_APP_FOLDER || HAS_T4_VIRTUAL )); then
             warn ".app folder or virtual present, no app service"
             warn "Orphaned state - manual cleanup may be required"
         fi
     fi
+    step_done
     sleep 1
 
     ## -----------------------------------------------------------------------
@@ -481,6 +479,7 @@ if [[ "${MODE}" == "uninstall" ]]; then
             SKIPPED+=("LTM iRule: blocking-page-rule")
         fi
     fi
+    step_done
     sleep 1
 
     ## -----------------------------------------------------------------------
@@ -502,6 +501,7 @@ if [[ "${MODE}" == "uninstall" ]]; then
             SKIPPED+=("LTM iFile: blocking-page-html")
         fi
     fi
+    step_done
     sleep 1
 
     ## -----------------------------------------------------------------------
@@ -523,6 +523,7 @@ if [[ "${MODE}" == "uninstall" ]]; then
             SKIPPED+=("System iFile: blocking-page-html")
         fi
     fi
+    step_done
     sleep 1
 
     ## -----------------------------------------------------------------------
@@ -544,6 +545,7 @@ if [[ "${MODE}" == "uninstall" ]]; then
             SKIPPED+=("LTM iRule: sslo-tls-verify-rule")
         fi
     fi
+    step_done
     sleep 1
 
     ## -----------------------------------------------------------------------
@@ -557,7 +559,7 @@ if [[ "${MODE}" == "uninstall" ]]; then
     LEFTOVERS=()
     rest_get "/mgmt/shared/iapp/blocks" >/dev/null
     if echo "${REST_RESPONSE_BODY}" | jq -e '.items[]? | select(.name=="ssloS_Blocking_Page")' >/dev/null 2>&1; then
-        LEFTOVERS+=("iApps LX block instance: ssloS_Blocking_Page")
+        LEFTOVERS+=("iAppsLX block instance: ssloS_Blocking_Page")
     fi
     if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_Blocking_Page.app"; then
         LEFTOVERS+=(".app folder: /Common/ssloS_Blocking_Page.app")
@@ -597,6 +599,7 @@ if [[ "${MODE}" == "uninstall" ]]; then
             fi
         done
     fi
+    step_done
     sleep 2
 
     ## -----------------------------------------------------------------------
@@ -669,11 +672,11 @@ existing_block=$(curl -sk -u "${BIGUSER}" \
     "https://localhost/mgmt/shared/iapp/blocks" \
     | jq -r '.items[] | select(.name=="ssloS_Blocking_Page") | .id' 2>/dev/null)
 if [[ -n "${existing_block}" && "${existing_block}" != "null" ]]; then
-    EXISTING+=("iApps LX block instance: ssloS_Blocking_Page")
+    EXISTING+=("iAppsLX block instance: ssloS_Blocking_Page")
 fi
 
 if (( ${#EXISTING[@]} > 0 )); then
-    fail "Existing blocking-page components detected:"
+    fail "Existing Blocking_Page components detected:"
     echo
     for o in "${EXISTING[@]}"; do
         echo -e "  ${C_RED}*${C_RESET} ${C_WHITE}${o}${C_RESET}"
@@ -888,6 +891,7 @@ rule=$(cat blocking-page-rule.out)
 data="{\"name\":\"blocking-page-rule\",\"apiAnonymous\":\"${rule}\"}"
 rest_post "blocking-page-rule iRule created" "/mgmt/tm/ltm/rule" "${data}" \
     || abort "iRule creation failed - cannot continue"
+step_done
 sleep 1
 
 
@@ -898,6 +902,7 @@ rule=$(cat sslo-tls-verify-rule.out)
 data="{\"name\":\"sslo-tls-verify-rule\",\"apiAnonymous\":\"${rule}\"}"
 rest_post "sslo-tls-verify-rule iRule created" "/mgmt/tm/ltm/rule" "${data}" \
     || abort "iRule creation failed - cannot continue"
+step_done
 sleep 1
 
 
@@ -906,6 +911,7 @@ step_screen "Create system iFile blocking-page-html"
 data="{\"name\": \"blocking-page-html\", \"source-path\": \"file://${PWD}/blocking-page-html\"}"
 rest_post "system iFile blocking-page-html created" "/mgmt/tm/sys/file/ifile/" "${data}" \
     || abort "System iFile creation failed - cannot continue"
+step_done
 sleep 1
 
 
@@ -914,6 +920,7 @@ step_screen "Create LTM iFile blocking-page-html"
 data='{"name":"blocking-page-html", "file-name": "blocking-page-html"}'
 rest_post "LTM iFile blocking-page-html created" "/mgmt/tm/ltm/ifile" "${data}" \
     || abort "LTM iFile creation failed - cannot continue"
+step_done
 sleep 1
 
 
@@ -921,13 +928,15 @@ sleep 1
 step_screen "Create SSL Orchestrator blocking-page inspection service"
 data="$(cat blocking-page-service)"
 rest_post "SSLO blocking-page inspection service created" "/mgmt/shared/iapp/blocks" "${data}" \
-    || abort "iApps LX block instance creation failed - cannot continue"
+    || abort "iAppsLX block instance creation failed - cannot continue"
+step_done
 sleep 1
 
 
 ## Sleep for 15 seconds to allow the inspection service build to finish
 step_screen "Wait for SSL Orchestrator to build the service"
-sleep_with_countdown 15 "Waiting for SSLO to build the service:"
+sleep_with_countdown 15 "Waiting:"
+step_done
 sleep 1
 
 
@@ -938,6 +947,7 @@ rest_patch "rules array cleared" \
     '{"rules":[]}'
 
 ## Allow mcpd time to commit the clear before issuing the set
+step_done
 sleep 5
 
 step_screen "Attach blocking-page-rule to the service virtual"
@@ -946,6 +956,7 @@ rest_patch "blocking-page-rule attached" \
     '{"rules":["/Common/blocking-page-rule"]}'
 
 ## Allow mcpd time to commit the set before verification
+step_done
 sleep 5
 
 ## Verify the rules list now contains only blocking-page-rule
@@ -959,6 +970,7 @@ elif echo "${verify_response}" | grep -q "blocking-page-rule"; then
 else
     warn "Cannot confirm rules list - inspect virtual manually"
 fi
+step_done
 sleep 1
 
 
@@ -979,5 +991,7 @@ echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iRule:${C_RESET}        blocking-
 echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iRule:${C_RESET}        sslo-tls-verify-rule"
 echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}System iFile:${C_RESET}     blocking-page-html"
 echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iFile:${C_RESET}        blocking-page-html"
-echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}iApps LX block:${C_RESET}   ssloS_Blocking_Page"
+echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}iAppsLX block:${C_RESET}   ssloS_Blocking_Page"
 echo
+echo -e "${C_WHITE}Based on Kevin Stewart's original script:${C_RESET}"
+echo -e "${C_WHITE}https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages${C_RESET}"
