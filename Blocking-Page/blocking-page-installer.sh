@@ -2,7 +2,7 @@
 # SSL Orchestrator Advanced Blocking Page
 # Version 1.0
 #
-# Based entirely on Kevin Smith's SSLO Service Extensions "Advanced Blocking Pages"
+# Based entirely on Kevin Stewart's SSLO Service Extensions "Advanced Blocking Pages"
 # https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages
 #
 # Kevin's original uses curl calls to Github to pull installer artifact files.
