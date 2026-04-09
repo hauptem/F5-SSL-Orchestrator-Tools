@@ -9,7 +9,7 @@
 
 This script installs a service that presents a blocking page when used within an SSLO service chain. Kevin's script makes curl calls from a Big-IP to GITHUB to retrieve and process installation artifacts. This is not viable for many "closed network" customers. This script removes the GITHUB and curl dependancy and rolls all of the artifacts into a single installer script.
 
-Based entirely on Kevin Stewart's [[advanced-blocking-pages](https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages)]
+Based entirely on Kevin Stewart's [advanced-blocking-pages(https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages)]
 
 ## Requirements
 
