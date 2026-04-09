@@ -247,7 +247,7 @@ if [[ "${MODE}" == "1" ]]; then
     echo -e "${C_WHITE}  - LTM iFile:        blocking-page-html${C_RESET}"
     echo -e "${C_WHITE}  - iAppsLX block: ssloS_Blocking_Page${C_RESET}"
     echo
-    echo -e "${C_WHITE}To proceed, type CONFIRM (case sensitive). Anything else aborts.${C_RESET}"
+    echo -e "${C_WHITE}To proceed, type CONFIRM (case sensitive).${C_RESET}"
     read -p "$(echo -e "${C_WHITE}Confirm: ${C_RESET}")" confirmation
     if [[ "${confirmation}" != "CONFIRM" ]]; then
         abort "Confirmation not received. No changes were made to the BIG-IP."
