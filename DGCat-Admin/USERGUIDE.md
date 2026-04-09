@@ -256,8 +256,6 @@ Press `x` to delete by pattern. Enter a search string and the tool shows all mat
 
 Press `w` to apply your changes to the current device. The tool shows a summary of all additions and deletions, creates a backup of the current state, and asks for confirmation before applying. After a successful apply, the tool offers to save the BIG-IP configuration.
 
-For URL categories, the tool applies changes incrementally — only the specific additions and deletions are sent, not a full replacement. This minimizes the API impact and preserves any entries that weren't part of your edit session.
-
 ### - Deploying to Fleet
 
 Press `D` to deploy changes to multiple BIG-IPs. This option is available when a fleet configuration is loaded. The full deployment workflow is described in the next section.
