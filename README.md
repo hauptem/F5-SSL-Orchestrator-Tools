@@ -1,6 +1,6 @@
 # F5 SSL Orchestrator Tools
 
-Useful scripts and tools for F5's SSL Orchestrator product. Some of these are modifications of existing tools rebuilt for customers who have 'closed network' considerations.
+Useful scripts and tools for F5's SSL Orchestrator product. Some of these are modifications of existing tools rebuilt for customers who have 'closed network' or other operational considerations.
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
