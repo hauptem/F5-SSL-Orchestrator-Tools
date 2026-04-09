@@ -581,7 +581,7 @@ if [[ "${MODE}" == "2" ]]; then
     fi
 
     if (( ${#LEFTOVERS[@]} == 0 )); then
-        ok "All blocking-page components removed"
+        ok "All Blocking-Page components removed"
     else
         fail "The following objects are still on the BIG-IP:"
         for o in "${LEFTOVERS[@]}"; do
@@ -651,7 +651,7 @@ fi
 ## Existing-install detection - if any objects are found, abort 
 clear
 render_banner
-info "Scanning the BIG-IP for existing blocking-page components"
+info "Scanning the BIG-IP for existing Blocking-Page components"
 info "This may take a moment"
 echo
 
@@ -927,7 +927,7 @@ sleep 1
 ## Create SSL Orchestrator blocking-page inspection service
 step_screen "Create SSL Orchestrator blocking-page inspection service"
 data="$(cat blocking-page-service)"
-rest_post "SSLO blocking-page inspection service created" "/mgmt/shared/iapp/blocks" "${data}" \
+rest_post "SSLO Blocking-Page inspection service created" "/mgmt/shared/iapp/blocks" "${data}" \
     || abort "iAppsLX block instance creation failed - cannot continue"
 step_done
 sleep 1
@@ -995,3 +995,4 @@ echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}iAppsLX block:${C_RESET}   ssloS_Bloc
 echo
 echo -e "${C_WHITE}Based on Kevin Stewart's original script:${C_RESET}"
 echo -e "${C_WHITE}https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages${C_RESET}"
+echo
