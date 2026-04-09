@@ -163,11 +163,11 @@ If the connection fails, you're given the option to retry or exit. Common failur
 
 This is useful for preparing objects that will be populated later through the editor, CSV import, or fleet deployment.
 
-For datagroups, you select a partition and the tool displays existing datagroups for reference. Type a name for the new datagroup and choose a type (string, address, or integer). If the name matches an existing datagroup, the tool rejects it immediately without an API call — the list is already in memory. Protected system datagroups are hidden from the list.
+For datagroups, you select a partition and the tool displays existing datagroups for reference. Type a name for the new datagroup and choose a type (string, address, or integer). Protected system datagroups are hidden from the list.
 
-For URL categories, you provide a name and select a default action (allow, block, or confirm). The tool sanitizes the name to remove characters that aren't valid in F5 object names.
+For URL categories, you provide a name and select a default action (allow, block, or confirm). 
 
-After creation, the tool offers to save the BIG-IP configuration.
+After creation, the tool offers to save the configuration.
 
 ---
 
@@ -188,8 +188,6 @@ If the datagroup doesn't exist, you select a type:
 - **address** — For IP addresses and CIDR subnets
 - **integer** — For port numbers or other numeric keys
 
-The tool validates your CSV against the selected type. If you select `address` but your CSV contains domain names, you'll get a warning with the option to abort or continue.
-
 Before applying, the tool previews the file contents and asks you to confirm the key/value format.
 
 ### Creating or Updating a URL Category
@@ -204,11 +202,11 @@ If the category already exists, you choose overwrite or merge, just like datagro
 
 ## Menu option 3 - Deleting Datagroups and URL Categories
 
-Deletes a datagroup or URL category. The tool shows the object's details (type, record count) and creates a backup before deletion. You must type `DELETE` (case-sensitive) to confirm.
+Deletes a datagroup or URL category. The tool shows the object's details (type, record count) and creates a backup before deletion. You must type `DELETE` to confirm.
 
 Deletion is permanent. The backup file can be used to recreate the object using the Create/Update from CSV option if needed.
 
-Protected system datagroups cannot be deleted. The tool blocks the operation and explains why.
+Protected system datagroups cannot be deleted. The tool blocks the operation.
 
 ---
 
