@@ -17,9 +17,6 @@ Useful scripts and tools for F5's SSL Orchestrator product. Some of these are mo
 | [TLS Recon](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/TLS-Recon) | Discover TLS traffic on non-standard ports during SSLO deployments |
 | [DGCat Admin](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/DGCat-Admin) | Menu-driven tool for LTM Datagroup and URL Category management |
 | [Blocking Page](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/Blocking-Page) | Adds a blocking page service to SSLO for use in a Service Chain |
-| [DoH Guardian](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/DoH-Guardian) | An SSLO service extension for managing DNS-over-HTTPS traffic |
-
-
 
 
 ## License
