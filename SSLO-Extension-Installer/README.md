@@ -1,6 +1,6 @@
 # F5 SSL Orchestrator Service Extension Installer
 
-Unified installer and uninstaller for F5 SSL Orchestrator service extensions. Built for closed network organizations that cannot use the original GitHub-dependent installers. Single self-contained script with no runtime network dependencies and full uninstall support.
+Unified installer and uninstaller for Kevin Stewart's F5 SSL Orchestrator service extensions. This was built for 'closed network' organizations that cannot use Kevin's GitHub-dependent installers. Single self-contained script with no runtime network dependencies and full extension uninstall support.
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
