@@ -1,5 +1,5 @@
 #!/bin/bash
-# SSL Orchestrator Advanced Blocking Page
+# SSL Orchestrator Service Extension: Advanced Blocking Pages
 # Version 1.0
 #
 # Based entirely on Kevin Smith's SSLO Service Extensions "Advanced Blocking Pages"
@@ -1053,7 +1053,7 @@ echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iRule:${C_RESET}        blocking-
 echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iRule:${C_RESET}        sslo-tls-verify-rule"
 echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}System iFile:${C_RESET}     blocking-page-html"
 echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iFile:${C_RESET}        blocking-page-html"
-echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}iAppsLX block:${C_RESET}   ssloS_Blocking_Page"
+echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}iAppsLX block:${C_RESET}    ssloS_Blocking_Page"
 echo
 echo -e "${C_WHITE}Based on Kevin Stewart's original script:${C_RESET}"
 echo -e "${C_WHITE}https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages${C_RESET}"
