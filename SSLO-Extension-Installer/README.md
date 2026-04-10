@@ -9,7 +9,7 @@ Unified installer and uninstaller for F5 SSL Orchestrator service extensions. Bu
 ![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
 ![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
 
-## Supported Extensions
+## Currently Supported Extensions
 
 | Extension | Description |
 |-----------|-------------|
