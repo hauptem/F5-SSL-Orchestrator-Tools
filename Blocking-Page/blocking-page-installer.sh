@@ -2,7 +2,7 @@
 # SSL Orchestrator Advanced Blocking Page
 # Version 1.0
 #
-# Based entirely on Kevin Stewart's SSLO Service Extensions "Advanced Blocking Pages"
+# Based entirely on Kevin Smith's SSLO Service Extensions "Advanced Blocking Pages"
 # https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages
 #
 # Kevin's original uses curl calls to Github to pull installer artifact files.
@@ -123,6 +123,19 @@ if [[ -z "${biguser}" || -z "${bigpass}" ]]; then
 fi
 BIGUSER="${biguser}:${bigpass}"
 
+## Verify credentials before doing anything else. We hit the canonical
+## BIG-IP auth endpoint, which returns a token only on valid credentials.
+## This is more reliable than probing a tm endpoint, since some iControl
+## REST paths have quirky auth behavior over localhost.
+probe_body=$(curl -sk \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"${biguser}\",\"password\":\"${bigpass}\",\"loginProviderName\":\"tmos\"}" \
+    "https://localhost/mgmt/shared/authn/login")
+if ! echo "${probe_body}" | grep -q '"token"'; then
+    abort "Credential check failed. Verify username and password."
+fi
+ok "Credentials accepted"
+
 
 ## ===========================================================================
 ## REST helpers - perform curl calls, capture HTTP status code, report
@@ -170,7 +183,7 @@ rest_patch() {
         ok "${description} (HTTP ${http_code})"
         return 0
     else
-        warn "${description} (HTTP ${http_code})"
+        fail "${description} (HTTP ${http_code})"
         return 1
     fi
 }
@@ -214,6 +227,29 @@ rest_delete() {
         return 1
     fi
 }
+
+
+## ===========================================================================
+## Cleanup trap - fires on normal exit, Ctrl-C, or SIGTERM. Always removes
+## the extracted temp files. If COMPLETED never flipped to 1, the script
+## was interrupted mid-run and we warn loudly so the operator knows the
+## BIG-IP may be in a partial state.
+## ===========================================================================
+COMPLETED=0
+MUTATIONS_STARTED=0
+cleanup_on_exit() {
+    local rc=$?
+    rm -f rule-converter.py blocking-page-rule.out sslo-tls-verify-rule.out
+    rm -f blocking-page-rule sslo-tls-verify-rule blocking-page-service
+    if (( COMPLETED == 0 && MUTATIONS_STARTED == 1 )); then
+        echo
+        fail "Script exited before completion (rc=${rc})."
+        fail "The BIG-IP may be in a partial state."
+        fail "Re-run and select Uninstall to clean up any created objects."
+        echo
+    fi
+}
+trap cleanup_on_exit EXIT INT TERM
 
 
 ## ===========================================================================
@@ -317,7 +353,7 @@ if [[ "${MODE}" == "2" ]]; then
     if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_Blocking_Page.app"; then
         HAS_APP_FOLDER=1
     fi
-    if rest_get "/mgmt/tm/ltm/virtual/~Common~ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4"; then
+    if rest_get "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4"; then
         HAS_T4_VIRTUAL=1
     fi
     if rest_get "/mgmt/tm/ltm/rule/blocking-page-rule"; then
@@ -391,6 +427,7 @@ if [[ "${MODE}" == "2" ]]; then
     ## Phase 2: Remove the iAppsLX block instance (if present)
     ## -----------------------------------------------------------------------
     step_screen "Remove the iAppsLX block instance"
+    MUTATIONS_STARTED=1
     if (( HAS_BLOCK == 0 )); then
         info "No iAppsLX block instance to remove"
         SKIPPED+=("iAppsLX block instance: ssloS_Blocking_Page")
@@ -564,7 +601,7 @@ if [[ "${MODE}" == "2" ]]; then
     if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_Blocking_Page.app"; then
         LEFTOVERS+=(".app folder: /Common/ssloS_Blocking_Page.app")
     fi
-    if rest_get "/mgmt/tm/ltm/virtual/~Common~ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4"; then
+    if rest_get "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4"; then
         LEFTOVERS+=("Virtual: ssloS_Blocking_Page-t-4")
     fi
     if rest_get "/mgmt/tm/ltm/rule/blocking-page-rule"; then
@@ -642,6 +679,7 @@ if [[ "${MODE}" == "2" ]]; then
         echo
     fi
 
+    COMPLETED=1
     exit 0
 fi
 
@@ -886,6 +924,7 @@ EOF
 
 ## Create blocking-page-rule iRule
 step_screen "Install blocking-page-rule iRule"
+MUTATIONS_STARTED=1
 python3 rule-converter.py blocking-page-rule
 rule=$(cat blocking-page-rule.out)
 data="{\"name\":\"blocking-page-rule\",\"apiAnonymous\":\"${rule}\"}"
@@ -933,9 +972,25 @@ step_done
 sleep 1
 
 
-## Sleep for 15 seconds to allow the inspection service build to finish
+## Poll for the -t-4 virtual to be ready. SSLO builds the service
+## asynchronously; a fixed sleep is unreliable. We check every 10s up to
+## 60s, but tick the display every second so the user can see progress.
 step_screen "Wait for SSL Orchestrator to build the service"
-sleep_with_countdown 15 "Waiting:"
+POLL_MAX=60
+POLL_ELAPSED=0
+while (( POLL_ELAPSED < POLL_MAX )); do
+    if rest_get "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4"; then
+        break
+    fi
+    for (( tick=1; tick<=10 && POLL_ELAPSED < POLL_MAX; tick++ )); do
+        POLL_ELAPSED=$(( POLL_ELAPSED + 1 ))
+        printf "\r${C_WHITE}Waiting for service virtual... ${C_BOLD}%d${C_RESET}${C_WHITE}s elapsed${C_RESET}    " "${POLL_ELAPSED}"
+        sleep 1
+    done
+done
+echo
+(( POLL_ELAPSED >= POLL_MAX )) && abort "Service virtual not ready after ${POLL_MAX}s"
+ok "Service virtual ready (${POLL_ELAPSED}s)"
 step_done
 sleep 1
 
@@ -944,7 +999,8 @@ sleep 1
 step_screen "Clear rules array on the service virtual"
 rest_patch "rules array cleared" \
     "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4" \
-    '{"rules":[]}'
+    '{"rules":[]}' \
+    || abort "Failed to clear rules array on service virtual - cannot continue"
 
 ## Allow mcpd time to commit the clear before issuing the set
 step_done
@@ -953,7 +1009,8 @@ sleep 5
 step_screen "Attach blocking-page-rule to the service virtual"
 rest_patch "blocking-page-rule attached" \
     "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4" \
-    '{"rules":["/Common/blocking-page-rule"]}'
+    '{"rules":["/Common/blocking-page-rule"]}' \
+    || abort "Failed to attach blocking-page-rule to service virtual - cannot continue"
 
 ## Allow mcpd time to commit the set before verification
 step_done
@@ -963,20 +1020,25 @@ sleep 5
 step_screen "Verify virtual rules list"
 verify_response=$(curl -sk -u "${BIGUSER}" \
     "https://localhost/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4")
-if echo "${verify_response}" | grep -q "tenant-restrictions"; then
-    warn "tenant-restrictions iRule still attached"
-elif echo "${verify_response}" | grep -q "blocking-page-rule"; then
+rules_list=$(echo "${verify_response}" | jq -r '.rules[]?' 2>/dev/null)
+if [[ "${rules_list}" == "/Common/blocking-page-rule" ]]; then
     ok "blocking-page-rule is the only iRule attached"
+elif [[ -z "${rules_list}" ]]; then
+    warn "Rules array is empty - inspect virtual manually"
 else
-    warn "Cannot confirm rules list - inspect virtual manually"
+    warn "Unexpected rules on virtual - inspect manually:"
+    echo "${rules_list}" | while read -r r; do
+        echo -e "  ${C_YELLOW}*${C_RESET} ${C_WHITE}${r}${C_RESET}"
+    done
 fi
 step_done
 sleep 1
 
 
-## Clean up temporary files and extracted payloads
-rm -f rule-converter.py blocking-page-rule.out sslo-tls-verify-rule.out
-rm -f blocking-page-rule sslo-tls-verify-rule blocking-page-service
+## Temp file cleanup is handled by the EXIT trap.
+
+## Mark the run as completed so the trap knows this was a clean exit.
+COMPLETED=1
 
 ## Final completion screen
 clear
