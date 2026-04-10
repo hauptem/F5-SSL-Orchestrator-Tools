@@ -11,7 +11,7 @@ Based entirely on Kevin Stewart's SSLO Service Extension: [DoH Guardian](https:/
 
 DoH Guardian is an F5 SSL Orchestrator service extension function for monitoring/managing DNS-over-HTTPS traffic flows and detecting potentially malicious DoH exfiltration. This SSL Orchestrator service extension is invoked at a detected (and decrypted) DNS-over-HTTPS request and has several options for logging, management, and anomaly detection. 
 
-Kevin's script makes curl calls from a Big-IP to GITHUB to retrieve and process installation artifacts. This is not viable for many "closed network" customers. This script removes the GITHUB and curl dependancy and rolls all of the artifacts into a single installer script that also includes a full uninstaller. No other functionality was changed. 
+Kevin's script makes curl calls from a Big-IP to GITHUB to retrieve and process installation artifacts. This is not viable for many "closed network" customers. This script removes the GITHUB and curl dependency and rolls all of the artifacts into a single installer script that also includes a full uninstaller. No other functionality was changed. 
 
 [Kevin's DoH Guardian configuration guide](https://github.com/f5devcentral/sslo-service-extensions/blob/main/doh-guardian/README.md)
 
