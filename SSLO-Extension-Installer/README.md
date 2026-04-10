@@ -2,14 +2,14 @@
 
 Unified installer and uninstaller for Kevin Stewart's F5 SSL Orchestrator service extensions which have been directly incorporated into this tool.
 
-This was built for 'closed network' organizations that cannot use Kevin's GitHub-dependent installers. Single self-contained script with no runtime network dependencies and full extension uninstall support. The blocking-page-html was kept separate for ease of editing. The only change I have made to Kevin's extensions was to change "F5-Advanced-Blocking-Pages" to simply "Blocking_Page" so the name would not be truncated in the SSLO GUI. No functional changes were made to Kevin's code.
-
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
 ![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
 ![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
+
+This was built for 'closed network' organizations that cannot use Kevin's GitHub-dependent installers. Single self-contained script with no runtime network dependencies and full extension uninstall support. The blocking-page-html was kept separate for ease of editing. The only change I have made to Kevin's extensions was to change "F5-Advanced-Blocking-Pages" to simply "Blocking_Page" so the name would not be truncated in the SSLO GUI. No functional changes were made to Kevin's code.
 
 ## Currently Supported Extensions
 
