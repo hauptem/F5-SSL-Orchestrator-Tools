@@ -460,7 +460,7 @@ install_blocking_page() {
     ## second scan.
     clear
     render_banner
-    echo -e "${C_WHITE}Scanning the BIG-IP for existing Blocking_Page components${C_RESET}"
+    echo -e "${C_WHITE}Scanning the BIG-IP for existing components${C_RESET}"
     echo -e "${C_WHITE}This may take a few moments...${C_RESET}"
     echo
 
@@ -844,13 +844,13 @@ uninstall_blocking_page() {
         ## -----------------------------------------------------------------------
         ## Phase 1: Discovery
         ## -----------------------------------------------------------------------
-        step_screen "Discover existing Blocking_Page components"
+        step_screen "Discovery"
         if [[ "${DISCOVERY_CACHED_FOR}" == "blocking_page" ]]; then
-            echo -e "${C_WHITE}Using discovery state from previous install attempt${C_RESET}"
+            echo -e "${C_WHITE}Using state from previous install attempt${C_RESET}"
             echo
             DISCOVERY_CACHED_FOR=""
         else
-            echo -e "${C_WHITE}Scanning the BIG-IP for existing Blocking_Page components${C_RESET}"
+            echo -e "${C_WHITE}Scanning the BIG-IP for existing components${C_RESET}"
             echo -e "${C_WHITE}This may take a few moments...${C_RESET}"
             echo
 
@@ -1244,7 +1244,7 @@ install_doh_guardian() {
     ## second scan.
     clear
     render_banner
-    echo -e "${C_WHITE}Scanning the BIG-IP for existing DoH Guardian components${C_RESET}"
+    echo -e "${C_WHITE}Scanning the BIG-IP for existing components${C_RESET}"
     echo -e "${C_WHITE}This may take a few moments...${C_RESET}"
     echo
 
@@ -2247,13 +2247,13 @@ uninstall_doh_guardian() {
         ## -----------------------------------------------------------------------
         ## Phase 1: Discovery
         ## -----------------------------------------------------------------------
-        step_screen "Discover existing DoH Guardian components"
+        step_screen "Discovery"
         if [[ "${DISCOVERY_CACHED_FOR}" == "doh_guardian" ]]; then
             echo -e "${C_WHITE}Using discovery state from previous install attempt${C_RESET}"
             echo
             DISCOVERY_CACHED_FOR=""
         else
-            echo -e "${C_WHITE}Scanning the BIG-IP for existing DoH Guardian components${C_RESET}"
+            echo -e "${C_WHITE}Scanning the BIG-IP for existing components${C_RESET}"
             echo -e "${C_WHITE}This may take a few moments...${C_RESET}"
             echo
 
