@@ -11,6 +11,8 @@ Unified installer and uninstaller for Kevin Stewart's F5 SSL Orchestrator servic
 
 This was built for 'closed network' organizations that cannot use Kevin's GitHub-dependent installers. Single self-contained script with no runtime network dependencies and full extension uninstall support. The blocking-page-html was kept separate for ease of editing. The only change I have made to Kevin's extensions was to change "F5-Advanced-Blocking-Pages" to simply "Blocking_Page" so the name would not be truncated in the SSLO GUI. No functional changes were made to Kevin's code.
 
+Note: If you install any of Kevin's extensions and then run F5's 'sslofix' script you will be locked in an "MCP Desync" state. If you run sslofix in diagnostic mode with SSLO service extensions installed it will always report duplicate blocks. This is because Kevin's current extension technique is to repurpose the "F5 Tenant Restrictions" service within SSLO. My uninstaller can assist with getting out of that "MCP Desync" condition for the two extensions currently supported.
+
 ## Currently Supported Extensions
 
 | Extension | Description |
