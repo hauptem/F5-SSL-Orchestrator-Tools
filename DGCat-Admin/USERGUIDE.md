@@ -56,7 +56,7 @@ The tool handles the details that make these operations error-prone when done ma
 
 ### REST API Architecture
 
-DGCat-Admin communicates with BIG-IP exclusively through the iControl REST API over HTTPS. Every operation — listing datagroups, reading records, applying changes, saving configuration — is an API call. This means the tool can run from anywhere with network access to the BIG-IP management interface.
+DGCat-Admin communicates with BIG-IP exclusively through the iControl REST API over HTTPS. Every operation: listing datagroups, reading records, applying changes, saving configuration is an API call. This means the tool can run from anywhere with network access to the BIG-IP management interface.
 
 When you connect, the tool authenticates with the credentials you provide and validates the connection by querying the BIG-IP system. All subsequent operations use the same authenticated session.
 
@@ -68,7 +68,7 @@ Fleet deployment uses a validate-then-apply model. Before any changes are made t
 
 ### Editor Model
 
-The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes — adding entries, deleting entries, bulk-deleting by pattern — without touching the actual Big-IP configuration. All edits are staged in a candidate configuration. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you change your mind and quit out of DGCat-Admin without writing to the connected host or deploying to remote hosts, nothing changes on your Big-IP's at all.
+The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes — adding entries, deleting entries, bulk-deleting by pattern without touching the actual Big-IP configuration. All edits are staged in a candidate configuration. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you change your mind and quit out of DGCat-Admin without writing to the connected host or deploying to remote hosts, nothing changes on your Big-IP's at all.
 
 ---
 
