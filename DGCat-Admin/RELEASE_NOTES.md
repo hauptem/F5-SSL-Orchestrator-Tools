@@ -1,10 +1,10 @@
-# DGCat-Admin v5.2 Release Notes - April 4 2026
+# DGCat-Admin v5.2 Release Notes 
 
 - This release was focused on file input validation for fleet.conf, bootstrap.conf, and csv file import
 - Tried to incorporate as much input validation as possible to prevent the user being able to send bad data to the API and get rejected anyway
 - Changed the bash backups location to be relative - matching the powershell version
 
-# DGCat-Admin v5.1 Release Notes - April 3 2026
+# DGCat-Admin v5.1 Release Notes 
 
 - Deploy merge uses incremental API calls instead of pull-modify-push
 - Deploy Step 2 (current device) respects deploy mode selection
@@ -12,7 +12,7 @@
 - MAX_BACKUPS reduced from 30 to 10
 - Bootstrap.conf boilerplate reformatted with updated examples
 
-# DGCat-Admin v5.0 Release Notes - April 2 2026
+# DGCat-Admin v5.0 Release Notes 
 
 **Bootstrap (Option 8)**
 - Bootstrap will create datagroups and URL Categories across your entire fleet based on bootstrap.conf entries; useful for multi-site initial configuration
@@ -30,7 +30,7 @@
 **Cleanup**
 - Removed 8 orphaned functions
 
-# DGCat-Admin v4.6 Release Notes - April 1 2026
+# DGCat-Admin v4.6 Release Notes 
 
 **Fleet Backup (Option 7)**
 - Pull and save backups of a datagroup or URL category across the fleet. Supports scoping by all hosts, site, or individual host selection.
@@ -40,7 +40,7 @@
 **Bug Fixes**
 - **Bash Empty Array Handling** — All editor array operations converted to index-based loops to prevent unbound variable errors with `set -u` on empty datagroups.
 
-# DGCat-Admin v4.5 Release Notes - March 31 2026
+# DGCat-Admin v4.5 Release Notes 
 
 **Fleet Search (option 6)**
 - Query and compare datagroups or URL categories across fleet hosts from a single read-only session.
@@ -54,7 +54,7 @@
 **Bug Fixes**
 - **PowerShell Save-F5Config** — Rebuilt on the Invoke-F5Post framework. Previous version silently failed due to a .NET restricted header exception.
 
-# DGCat-Admin v4.3 Release Notes - March 30 2026
+# DGCat-Admin v4.3 Release Notes 
 
 **Large Dataset Support**
 - Tested with 20000-entry URL categories and 1000-entry address datagroups
@@ -79,7 +79,7 @@
 - Removed some dead code
 
 
-# DGCat-Admin v4.2 Release Notes - March 29 2026
+# DGCat-Admin v4.2 Release Notes 
 
 **Deployment**
 - Implemented consistent three-step visibility for every host: Creating backup, Applying changes, Saving configuration
@@ -94,7 +94,7 @@
 **Backups**
 - Connected host backups now include hostname in filename, matching fleet backup naming convention
 
-# DGCat-Admin v4.1 Release Notes - March 28 2026
+# DGCat-Admin v4.1 Release Notes 
 
 **New Features**
 - Create an Empty Datagroup or URL Category menu option
@@ -116,7 +116,7 @@
 - Fixed PowerShell single-result array unwrapping across all pipelines
 - Fixed PowerShell duplicate deploy header and carriage return display artifacts
 
-# DGCat-Admin v4.0 Release Notes - March 27 2026
+# DGCat-Admin v4.0 Release Notes 
 
 - Initial public release
 
