@@ -2847,6 +2847,10 @@ uninstall_doh_guardian() {
     echo
     echo -e "${C_WHITE}Anything not present will be skipped.${C_RESET}"
     echo
+    echo -e "${C_YELLOW}IMPORTANT: Before proceeding, ensure that ssloS_DoH_Guard is removed from${C_RESET}"
+    echo -e "${C_YELLOW}all security policy rules and service chains. Uninstalling while objects${C_RESET}"
+    echo -e "${C_YELLOW}are still referenced will cause MCP desync.${C_RESET}"
+    echo
     echo -e "${C_WHITE}To proceed, type CONFIRM (case sensitive). Anything else aborts.${C_RESET}"
     read -p "$(echo -e "${C_WHITE}Confirm: ${C_RESET}")" confirmation
     if [[ "${confirmation}" != "CONFIRM" ]]; then
