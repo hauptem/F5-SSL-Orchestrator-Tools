@@ -29,8 +29,6 @@ This installer replaces that with three objects:
 | `ssloS_CertError_Page` | Inspection Service | Conditional block page. Only blocks when the server-side TLS certificate fails verification. Passes traffic through unmodified when the certificate is valid. |
 | `ssloSC_Block_Page` | Service Chain | Pre-built service chain containing only `ssloS_Blocking_Page`, ready to assign to any security policy rule. |
 
-Each service has its own iRule with a unique proc name, eliminating the global namespace collision that would occur if both were attached to the same virtual server.
-
 The `sslo-tls-verify-rule` iRule is unchanged from Kevin's original. It captures the server certificate verification result into a sharedvar and is added to the SSLO topology Resources - not to a service.
 
 ## How To Use the Services
