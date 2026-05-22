@@ -1,6 +1,6 @@
 #!/bin/bash
 # F5 SSL Orchestrator Service Extension Installer
-# Version 1.0
+# Version 1.1
 # Author: Eric Haupt
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
@@ -10,13 +10,11 @@
 # Currently included extensions:
 #
 #   - Advanced Blocking Pages
-#     Version 1.0
-#     Author: Kevin Stewart - F5 Inc.
+#     Based on Kevin Stewart's 1.0 extensions
 #     https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages
 #
 #   - DoH Guardian
-#     Version 1.0
-#     Author: Kevin Stewart - F5 Inc.
+#     Based on Kevin Stewart's 1.0 extensions
 #     https://github.com/f5devcentral/sslo-service-extensions/tree/main/doh-guardian
 #
 
@@ -241,9 +239,10 @@ DISCOVERY_CACHED_FOR=""
 cleanup_on_exit() {
     local rc=$?
     rm -f rule-converter.py
-    rm -f blocking-page-rule blocking-page-rule.out
+    rm -f ssloS_Blocking_Page-rule ssloS_Blocking_Page-rule.out
+    rm -f ssloS_CertError_Page-rule ssloS_CertError_Page-rule.out
     rm -f sslo-tls-verify-rule sslo-tls-verify-rule.out
-    rm -f blocking-page-service
+    rm -f blocking-page-service certerror-page-service blocking-page-chain
     rm -f doh-guardian-rule doh-guardian-rule.out
     rm -f doh-guardian-service
     rm -f sinkhole.crt sinkhole.key
@@ -259,7 +258,7 @@ trap cleanup_on_exit EXIT INT TERM
 
 
 ## ===========================================================================
-## Shared rule converter by Kevin Stweart
+## Shared rule converter based on Kevin Stewart's 1.0 extensions
 #  Writes a small Python helper to disk that escapes a Tcl iRule for 
 #  embedding in a JSON body. 
 ## ===========================================================================
@@ -308,12 +307,12 @@ select_extension() {
         case "${ext_choice}" in
             1)
                 EXTENSION="blocking_page"
-                EXTENSION_TITLE="Advanced Blocking Pages v1.0"
+                EXTENSION_TITLE="Advanced Blocking Pages v1.1"
                 break
                 ;;
             2)
                 EXTENSION="doh_guardian"
-                EXTENSION_TITLE="DoH Guardian v1.0"
+                EXTENSION_TITLE="DoH Guardian v1.1"
                 break
                 ;;
             0)
@@ -439,13 +438,16 @@ install_blocking_page() {
     ok "blocking-page-html present"
     sleep 1
 
-    INSTALL_TOTAL=9
+    INSTALL_TOTAL=17
     echo -e "${C_WHITE}Objects to be created:${C_RESET}"
-    echo -e "${C_WHITE}  - LTM iRule:        blocking-page-rule${C_RESET}"
+    echo -e "${C_WHITE}  - LTM iRule:        ssloS_Blocking_Page-rule${C_RESET}"
+    echo -e "${C_WHITE}  - LTM iRule:        ssloS_CertError_Page-rule${C_RESET}"
     echo -e "${C_WHITE}  - LTM iRule:        sslo-tls-verify-rule${C_RESET}"
     echo -e "${C_WHITE}  - System iFile:     blocking-page-html${C_RESET}"
     echo -e "${C_WHITE}  - LTM iFile:        blocking-page-html${C_RESET}"
     echo -e "${C_WHITE}  - iAppsLX block:    ssloS_Blocking_Page${C_RESET}"
+    echo -e "${C_WHITE}  - iAppsLX block:    ssloS_CertError_Page${C_RESET}"
+    echo -e "${C_WHITE}  - Service chain:    ssloSC_Block_Page${C_RESET}"
     echo
     echo -e "${C_WHITE}To proceed, type CONFIRM (case sensitive).${C_RESET}"
     read -p "$(echo -e "${C_WHITE}Confirm: ${C_RESET}")" confirmation
@@ -467,11 +469,19 @@ install_blocking_page() {
     HAS_BLOCK=0
     BLOCK_ID=""
     BLOCK_STATE=""
+    HAS_CE_BLOCK=0
+    CE_BLOCK_ID=""
+    CE_BLOCK_STATE=""
     HAS_APP_SERVICE=0
+    HAS_CE_APP_SERVICE=0
     HAS_APP_FOLDER=0
+    HAS_CE_APP_FOLDER=0
     HAS_T4_VIRTUAL=0
+    HAS_CE_T4_VIRTUAL=0
     HAS_BP_RULE=0
+    HAS_CE_RULE=0
     HAS_TLS_RULE=0
+    HAS_SC_BLOCK=0
     HAS_LTM_IFILE=0
     HAS_SYS_IFILE=0
 
@@ -492,7 +502,7 @@ install_blocking_page() {
     if rest_get "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4"; then
         HAS_T4_VIRTUAL=1
     fi
-    if rest_get "/mgmt/tm/ltm/rule/blocking-page-rule"; then
+    if rest_get "/mgmt/tm/ltm/rule/ssloS_Blocking_Page-rule"; then
         HAS_BP_RULE=1
     fi
     if rest_get "/mgmt/tm/ltm/rule/sslo-tls-verify-rule"; then
@@ -504,13 +514,42 @@ install_blocking_page() {
     if rest_get "/mgmt/tm/sys/file/ifile/blocking-page-html"; then
         HAS_SYS_IFILE=1
     fi
+    ce_block_json=$(curl -sk -u "${BIGUSER}" \
+        "https://localhost/mgmt/shared/iapp/blocks" \
+        | jq -r '.items[]? | select(.name=="ssloS_CertError_Page") | "\(.id) \(.state)"' 2>/dev/null)
+    if [[ -n "${ce_block_json}" ]]; then
+        HAS_CE_BLOCK=1
+        CE_BLOCK_ID="${ce_block_json%% *}"
+        CE_BLOCK_STATE="${ce_block_json##* }"
+    fi
+    if rest_get "/mgmt/tm/sys/application/service/~Common~ssloS_CertError_Page.app~ssloS_CertError_Page"; then
+        HAS_CE_APP_SERVICE=1
+    fi
+    if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_CertError_Page.app"; then
+        HAS_CE_APP_FOLDER=1
+    fi
+    if rest_get "/mgmt/tm/ltm/virtual/ssloS_CertError_Page.app~ssloS_CertError_Page-t-4"; then
+        HAS_CE_T4_VIRTUAL=1
+    fi
+    if rest_get "/mgmt/tm/ltm/rule/ssloS_CertError_Page-rule"; then
+        HAS_CE_RULE=1
+    fi
+    sc_block_json=$(curl -sk -u "${BIGUSER}" \
+        "https://localhost/mgmt/shared/iapp/blocks" \
+        | jq -r '.items[]? | select(.name | test("ssloSC_Block_Page")) | .id' 2>/dev/null | head -1)
+    if [[ -n "${sc_block_json}" ]]; then
+        HAS_SC_BLOCK=1
+    fi
 
     EXISTING=()
-    (( HAS_BP_RULE ))    && EXISTING+=("LTM iRule: blocking-page-rule")
+    (( HAS_BP_RULE ))    && EXISTING+=("LTM iRule: ssloS_Blocking_Page-rule")
+    (( HAS_CE_RULE ))    && EXISTING+=("LTM iRule: ssloS_CertError_Page-rule")
     (( HAS_TLS_RULE ))   && EXISTING+=("LTM iRule: sslo-tls-verify-rule")
     (( HAS_SYS_IFILE ))  && EXISTING+=("System iFile: blocking-page-html")
     (( HAS_LTM_IFILE ))  && EXISTING+=("LTM iFile: blocking-page-html")
     (( HAS_BLOCK ))      && EXISTING+=("iAppsLX block instance: ssloS_Blocking_Page")
+    (( HAS_CE_BLOCK ))   && EXISTING+=("iAppsLX block instance: ssloS_CertError_Page")
+    (( HAS_SC_BLOCK ))   && EXISTING+=("Service chain: ssloSC_Block_Page")
 
     if (( ${#EXISTING[@]} > 0 )); then
         DISCOVERY_CACHED_FOR="blocking_page"
@@ -524,48 +563,52 @@ install_blocking_page() {
     ## Extract embedded payloads to working files.
     info "Extracting embedded payloads"
 
-    cat > "blocking-page-rule" << 'EOF'
-## SSL Orchestrator Service Extension - Advanced Blocking Pages
-## Version: 1.0
-## Date: 2025 Oct 10
-## Author: Kevin Stewart, F5 Networks
-
+    cat > "ssloS_Blocking_Page-rule" << 'EOF'
+# ssloS_Blocking_Page-rule
+# Version: 1.1
+# Unconditional HTTP block page response. This iRule is attached to the ssloS_Blocking_Page service virtual and serves
+# a block page for any request that reaches it. Place the ssloS_Blocking_Page service (via ssloSC_Block_Page service
+# chain) on any security policy rule where traffic should be blocked based on URLDB category or other criteria.
 when RULE_INIT {
-    ## ===========================================
-    ## User-Defined Setting :: GLOBAL BLOCK: Use this Boolean to indicate blocking strategy:
-    ##  0 (off): The iRule logic below determines the blocking behavior, where the blocking service can be placed in all service chains.
-    ##  1  (on): The SSLO policy inserts a static blocking action, where the blocking service is applied to a blocking service chain.
-    ##
-    ## User-Defined Setting :: GLOBAL BLOCK MESSAGE: Send this string to the iFile for any additional messaging on the page.
-    ## ===========================================
-    set static::GLOBAL_BLOCK 0
-    set static::GLOBAL_BLOCK_MESSAGE "This request has been blocked. If you believe you have reached this page in error, please contact support."
+    set static::CATEGORY_BLOCK_MESSAGE "This request has been blocked. If you believe you have reached this page in error, please contact support."
 }
-
-proc GEN_BLOCK_PAGE { msg } {
+proc GEN_CATEGORY_BLOCK_PAGE { msg } {
     set receive_msg $msg
-    HTTP::respond 200 content  [subst -nocommands -nobackslashes [ifile get blocking-page-html]] "Connection" "close"
+    HTTP::respond 200 content [subst -nocommands -nobackslashes [ifile get blocking-page-html]] "Connection" "close"
 }
-
 when HTTP_REQUEST {
-    if { $static::GLOBAL_BLOCK } {
-        call GEN_BLOCK_PAGE ${static::GLOBAL_BLOCK_MESSAGE}
+    call GEN_CATEGORY_BLOCK_PAGE ${static::CATEGORY_BLOCK_MESSAGE}
+    event disable all
+}
+EOF
+
+    cat > "ssloS_CertError_Page-rule" << 'EOF'
+# ssloS_CertError_Page-rule
+# Version: 1.1
+# Conditional HTTP block page response triggered by server-side TLS certificate failures. This iRule is attached to the
+# ssloS_CertError_Page service virtual and reads the ctx(tlsverify) sharedvar populated by sslo-tls-verify-rule. If the
+# server certificate is invalid, a block page is served to the client. If the certificate is valid, traffic passes through
+# unmodified. Place the ssloS_CertError_Page service in any inspection service chain where TLS intercept is enabled.
+proc GEN_CERTERROR_BLOCK_PAGE { msg } {
+    set receive_msg $msg
+    HTTP::respond 200 content [subst -nocommands -nobackslashes [ifile get blocking-page-html]] "Connection" "close"
+}
+when HTTP_REQUEST {
+    sharedvar ctx
+    if { [info exists ctx(tlsverify)] && $ctx(tlsverify) ne "ok" } {
+        call GEN_CERTERROR_BLOCK_PAGE "This request has been blocked due to a server side TLS issue: <br /><br />[string toupper $ctx(tlsverify)]"
         event disable all
-    } else {
-        sharedvar ctx
-        if { ( [info exists ctx(tlsverify)] ) and ( $ctx(tlsverify) ne "ok" ) } {
-            call GEN_BLOCK_PAGE "This request has been blocked due to a server side TLS issue: <br /></br>[string toupper $ctx(tlsverify)]"
-            event disable all
-        }
     }
 }
 EOF
 
     cat > "sslo-tls-verify-rule" << 'EOF'
-## SSL Orchestrator Service Extension - Advanced Blocking Pages (TLS Verification Rule)
-## Version: 1.0
-## Date: 2025 Oct 10
-## Author: Kevin Stewart, F5 Networks
+# sslo-tls-verify-rule
+# Version: 1.1
+# Captures the server-side TLS certificate verification result into the ctx(tlsverify) sharedvar during the SSL handshake.
+# This iRule is not attached to a service - it is added to the SSLO topology Resources. The SSL configuration must set
+# Expire Certificate Response and Untrusted Certificate Authority to Mask for the block page to be served to clients.
+# Used in conjunction with ssloS_CertError_Page-rule.
 
 when SERVERSSL_SERVERCERT {
     sharedvar ctx
@@ -609,8 +652,8 @@ EOF
               },
               "iRuleList": [
                 {
-                  "name": "/Common/blocking-page-rule",
-                  "value": "/Common/blocking-page-rule"
+                  "name": "/Common/ssloS_Blocking_Page-rule",
+                  "value": "/Common/ssloS_Blocking_Page-rule"
                 }
               ]
             },
@@ -684,14 +727,227 @@ EOF
   }
 EOF
 
+    cat > "certerror-page-service" << 'EOF'
+{
+    "name": "sslo_ob_SERVICE_CREATE_ssloS_CertError_Page",
+    "inputProperties": [
+      {
+        "id": "f5-ssl-orchestrator-operation-context",
+        "type": "JSON",
+        "value": {
+          "operationType": "CREATE",
+          "deploymentType": "SERVICE",
+          "deploymentName": "ssloS_CertError_Page",
+          "deploymentReference": "",
+          "partition": "Common",
+          "strictness": true
+        }
+      },
+      {
+        "id": "f5-ssl-orchestrator-service",
+        "type": "JSON",
+        "value": [
+          {
+            "name": "ssloS_CertError_Page",
+            "strictness": false,
+            "customService": {
+              "name": "ssloS_CertError_Page",
+              "ipFamily": "ipv4",
+              "serviceDownAction": "",
+              "serviceType": "f5-tenant-restrictions",
+              "serviceSpecific": {
+                "restrictAccessToTenant": "F5CEP",
+                "restrictAccessContext": "F5CEP",
+                "subType": "o365",
+                "name": "ssloS_CertError_Page"
+              },
+              "iRuleList": [
+                {
+                  "name": "/Common/ssloS_CertError_Page-rule",
+                  "value": "/Common/ssloS_CertError_Page-rule"
+                }
+              ]
+            },
+            "vendorInfo": {
+              "name": "SSLO CertError_Page",
+              "product": "",
+              "model": "",
+              "version": ""
+            },
+            "description": "Type: f5-sslo-certerror-page",
+            "useTemplate": false,
+            "serviceTemplate": "",
+            "partition": "Common",
+            "previousVersion": "11.0",
+            "version": "11.0"
+          }
+        ]
+      },
+      {
+        "id": "f5-ssl-orchestrator-tls",
+        "type": "JSON",
+        "value": {}
+      },
+      {
+        "id": "f5-ssl-orchestrator-authentication",
+        "type": "JSON",
+        "value": []
+      },
+      {
+        "id": "f5-ssl-orchestrator-service-chain",
+        "type": "JSON",
+        "value": []
+      },
+      {
+        "id": "f5-ssl-orchestrator-policy",
+        "type": "JSON",
+        "value": {}
+      },
+      {
+        "id": "f5-ssl-orchestrator-topology",
+        "type": "JSON",
+        "value": {}
+      },
+      {
+        "id": "f5-ssl-orchestrator-intercept-rule",
+        "type": "JSON",
+        "value": []
+      },
+      {
+        "id": "f5-ssl-orchestrator-network",
+        "type": "JSON",
+        "value": []
+      }
+    ],
+    "configurationProcessorReference": {
+      "link": "https://localhost/mgmt/shared/iapp/processors/f5-iappslx-ssl-orchestrator-gc"
+    },
+    "configProcessorTimeoutSeconds": 120,
+    "statsProcessorTimeoutSeconds": 60,
+    "configProcessorAffinity": {
+      "processorPolicy": "LOCAL",
+      "affinityProcessorReference": {
+        "link": "https://localhost/mgmt/shared/iapp/affinity/local"
+      }
+    },
+    "state": "BINDING",
+    "presentationHtmlReference": {
+      "link": "https://localhost/iapps/f5-iappslx-ssl-orchestrator/sgc/sgcIndex.html"
+    },
+    "operation": "CREATE"
+  }
+EOF
 
-    ## Create blocking-page-rule iRule
-    step_screen "Install blocking-page-rule iRule"
+    cat > "blocking-page-chain" << 'EOF'
+{
+    "name": "sslo_ob_SERVICE_CHAIN_CREATE_ssloSC_Block_Page",
+    "inputProperties": [
+      {
+        "id": "f5-ssl-orchestrator-operation-context",
+        "type": "JSON",
+        "value": {
+          "operationType": "CREATE",
+          "deploymentType": "SERVICE_CHAIN",
+          "deploymentName": "ssloSC_Block_Page",
+          "deploymentReference": "",
+          "partition": "Common",
+          "strictness": true
+        }
+      },
+      {
+        "id": "f5-ssl-orchestrator-tls",
+        "type": "JSON",
+        "value": {}
+      },
+      {
+        "id": "f5-ssl-orchestrator-authentication",
+        "type": "JSON",
+        "value": []
+      },
+      {
+        "id": "f5-ssl-orchestrator-service",
+        "type": "JSON",
+        "value": []
+      },
+      {
+        "id": "f5-ssl-orchestrator-service-chain",
+        "type": "JSON",
+        "value": [
+          {
+            "name": "ssloSC_Block_Page",
+            "orderedServiceList": [
+              {
+                "name": "ssloS_Blocking_Page",
+                "serviceType": "f5-tenant-restrictions",
+                "ipFamily": "ipv4"
+              }
+            ],
+            "strictness": false,
+            "partition": "Common",
+            "previousVersion": "11.0",
+            "version": "11.0"
+          }
+        ]
+      },
+      {
+        "id": "f5-ssl-orchestrator-policy",
+        "type": "JSON",
+        "value": {}
+      },
+      {
+        "id": "f5-ssl-orchestrator-topology",
+        "type": "JSON",
+        "value": {}
+      },
+      {
+        "id": "f5-ssl-orchestrator-intercept-rule",
+        "type": "JSON",
+        "value": []
+      },
+      {
+        "id": "f5-ssl-orchestrator-network",
+        "type": "JSON",
+        "value": []
+      }
+    ],
+    "configurationProcessorReference": {
+      "link": "https://localhost/mgmt/shared/iapp/processors/f5-iappslx-ssl-orchestrator-gc"
+    },
+    "configProcessorTimeoutSeconds": 120,
+    "statsProcessorTimeoutSeconds": 60,
+    "configProcessorAffinity": {
+      "processorPolicy": "LOCAL",
+      "affinityProcessorReference": {
+        "link": "https://localhost/mgmt/shared/iapp/affinity/local"
+      }
+    },
+    "state": "BINDING",
+    "presentationHtmlReference": {
+      "link": "https://localhost/iapps/f5-iappslx-ssl-orchestrator/sgc/sgcIndex.html"
+    },
+    "operation": "CREATE"
+  }
+EOF
+
+
+    ## Create ssloS_Blocking_Page-rule iRule
+    step_screen "Install ssloS_Blocking_Page-rule iRule"
     MUTATIONS_STARTED=1
-    python3 rule-converter.py blocking-page-rule
-    rule=$(cat blocking-page-rule.out)
-    data="{\"name\":\"blocking-page-rule\",\"apiAnonymous\":\"${rule}\"}"
-    rest_post "blocking-page-rule iRule created" "/mgmt/tm/ltm/rule" "${data}" \
+    python3 rule-converter.py ssloS_Blocking_Page-rule
+    rule=$(cat ssloS_Blocking_Page-rule.out)
+    data="{\"name\":\"ssloS_Blocking_Page-rule\",\"apiAnonymous\":\"${rule}\"}"
+    rest_post "ssloS_Blocking_Page-rule iRule created" "/mgmt/tm/ltm/rule" "${data}" \
+        || abort "iRule creation failed - cannot continue"
+    step_done
+    sleep 1
+
+
+    ## Create ssloS_CertError_Page-rule iRule
+    step_screen "Install ssloS_CertError_Page-rule iRule"
+    python3 rule-converter.py ssloS_CertError_Page-rule
+    rule=$(cat ssloS_CertError_Page-rule.out)
+    data="{\"name\":\"ssloS_CertError_Page-rule\",\"apiAnonymous\":\"${rule}\"}"
+    rest_post "ssloS_CertError_Page-rule iRule created" "/mgmt/tm/ltm/rule" "${data}" \
         || abort "iRule creation failed - cannot continue"
     step_done
     sleep 1
@@ -726,8 +982,8 @@ EOF
     sleep 1
 
 
-    ## Create SSL Orchestrator blocking-page inspection service
-    step_screen "Create SSL Orchestrator blocking-page inspection service"
+    ## Create SSL Orchestrator Blocking_Page inspection service
+    step_screen "Create SSL Orchestrator Blocking_Page inspection service"
     data="$(cat blocking-page-service)"
     rest_post "SSLO Blocking_Page inspection service created" "/mgmt/shared/iapp/blocks" "${data}" \
         || abort "iAppsLX block instance creation failed - cannot continue"
@@ -735,9 +991,9 @@ EOF
     sleep 1
 
 
-    ## Poll the -t-4 virtual every 10 seconds, up to a 60 second ceiling.
+    ## Poll the Blocking_Page -t-4 virtual every 10 seconds, up to a 60 second ceiling.
     ## The display ticks every second to show the script is alive.
-    step_screen "Wait for SSL Orchestrator to build the service"
+    step_screen "Wait for SSL Orchestrator to build the Blocking_Page service"
     POLL_MAX=60
     POLL_ELAPSED=0
     while (( POLL_ELAPSED < POLL_MAX )); do
@@ -751,40 +1007,40 @@ EOF
         done
     done
     echo
-    (( POLL_ELAPSED >= POLL_MAX )) && abort "Service virtual not ready after ${POLL_MAX}s"
-    ok "Service virtual ready (${POLL_ELAPSED}s)"
+    (( POLL_ELAPSED >= POLL_MAX )) && abort "Blocking_Page service virtual not ready after ${POLL_MAX}s"
+    ok "Blocking_Page service virtual ready (${POLL_ELAPSED}s)"
     step_done
     sleep 1
 
 
-    ## Replace the iRule list on the -t-4 virtual with only blocking-page-rule.
-    step_screen "Clear rules array on the service virtual"
+    ## Replace the iRule list on the Blocking_Page -t-4 virtual with only ssloS_Blocking_Page-rule.
+    step_screen "Clear rules array on the Blocking_Page service virtual"
     rest_patch "rules array cleared" \
         "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4" \
         '{"rules":[]}' \
-        || abort "Failed to clear rules array on service virtual - cannot continue"
+        || abort "Failed to clear rules array on Blocking_Page service virtual - cannot continue"
 
     ## Allow mcpd to commit the clear before the set
     step_done
     sleep 5
 
-    step_screen "Attach blocking-page-rule to the service virtual"
-    rest_patch "blocking-page-rule attached" \
+    step_screen "Attach ssloS_Blocking_Page-rule to the Blocking_Page service virtual"
+    rest_patch "ssloS_Blocking_Page-rule attached" \
         "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4" \
-        '{"rules":["/Common/blocking-page-rule"]}' \
-        || abort "Failed to attach blocking-page-rule to service virtual - cannot continue"
+        '{"rules":["/Common/ssloS_Blocking_Page-rule"]}' \
+        || abort "Failed to attach ssloS_Blocking_Page-rule to service virtual - cannot continue"
 
     ## Allow mcpd to commit the set before verification
     step_done
     sleep 5
 
-    ## Verify the rules list now contains only blocking-page-rule
-    step_screen "Verify virtual rules list"
+    ## Verify the rules list now contains only ssloS_Blocking_Page-rule
+    step_screen "Verify Blocking_Page virtual rules list"
     verify_response=$(curl -sk -u "${BIGUSER}" \
         "https://localhost/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4")
     rules_list=$(echo "${verify_response}" | jq -r '.rules[]?' 2>/dev/null)
-    if [[ "${rules_list}" == "/Common/blocking-page-rule" ]]; then
-        ok "blocking-page-rule is the only iRule attached"
+    if [[ "${rules_list}" == "/Common/ssloS_Blocking_Page-rule" ]]; then
+        ok "ssloS_Blocking_Page-rule is the only iRule attached"
     elif [[ -z "${rules_list}" ]]; then
         warn "Rules array is empty - inspect virtual manually"
     else
@@ -792,6 +1048,111 @@ EOF
         echo "${rules_list}" | while read -r r; do
             echo -e "  ${C_YELLOW}*${C_RESET} ${C_WHITE}${r}${C_RESET}"
         done
+    fi
+    step_done
+    sleep 1
+
+
+    ## Create SSL Orchestrator ssloSC_Block_Page service chain
+    ## The chain depends on the Blocking_Page service, so it must be created after
+    ## the service is verified.
+    step_screen "Create SSL Orchestrator ssloSC_Block_Page service chain"
+    data="$(cat blocking-page-chain)"
+    rest_post "SSLO ssloSC_Block_Page service chain created" "/mgmt/shared/iapp/blocks" "${data}" \
+        || abort "Service chain creation failed - cannot continue"
+    sleep_with_countdown 15 "Waiting for service chain creation:"
+    step_done
+    sleep 1
+
+
+    ## Create SSL Orchestrator CertError_Page inspection service
+    step_screen "Create SSL Orchestrator CertError_Page inspection service"
+    data="$(cat certerror-page-service)"
+    rest_post "SSLO CertError_Page inspection service created" "/mgmt/shared/iapp/blocks" "${data}" \
+        || abort "iAppsLX block instance creation failed - cannot continue"
+    step_done
+    sleep 1
+
+
+    ## Poll the CertError_Page -t-4 virtual every 10 seconds, up to a 60 second ceiling.
+    ## The display ticks every second to show the script is alive.
+    step_screen "Wait for SSL Orchestrator to build the CertError_Page service"
+    POLL_MAX=60
+    POLL_ELAPSED=0
+    while (( POLL_ELAPSED < POLL_MAX )); do
+        if rest_get "/mgmt/tm/ltm/virtual/ssloS_CertError_Page.app~ssloS_CertError_Page-t-4"; then
+            break
+        fi
+        for (( tick=1; tick<=10 && POLL_ELAPSED < POLL_MAX; tick++ )); do
+            POLL_ELAPSED=$(( POLL_ELAPSED + 1 ))
+            printf "\r${C_WHITE}Waiting for service virtual... ${C_BOLD}%d${C_RESET}${C_WHITE}s elapsed${C_RESET}    " "${POLL_ELAPSED}"
+            sleep 1
+        done
+    done
+    echo
+    (( POLL_ELAPSED >= POLL_MAX )) && abort "CertError_Page service virtual not ready after ${POLL_MAX}s"
+    ok "CertError_Page service virtual ready (${POLL_ELAPSED}s)"
+    step_done
+    sleep 1
+
+
+    ## Replace the iRule list on the CertError_Page -t-4 virtual with only ssloS_CertError_Page-rule.
+    step_screen "Clear rules array on the CertError_Page service virtual"
+    rest_patch "rules array cleared" \
+        "/mgmt/tm/ltm/virtual/ssloS_CertError_Page.app~ssloS_CertError_Page-t-4" \
+        '{"rules":[]}' \
+        || abort "Failed to clear rules array on CertError_Page service virtual - cannot continue"
+
+    ## Allow mcpd to commit the clear before the set
+    step_done
+    sleep 5
+
+    step_screen "Attach ssloS_CertError_Page-rule to the CertError_Page service virtual"
+    rest_patch "ssloS_CertError_Page-rule attached" \
+        "/mgmt/tm/ltm/virtual/ssloS_CertError_Page.app~ssloS_CertError_Page-t-4" \
+        '{"rules":["/Common/ssloS_CertError_Page-rule"]}' \
+        || abort "Failed to attach ssloS_CertError_Page-rule to CertError_Page service virtual - cannot continue"
+
+    ## Allow mcpd to commit the set before verification
+    step_done
+    sleep 5
+
+    ## Verify the CertError_Page rules list
+    step_screen "Verify CertError_Page virtual rules list"
+    verify_response=$(curl -sk -u "${BIGUSER}" \
+        "https://localhost/mgmt/tm/ltm/virtual/ssloS_CertError_Page.app~ssloS_CertError_Page-t-4")
+    rules_list=$(echo "${verify_response}" | jq -r '.rules[]?' 2>/dev/null)
+    if [[ "${rules_list}" == "/Common/ssloS_CertError_Page-rule" ]]; then
+        ok "ssloS_CertError_Page-rule is the only iRule attached"
+    elif [[ -z "${rules_list}" ]]; then
+        warn "Rules array is empty - inspect virtual manually"
+    else
+        warn "Unexpected rules on virtual - inspect manually:"
+        echo "${rules_list}" | while read -r r; do
+            echo -e "  ${C_YELLOW}*${C_RESET} ${C_WHITE}${r}${C_RESET}"
+        done
+    fi
+    step_done
+    sleep 1
+
+
+    ## Clean up orphaned tenant-restrictions iRules created by the SSLO framework.
+    ## The f5-tenant-restrictions service type creates these automatically, but they
+    ## are no longer referenced after we patch the VS with our own iRules.
+    step_screen "Remove orphaned tenant-restrictions iRules"
+    if rest_get "/mgmt/tm/ltm/rule/ssloS_Blocking_Page.app~ssloS_Blocking_Page-f5-tenant-restrictions"; then
+        rest_delete "ssloS_Blocking_Page-f5-tenant-restrictions removed" \
+            "/mgmt/tm/ltm/rule/ssloS_Blocking_Page.app~ssloS_Blocking_Page-f5-tenant-restrictions" \
+            || warn "Could not remove ssloS_Blocking_Page-f5-tenant-restrictions - remove manually"
+    else
+        info "ssloS_Blocking_Page-f5-tenant-restrictions not found (already clean)"
+    fi
+    if rest_get "/mgmt/tm/ltm/rule/ssloS_CertError_Page.app~ssloS_CertError_Page-f5-tenant-restrictions"; then
+        rest_delete "ssloS_CertError_Page-f5-tenant-restrictions removed" \
+            "/mgmt/tm/ltm/rule/ssloS_CertError_Page.app~ssloS_CertError_Page-f5-tenant-restrictions" \
+            || warn "Could not remove ssloS_CertError_Page-f5-tenant-restrictions - remove manually"
+    else
+        info "ssloS_CertError_Page-f5-tenant-restrictions not found (already clean)"
     fi
     step_done
     sleep 1
@@ -808,13 +1169,21 @@ EOF
     echo
     echo -e "${C_WHITE}The following objects were created on the BIG-IP:${C_RESET}"
     echo
-    echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iRule:${C_RESET}        blocking-page-rule"
+    echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iRule:${C_RESET}        ssloS_Blocking_Page-rule"
+    echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iRule:${C_RESET}        ssloS_CertError_Page-rule"
     echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iRule:${C_RESET}        sslo-tls-verify-rule"
     echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}System iFile:${C_RESET}     blocking-page-html"
     echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}LTM iFile:${C_RESET}        blocking-page-html"
     echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}iAppsLX block:${C_RESET}    ssloS_Blocking_Page"
+    echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}iAppsLX block:${C_RESET}    ssloS_CertError_Page"
+    echo -e "  ${C_GREEN}*${C_RESET} ${C_WHITE}Service chain:${C_RESET}    ssloSC_Block_Page"
     echo
-    echo -e "${C_WHITE}Based on Kevin Stewart's original script:${C_RESET}"
+    echo -e "${C_YELLOW}NOTE: For the CertError_Page to function, the SSLO SSL configuration must be updated:${C_RESET}"
+    echo -e "${C_YELLOW}  - Set Expire Certificate Response to Mask${C_RESET}"
+    echo -e "${C_YELLOW}  - Set Untrusted Certificate Authority to Mask${C_RESET}"
+    echo -e "${C_YELLOW}  - Add sslo-tls-verify-rule to the topology Resources${C_RESET}"
+    echo
+    echo -e "${C_WHITE}Based on Kevin Stewart's 1.0 extensions${C_RESET}"
     echo -e "${C_WHITE}https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages${C_RESET}"
     echo
 }
@@ -823,13 +1192,20 @@ EOF
 ## UNINSTALLER
 ## ---------------------------------------------------------------------------
 uninstall_blocking_page() {
-    INSTALL_TOTAL=8
+    INSTALL_TOTAL=12
     echo -e "${C_WHITE}Objects to be removed:${C_RESET}"
+    echo -e "${C_WHITE}  - Service chain:    ssloSC_Block_Page${C_RESET}"
     echo -e "${C_WHITE}  - iAppsLX block:    ssloS_Blocking_Page${C_RESET}"
+    echo -e "${C_WHITE}  - iAppsLX block:    ssloS_CertError_Page${C_RESET}"
     echo -e "${C_WHITE}  - LTM iFile:        blocking-page-html${C_RESET}"
     echo -e "${C_WHITE}  - System iFile:     blocking-page-html${C_RESET}"
     echo -e "${C_WHITE}  - LTM iRule:        sslo-tls-verify-rule${C_RESET}"
-    echo -e "${C_WHITE}  - LTM iRule:        blocking-page-rule${C_RESET}"
+    echo -e "${C_WHITE}  - LTM iRule:        ssloS_CertError_Page-rule${C_RESET}"
+    echo -e "${C_WHITE}  - LTM iRule:        ssloS_Blocking_Page-rule${C_RESET}"
+    echo
+    echo -e "${C_YELLOW}IMPORTANT: Before proceeding, ensure that ssloS_Blocking_Page, ssloS_CertError_Page,${C_RESET}"
+    echo -e "${C_YELLOW}and ssloSC_Block_Page are removed from all security policy rules and service chains.${C_RESET}"
+    echo -e "${C_YELLOW}Uninstalling while objects are still referenced will cause MCP desync.${C_RESET}"
     echo
     echo -e "${C_WHITE}To proceed, type CONFIRM (case sensitive). Anything else aborts.${C_RESET}"
     read -p "$(echo -e "${C_WHITE}Confirm: ${C_RESET}")" confirmation
@@ -857,11 +1233,21 @@ uninstall_blocking_page() {
             HAS_BLOCK=0
             BLOCK_ID=""
             BLOCK_STATE=""
+            HAS_CE_BLOCK=0
+            CE_BLOCK_ID=""
+            CE_BLOCK_STATE=""
             HAS_APP_SERVICE=0
+            HAS_CE_APP_SERVICE=0
             HAS_APP_FOLDER=0
+            HAS_CE_APP_FOLDER=0
             HAS_T4_VIRTUAL=0
+            HAS_CE_T4_VIRTUAL=0
             HAS_BP_RULE=0
+            HAS_CE_RULE=0
             HAS_TLS_RULE=0
+            HAS_SC_BLOCK=0
+            SC_BLOCK_ID=""
+            SC_BLOCK_STATE=""
             HAS_LTM_IFILE=0
             HAS_SYS_IFILE=0
 
@@ -874,17 +1260,38 @@ uninstall_blocking_page() {
                 BLOCK_STATE="${block_json##* }"
             fi
 
+            ce_block_json=$(curl -sk -u "${BIGUSER}" \
+                "https://localhost/mgmt/shared/iapp/blocks" \
+                | jq -r '.items[]? | select(.name=="ssloS_CertError_Page") | "\(.id) \(.state)"' 2>/dev/null)
+            if [[ -n "${ce_block_json}" ]]; then
+                HAS_CE_BLOCK=1
+                CE_BLOCK_ID="${ce_block_json%% *}"
+                CE_BLOCK_STATE="${ce_block_json##* }"
+            fi
+
             if rest_get "/mgmt/tm/sys/application/service/~Common~ssloS_Blocking_Page.app~ssloS_Blocking_Page"; then
                 HAS_APP_SERVICE=1
+            fi
+            if rest_get "/mgmt/tm/sys/application/service/~Common~ssloS_CertError_Page.app~ssloS_CertError_Page"; then
+                HAS_CE_APP_SERVICE=1
             fi
             if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_Blocking_Page.app"; then
                 HAS_APP_FOLDER=1
             fi
+            if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_CertError_Page.app"; then
+                HAS_CE_APP_FOLDER=1
+            fi
             if rest_get "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4"; then
                 HAS_T4_VIRTUAL=1
             fi
-            if rest_get "/mgmt/tm/ltm/rule/blocking-page-rule"; then
+            if rest_get "/mgmt/tm/ltm/virtual/ssloS_CertError_Page.app~ssloS_CertError_Page-t-4"; then
+                HAS_CE_T4_VIRTUAL=1
+            fi
+            if rest_get "/mgmt/tm/ltm/rule/ssloS_Blocking_Page-rule"; then
                 HAS_BP_RULE=1
+            fi
+            if rest_get "/mgmt/tm/ltm/rule/ssloS_CertError_Page-rule"; then
+                HAS_CE_RULE=1
             fi
             if rest_get "/mgmt/tm/ltm/rule/sslo-tls-verify-rule"; then
                 HAS_TLS_RULE=1
@@ -895,34 +1302,72 @@ uninstall_blocking_page() {
             if rest_get "/mgmt/tm/sys/file/ifile/blocking-page-html"; then
                 HAS_SYS_IFILE=1
             fi
+            sc_block_json=$(curl -sk -u "${BIGUSER}" \
+                "https://localhost/mgmt/shared/iapp/blocks" \
+                | jq -r '.items[]? | select(.name=="ssloSC_Block_Page") | "\(.id) \(.state)"' 2>/dev/null)
+            if [[ -n "${sc_block_json}" ]]; then
+                HAS_SC_BLOCK=1
+                SC_BLOCK_ID="${sc_block_json%% *}"
+                SC_BLOCK_STATE="${sc_block_json##* }"
+            fi
         fi
 
         echo
         info "Discovery results:"
         if (( HAS_BLOCK )); then
-            echo -e "  ${C_WHITE}* iAppsLX block instance:          found (${BLOCK_STATE})${C_RESET}"
+            echo -e "  ${C_WHITE}* Blocking_Page block instance:    found (${BLOCK_STATE})${C_RESET}"
         else
-            echo -e "  ${C_WHITE}* iAppsLX block instance:          not present${C_RESET}"
+            echo -e "  ${C_WHITE}* Blocking_Page block instance:    not present${C_RESET}"
+        fi
+        if (( HAS_CE_BLOCK )); then
+            echo -e "  ${C_WHITE}* CertError_Page block instance:   found (${CE_BLOCK_STATE})${C_RESET}"
+        else
+            echo -e "  ${C_WHITE}* CertError_Page block instance:   not present${C_RESET}"
+        fi
+        if (( HAS_SC_BLOCK )); then
+            echo -e "  ${C_WHITE}* ssloSC_Block_Page chain:         found (${SC_BLOCK_STATE})${C_RESET}"
+        else
+            echo -e "  ${C_WHITE}* ssloSC_Block_Page chain:         not present${C_RESET}"
         fi
         if (( HAS_APP_SERVICE )); then
-            echo -e "  ${C_WHITE}* iAppsLX application service:     found${C_RESET}"
+            echo -e "  ${C_WHITE}* Blocking_Page app service:       found${C_RESET}"
         else
-            echo -e "  ${C_WHITE}* iAppsLX application service:     not present${C_RESET}"
+            echo -e "  ${C_WHITE}* Blocking_Page app service:       not present${C_RESET}"
+        fi
+        if (( HAS_CE_APP_SERVICE )); then
+            echo -e "  ${C_WHITE}* CertError_Page app service:      found${C_RESET}"
+        else
+            echo -e "  ${C_WHITE}* CertError_Page app service:      not present${C_RESET}"
         fi
         if (( HAS_APP_FOLDER )); then
-            echo -e "  ${C_WHITE}* .app folder:                     found${C_RESET}"
+            echo -e "  ${C_WHITE}* Blocking_Page .app folder:       found${C_RESET}"
         else
-            echo -e "  ${C_WHITE}* .app folder:                     not present${C_RESET}"
+            echo -e "  ${C_WHITE}* Blocking_Page .app folder:       not present${C_RESET}"
+        fi
+        if (( HAS_CE_APP_FOLDER )); then
+            echo -e "  ${C_WHITE}* CertError_Page .app folder:      found${C_RESET}"
+        else
+            echo -e "  ${C_WHITE}* CertError_Page .app folder:      not present${C_RESET}"
         fi
         if (( HAS_T4_VIRTUAL )); then
-            echo -e "  ${C_WHITE}* ssloS_Blocking_Page-t-4 virtual: found${C_RESET}"
+            echo -e "  ${C_WHITE}* Blocking_Page-t-4 virtual:       found${C_RESET}"
         else
-            echo -e "  ${C_WHITE}* ssloS_Blocking_Page-t-4 virtual: not present${C_RESET}"
+            echo -e "  ${C_WHITE}* Blocking_Page-t-4 virtual:       not present${C_RESET}"
+        fi
+        if (( HAS_CE_T4_VIRTUAL )); then
+            echo -e "  ${C_WHITE}* CertError_Page-t-4 virtual:      found${C_RESET}"
+        else
+            echo -e "  ${C_WHITE}* CertError_Page-t-4 virtual:      not present${C_RESET}"
         fi
         if (( HAS_BP_RULE )); then
-            echo -e "  ${C_WHITE}* blocking-page-rule iRule:        found${C_RESET}"
+            echo -e "  ${C_WHITE}* ssloS_Blocking_Page-rule iRule:        found${C_RESET}"
         else
-            echo -e "  ${C_WHITE}* blocking-page-rule iRule:        not present${C_RESET}"
+            echo -e "  ${C_WHITE}* ssloS_Blocking_Page-rule iRule:        not present${C_RESET}"
+        fi
+        if (( HAS_CE_RULE )); then
+            echo -e "  ${C_WHITE}* ssloS_CertError_Page-rule iRule:       found${C_RESET}"
+        else
+            echo -e "  ${C_WHITE}* ssloS_CertError_Page-rule iRule:       not present${C_RESET}"
         fi
         if (( HAS_TLS_RULE )); then
             echo -e "  ${C_WHITE}* sslo-tls-verify-rule iRule:      found${C_RESET}"
@@ -941,8 +1386,11 @@ uninstall_blocking_page() {
         fi
         echo
 
-        if (( HAS_BLOCK == 0 && HAS_APP_SERVICE == 0 && HAS_APP_FOLDER == 0 \
-            && HAS_T4_VIRTUAL == 0 && HAS_BP_RULE == 0 && HAS_TLS_RULE == 0 \
+        if (( HAS_BLOCK == 0 && HAS_CE_BLOCK == 0 && HAS_SC_BLOCK == 0 \
+            && HAS_APP_SERVICE == 0 && HAS_CE_APP_SERVICE == 0 \
+            && HAS_APP_FOLDER == 0 && HAS_CE_APP_FOLDER == 0 \
+            && HAS_T4_VIRTUAL == 0 && HAS_CE_T4_VIRTUAL == 0 \
+            && HAS_BP_RULE == 0 && HAS_CE_RULE == 0 && HAS_TLS_RULE == 0 \
             && HAS_LTM_IFILE == 0 && HAS_SYS_IFILE == 0 )); then
             ok "Nothing to remove. The BIG-IP is already clean."
             echo
@@ -953,15 +1401,62 @@ uninstall_blocking_page() {
         sleep 2
 
         ## -----------------------------------------------------------------------
-        ## Phase 2: Remove the iAppsLX block instance (if present)
+        ## Phase 2: Remove the ssloSC_Block_Page service chain
         ## -----------------------------------------------------------------------
-        step_screen "Remove the iAppsLX block instance"
+        ## The chain depends on the Blocking_Page service, so it must be removed
+        ## before the service can be deleted.
+        step_screen "Remove the ssloSC_Block_Page service chain"
+        MUTATIONS_STARTED=1
+        if (( HAS_SC_BLOCK == 0 )); then
+            info "No ssloSC_Block_Page service chain to remove"
+            SKIPPED+=("Service chain: ssloSC_Block_Page")
+        else
+            info "Found ssloSC_Block_Page chain block in state: ${SC_BLOCK_STATE}"
+            case "${SC_BLOCK_STATE}" in
+                BOUND)
+                    info "Triggering iAppsLX unbind workflow"
+                    if rest_patch "block state set to UNBINDING" \
+                        "/mgmt/shared/iapp/blocks/${SC_BLOCK_ID}" \
+                        '{"state":"UNBINDING"}'; then
+                        sleep_with_countdown 15 "Waiting for unbind to complete:"
+                    fi
+                    ;;
+                UNBINDING)
+                    info "Block already UNBINDING - waiting for completion"
+                    sleep_with_countdown 15 "Waiting for unbind to complete:"
+                    ;;
+                UNBOUND|ERROR)
+                    info "Block already unbound"
+                    ;;
+                *)
+                    warn "Unexpected state '${SC_BLOCK_STATE}' - trying unbind"
+                    rest_patch "block state set to UNBINDING" \
+                        "/mgmt/shared/iapp/blocks/${SC_BLOCK_ID}" \
+                        '{"state":"UNBINDING"}' || true
+                    sleep_with_countdown 15 "Waiting for unbind to complete:"
+                    ;;
+            esac
+
+            if rest_delete "service chain block instance deleted" \
+                "/mgmt/shared/iapp/blocks/${SC_BLOCK_ID}"; then
+                REMOVED+=("Service chain: ssloSC_Block_Page")
+            else
+                FAILED+=("Service chain: ssloSC_Block_Page (delete failed)")
+            fi
+        fi
+        step_done
+        sleep 1
+
+        ## -----------------------------------------------------------------------
+        ## Phase 3: Remove the Blocking_Page iAppsLX block instance (if present)
+        ## -----------------------------------------------------------------------
+        step_screen "Remove the Blocking_Page iAppsLX block instance"
         MUTATIONS_STARTED=1
         if (( HAS_BLOCK == 0 )); then
-            info "No iAppsLX block instance to remove"
+            info "No Blocking_Page iAppsLX block instance to remove"
             SKIPPED+=("iAppsLX block instance: ssloS_Blocking_Page")
         else
-            info "Found iAppsLX block instance in state: ${BLOCK_STATE}"
+            info "Found Blocking_Page iAppsLX block instance in state: ${BLOCK_STATE}"
             case "${BLOCK_STATE}" in
                 BOUND)
                     info "Triggering iAppsLX unbind workflow"
@@ -976,7 +1471,7 @@ uninstall_blocking_page() {
                     sleep_with_countdown 15 "Waiting for unbind to complete:"
                     ;;
                 UNBOUND|ERROR)
-                    info "Phase 3 will remove the iAppsLX application service"
+                    info "Phase 4 will remove the iAppsLX application service"
                     ;;
                 *)
                     warn "Unexpected state '${BLOCK_STATE}' - trying unbind"
@@ -998,12 +1493,12 @@ uninstall_blocking_page() {
         sleep 1
 
         ## -----------------------------------------------------------------------
-        ## Phase 3: Delete the iAppsLX application service
+        ## Phase 4: Delete the Blocking_Page iAppsLX application service
         ## -----------------------------------------------------------------------
         ## Deleting the application service cascades and removes the .app
         ## folder, the connector profile, the -t-4 virtual, and any other
         ## framework-managed objects inside it.
-        step_screen "Delete the iAppsLX application service"
+        step_screen "Delete the Blocking_Page iAppsLX application service"
 
         if rest_get "/mgmt/tm/sys/application/service/~Common~ssloS_Blocking_Page.app~ssloS_Blocking_Page"; then
             if rest_delete "iAppsLX application service deleted" \
@@ -1024,29 +1519,118 @@ uninstall_blocking_page() {
         sleep 1
 
         ## -----------------------------------------------------------------------
-        ## Phase 4: Delete blocking-page-rule iRule
+        ## Phase 5: Remove the CertError_Page iAppsLX block instance
         ## -----------------------------------------------------------------------
-        step_screen "Remove iRule blocking-page-rule"
-        if rest_get "/mgmt/tm/ltm/rule/blocking-page-rule"; then
-            if rest_delete "iRule blocking-page-rule deleted" \
-                "/mgmt/tm/ltm/rule/blocking-page-rule"; then
-                REMOVED+=("LTM iRule: blocking-page-rule")
-            else
-                FAILED+=("LTM iRule: blocking-page-rule")
-            fi
+        step_screen "Remove the CertError_Page iAppsLX block instance"
+        if (( HAS_CE_BLOCK == 0 )); then
+            info "No CertError_Page iAppsLX block instance to remove"
+            SKIPPED+=("iAppsLX block instance: ssloS_CertError_Page")
         else
-            info "iRule blocking-page-rule not found"
-            if (( HAS_BP_RULE )); then
-                REMOVED+=("LTM iRule: blocking-page-rule")
+            info "Found CertError_Page iAppsLX block instance in state: ${CE_BLOCK_STATE}"
+            case "${CE_BLOCK_STATE}" in
+                BOUND)
+                    info "Triggering iAppsLX unbind workflow"
+                    if rest_patch "block state set to UNBINDING" \
+                        "/mgmt/shared/iapp/blocks/${CE_BLOCK_ID}" \
+                        '{"state":"UNBINDING"}'; then
+                        sleep_with_countdown 15 "Waiting for unbind to complete:"
+                    fi
+                    ;;
+                UNBINDING)
+                    info "Block already UNBINDING - waiting for completion"
+                    sleep_with_countdown 15 "Waiting for unbind to complete:"
+                    ;;
+                UNBOUND|ERROR)
+                    info "Phase 6 will remove the iAppsLX application service"
+                    ;;
+                *)
+                    warn "Unexpected state '${CE_BLOCK_STATE}' - trying unbind"
+                    rest_patch "block state set to UNBINDING" \
+                        "/mgmt/shared/iapp/blocks/${CE_BLOCK_ID}" \
+                        '{"state":"UNBINDING"}' || true
+                    sleep_with_countdown 15 "Waiting for unbind to complete:"
+                    ;;
+            esac
+
+            if rest_delete "iAppsLX block instance deleted" \
+                "/mgmt/shared/iapp/blocks/${CE_BLOCK_ID}"; then
+                REMOVED+=("iAppsLX block instance: ssloS_CertError_Page")
             else
-                SKIPPED+=("LTM iRule: blocking-page-rule")
+                FAILED+=("iAppsLX block instance: ssloS_CertError_Page (delete failed)")
             fi
         fi
         step_done
         sleep 1
 
         ## -----------------------------------------------------------------------
-        ## Phase 5: Delete LTM iFile blocking-page-html
+        ## Phase 6: Delete the CertError_Page iAppsLX application service
+        ## -----------------------------------------------------------------------
+        step_screen "Delete the CertError_Page iAppsLX application service"
+
+        if rest_get "/mgmt/tm/sys/application/service/~Common~ssloS_CertError_Page.app~ssloS_CertError_Page"; then
+            if rest_delete "iAppsLX application service deleted" \
+                "/mgmt/tm/sys/application/service/~Common~ssloS_CertError_Page.app~ssloS_CertError_Page"; then
+                REMOVED+=("iAppsLX application service: ssloS_CertError_Page")
+                sleep_with_countdown 10 "Waiting for .app folder teardown:"
+            else
+                FAILED+=("iAppsLX application service: ssloS_CertError_Page (delete failed)")
+            fi
+        else
+            info "CertError_Page iAppsLX application service not present"
+            if (( HAS_CE_APP_FOLDER || HAS_CE_T4_VIRTUAL )); then
+                warn ".app folder or virtual present, no app service"
+                warn "Orphaned state - manual cleanup may be required"
+            fi
+        fi
+        step_done
+        sleep 1
+
+        ## -----------------------------------------------------------------------
+        ## Phase 7: Delete ssloS_Blocking_Page-rule iRule
+        ## -----------------------------------------------------------------------
+        step_screen "Remove iRule ssloS_Blocking_Page-rule"
+        if rest_get "/mgmt/tm/ltm/rule/ssloS_Blocking_Page-rule"; then
+            if rest_delete "iRule ssloS_Blocking_Page-rule deleted" \
+                "/mgmt/tm/ltm/rule/ssloS_Blocking_Page-rule"; then
+                REMOVED+=("LTM iRule: ssloS_Blocking_Page-rule")
+            else
+                FAILED+=("LTM iRule: ssloS_Blocking_Page-rule")
+            fi
+        else
+            info "iRule ssloS_Blocking_Page-rule not found"
+            if (( HAS_BP_RULE )); then
+                REMOVED+=("LTM iRule: ssloS_Blocking_Page-rule")
+            else
+                SKIPPED+=("LTM iRule: ssloS_Blocking_Page-rule")
+            fi
+        fi
+        step_done
+        sleep 1
+
+        ## -----------------------------------------------------------------------
+        ## Phase 8: Delete ssloS_CertError_Page-rule iRule
+        ## -----------------------------------------------------------------------
+        step_screen "Remove iRule ssloS_CertError_Page-rule"
+        if rest_get "/mgmt/tm/ltm/rule/ssloS_CertError_Page-rule"; then
+            if rest_delete "iRule ssloS_CertError_Page-rule deleted" \
+                "/mgmt/tm/ltm/rule/ssloS_CertError_Page-rule"; then
+                REMOVED+=("LTM iRule: ssloS_CertError_Page-rule")
+            else
+                FAILED+=("LTM iRule: ssloS_CertError_Page-rule")
+            fi
+        else
+            info "iRule ssloS_CertError_Page-rule not found"
+            if (( HAS_CE_RULE )); then
+                REMOVED+=("LTM iRule: ssloS_CertError_Page-rule")
+            else
+                SKIPPED+=("LTM iRule: ssloS_CertError_Page-rule")
+            fi
+        fi
+        step_done
+        sleep 1
+
+        ## -----------------------------------------------------------------------
+        ## Phase 9: Delete LTM iFile blocking-page-html
         ## -----------------------------------------------------------------------
         step_screen "Remove LTM iFile blocking-page-html"
         if rest_get "/mgmt/tm/ltm/ifile/blocking-page-html"; then
@@ -1068,7 +1652,7 @@ uninstall_blocking_page() {
         sleep 1
 
         ## -----------------------------------------------------------------------
-        ## Phase 6: Delete system iFile blocking-page-html
+        ## Phase 10: Delete system iFile blocking-page-html
         ## -----------------------------------------------------------------------
         step_screen "Remove system iFile blocking-page-html"
         if rest_get "/mgmt/tm/sys/file/ifile/blocking-page-html"; then
@@ -1090,7 +1674,7 @@ uninstall_blocking_page() {
         sleep 1
 
         ## -----------------------------------------------------------------------
-        ## Phase 7: Delete sslo-tls-verify-rule iRule 
+        ## Phase 11: Delete sslo-tls-verify-rule iRule 
         ## -----------------------------------------------------------------------
         step_screen "Remove iRule sslo-tls-verify-rule"
         if rest_get "/mgmt/tm/ltm/rule/sslo-tls-verify-rule"; then
@@ -1112,7 +1696,7 @@ uninstall_blocking_page() {
         sleep 1
 
         ## -----------------------------------------------------------------------
-        ## Phase 8: Final verification
+        ## Phase 12: Final verification
         ## -----------------------------------------------------------------------
         step_screen "Final verification"
         echo -e "${C_WHITE}Re-scanning the BIG-IP to confirm state${C_RESET}"
@@ -1124,14 +1708,29 @@ uninstall_blocking_page() {
         if echo "${REST_RESPONSE_BODY}" | jq -e '.items[]? | select(.name=="ssloS_Blocking_Page")' >/dev/null 2>&1; then
             LEFTOVERS+=("iAppsLX block instance: ssloS_Blocking_Page")
         fi
+        if echo "${REST_RESPONSE_BODY}" | jq -e '.items[]? | select(.name=="ssloS_CertError_Page")' >/dev/null 2>&1; then
+            LEFTOVERS+=("iAppsLX block instance: ssloS_CertError_Page")
+        fi
+        if echo "${REST_RESPONSE_BODY}" | jq -e '.items[]? | select(.name=="ssloSC_Block_Page")' >/dev/null 2>&1; then
+            LEFTOVERS+=("Service chain: ssloSC_Block_Page")
+        fi
         if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_Blocking_Page.app"; then
             LEFTOVERS+=(".app folder: /Common/ssloS_Blocking_Page.app")
+        fi
+        if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_CertError_Page.app"; then
+            LEFTOVERS+=(".app folder: /Common/ssloS_CertError_Page.app")
         fi
         if rest_get "/mgmt/tm/ltm/virtual/ssloS_Blocking_Page.app~ssloS_Blocking_Page-t-4"; then
             LEFTOVERS+=("Virtual: ssloS_Blocking_Page-t-4")
         fi
-        if rest_get "/mgmt/tm/ltm/rule/blocking-page-rule"; then
-            LEFTOVERS+=("LTM iRule: blocking-page-rule")
+        if rest_get "/mgmt/tm/ltm/virtual/ssloS_CertError_Page.app~ssloS_CertError_Page-t-4"; then
+            LEFTOVERS+=("Virtual: ssloS_CertError_Page-t-4")
+        fi
+        if rest_get "/mgmt/tm/ltm/rule/ssloS_Blocking_Page-rule"; then
+            LEFTOVERS+=("LTM iRule: ssloS_Blocking_Page-rule")
+        fi
+        if rest_get "/mgmt/tm/ltm/rule/ssloS_CertError_Page-rule"; then
+            LEFTOVERS+=("LTM iRule: ssloS_CertError_Page-rule")
         fi
         if rest_get "/mgmt/tm/ltm/rule/sslo-tls-verify-rule"; then
             LEFTOVERS+=("LTM iRule: sslo-tls-verify-rule")
@@ -1144,7 +1743,7 @@ uninstall_blocking_page() {
         fi
 
         if (( ${#LEFTOVERS[@]} == 0 )); then
-            ok "All Blocking_Page components removed"
+            ok "All Blocking_Page and CertError_Page components removed"
         else
             fail "The following objects are still on the BIG-IP:"
             for o in "${LEFTOVERS[@]}"; do
@@ -1222,7 +1821,7 @@ uninstall_blocking_page() {
 ## INSTALLER
 ## ---------------------------------------------------------------------------
 install_doh_guardian() {
-    INSTALL_TOTAL=6
+    INSTALL_TOTAL=7
     echo -e "${C_WHITE}Objects to be created:${C_RESET}"
     echo -e "${C_WHITE}  - LTM iRule:        doh-guardian-rule${C_RESET}"
     echo -e "${C_WHITE}  - iAppsLX block:    ssloS_DoH_Guard${C_RESET}"
@@ -1320,9 +1919,8 @@ install_doh_guardian() {
 
     cat > "doh-guardian-rule" << 'DOH_GUARDIAN_RULE_EOF'
 ## SSL Orchestrator Service Extension - DNS-over-HTTP Guardian
-## Version: 1.0
-## Date: 2025 Aug 06
-## Author: Kevin Stewart, F5 Networks
+## Version: 1.1
+## Based on Kevin Stewart's 1.0 extensions
 
 when RULE_INIT {
     ## ===========================================
@@ -2075,6 +2673,21 @@ DOH_GUARDIAN_SERVICE_EOF
     sleep 1
 
 
+    ## Clean up orphaned tenant-restrictions iRule created by the SSLO framework.
+    ## The f5-tenant-restrictions service type creates this automatically, but it
+    ## is no longer referenced after we patch the VS with our own iRule.
+    step_screen "Remove orphaned tenant-restrictions iRule"
+    if rest_get "/mgmt/tm/ltm/rule/ssloS_DoH_Guard.app~ssloS_DoH_Guard-f5-tenant-restrictions"; then
+        rest_delete "ssloS_DoH_Guard-f5-tenant-restrictions removed" \
+            "/mgmt/tm/ltm/rule/ssloS_DoH_Guard.app~ssloS_DoH_Guard-f5-tenant-restrictions" \
+            || warn "Could not remove ssloS_DoH_Guard-f5-tenant-restrictions - remove manually"
+    else
+        info "ssloS_DoH_Guard-f5-tenant-restrictions not found (already clean)"
+    fi
+    step_done
+    sleep 1
+
+
     ## ===========================================================================
     ## Optional sinkhole install
     ## ===========================================================================
@@ -2099,7 +2712,7 @@ DOH_GUARDIAN_SERVICE_EOF
     SINKHOLE_INSTALLED=0
     if [[ "${sinkhole_choice}" == "CONFIRM" ]]; then
         SINKHOLE_INSTALLED=1
-        INSTALL_TOTAL=12
+        INSTALL_TOTAL=13
 
         ## -----------------------------------------------------------------------
         ## Sinkhole Step 1: Generate cert and key with openssl. The cert has
@@ -2214,7 +2827,7 @@ DOH_GUARDIAN_SERVICE_EOF
         echo -e "${C_WHITE}Sinkhole components were not installed.${C_RESET}"
     fi
     echo
-    echo -e "${C_WHITE}Based on Kevin Stewart's original script:${C_RESET}"
+    echo -e "${C_WHITE}Based on Kevin Stewart's 1.0 extensions${C_RESET}"
     echo -e "${C_WHITE}https://github.com/f5devcentral/sslo-service-extensions/tree/main/doh-guardian${C_RESET}"
     echo
 }
