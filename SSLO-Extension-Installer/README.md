@@ -1,6 +1,6 @@
 # SSL Orchestrator Service Extensions Installer
 
-Unified installer and uninstaller for Kevin Stewart's F5 SSL Orchestrator service extensions which have been directly incorporated into this tool.
+Unified installer and uninstaller for F5 SSL Orchestrator service extensions, based on Kevin Stewart's original 1.0 work. These extensions have been directly incorporated into this tool and modified to address architectural limitations in the originals.
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
@@ -9,16 +9,57 @@ Unified installer and uninstaller for Kevin Stewart's F5 SSL Orchestrator servic
 ![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
 ![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
 
-This was built for 'closed network' organizations that cannot use Kevin's GitHub-dependent installers. Single self-contained script with no runtime network dependencies and full extension uninstall support. The blocking-page-html was kept separate for ease of editing. The only change I have made to Kevin's extensions was to change "F5-Advanced-Blocking-Pages" to simply "Blocking_Page" so the name would not be truncated in the SSLO GUI. No functional changes were made to Kevin's code.
+## Why This Exists
 
-Note: If you install any of Kevin's extensions and then run F5's 'sslofix' script you will be locked in an "MCP Desync" state. If you run sslofix in diagnostic mode with SSLO service extensions installed it will always report duplicate blocks. This is because Kevin's current extension technique is to repurpose the "F5 Tenant Restrictions" service within SSLO. 
+This tool was built for two reasons:
+
+**Closed network support.** Kevin's original installers pull iRules, iFiles, and service definitions from GitHub at runtime. Organizations operating in closed or air-gapped networks cannot use them. This installer is fully self-contained with all payloads embedded directly in the script. The only external file is `blocking-page-html`, kept separate for ease of editing.
+
+**Architectural corrections.** Kevin's Advanced Blocking Pages extension used a single iRule with a static boolean toggle (`GLOBAL_BLOCK`) to switch between two distinct functions: unconditional category blocking and conditional server certificate error blocking. Because the toggle is global, the two functions are mutually exclusive - you cannot use both simultaneously across different service chains. This installer splits them into discrete SSLO services, each with a single clearly defined role, managed entirely through the SSLO GUI.
+
+## What Changed From Kevin's 1.0
+
+Kevin's original Advanced Blocking Pages extension creates one service (`ssloS_F5_Advanced-Blocking-Pages`) with one iRule that handles both category blocking and TLS verify blocking via a toggle. The user must choose one or the other.
+
+This installer replaces that with three objects:
+
+| Object | Type | Purpose |
+|--------|------|---------|
+| `ssloS_Blocking_Page` | Inspection Service | Unconditional block page. Every request that reaches this service is blocked. |
+| `ssloS_CertError_Page` | Inspection Service | Conditional block page. Only blocks when the server-side TLS certificate fails verification. Passes traffic through unmodified when the certificate is valid. |
+| `ssloSC_Block_Page` | Service Chain | Pre-built service chain containing only `ssloS_Blocking_Page`, ready to assign to any security policy rule. |
+
+Each service has its own iRule with a unique proc name, eliminating the global namespace collision that would occur if both were attached to the same virtual server.
+
+The `sslo-tls-verify-rule` iRule is unchanged from Kevin's original. It captures the server certificate verification result into a sharedvar and is added to the SSLO topology Resources - not to a service.
+
+## How To Use the Services
+
+**Category blocking (URLDB, custom rules, etc.):**
+Assign `ssloSC_Block_Page` as the service chain on any security policy rule where traffic should be blocked. The `ssloS_Blocking_Page` service is the only member of this chain and will unconditionally serve a block page to the client.
+
+**Server certificate error blocking:**
+Add `ssloS_CertError_Page` to any inspection service chain where TLS intercept is enabled. When the origin server presents an invalid certificate, the client receives a block page instead of a browser certificate warning. When the certificate is valid, traffic passes through normally.
+
+For `ssloS_CertError_Page` to function, the SSLO SSL configuration must be updated:
+- Set **Expire Certificate Response** to **Mask**
+- Set **Untrusted Certificate Authority** to **Mask**
+- Add **sslo-tls-verify-rule** to the topology **Resources**
+
+The Mask setting tells SSLO to present a valid forged certificate to the client even when the server certificate has errors, allowing the block page to be delivered over the established HTTPS session.
 
 ## Currently Supported Extensions
 
-| Extension | Description |
-|-----------|-------------|
-| [Advanced Blocking Pages](https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages) | Adds a blocking page service to SSLO for use in a Service Chain |
-| [DoH Guardian](https://github.com/f5devcentral/sslo-service-extensions/tree/main/doh-guardian) | DNS-over-HTTPS inspection, blackhole, and sinkhole service for SSLO |
+| Extension | Original Source | Description |
+|-----------|----------------|-------------|
+| Advanced Blocking Pages | [Kevin Stewart - f5devcentral](https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages) | Split into discrete category block and certificate error services with a pre-built blocking service chain |
+| DoH Guardian | [Kevin Stewart - f5devcentral](https://github.com/f5devcentral/sslo-service-extensions/tree/main/doh-guardian) | DNS-over-HTTPS inspection, blackhole, and sinkhole service for SSLO |
+
+## Additional Notes
+
+- The installer cleans up orphaned `f5-tenant-restrictions` iRules that SSLO auto-creates when the service type is repurposed. These are not needed and are removed after the service virtual is patched with the correct iRule.
+- Before uninstalling, ensure that all services and service chains are removed from security policy rules. Uninstalling while objects are still referenced by a policy will cause MCP desync.
+- If you install any service extensions and then run F5's `sslofix` script, it will always report duplicate blocks in diagnostic mode. This is because the extension technique repurposes the "F5 Tenant Restrictions" service type within SSLO.
 
 ## License
 
