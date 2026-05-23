@@ -20,7 +20,6 @@
   - `ssloS_CertError_Page` — conditional server certificate error block
 - Added `ssloSC_Block_Page` service chain containing `ssloS_Blocking_Page`
 - Renamed iRules to match their associated service names (`ssloS_Blocking_Page-rule`, `ssloS_CertError_Page-rule`)
-- Unique proc names per iRule to prevent global namespace collision
 - Uninstaller warns about MCP desync if services are still referenced by security policy rules
 - Completion screen displays required SSL configuration changes for CertError_Page (Mask settings)
 
