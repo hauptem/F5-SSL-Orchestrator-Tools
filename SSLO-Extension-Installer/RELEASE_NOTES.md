@@ -8,7 +8,7 @@
 
 ## v1.1 
 
-# Advanced Blocking Pages
+### Advanced Blocking Pages
 - Split Kevin's single toggle-based iRule into two discrete SSLO inspection services:
   - `ssloS_Blocking_Page` — unconditional category block
   - `ssloS_CertError_Page` — conditional server certificate error block
