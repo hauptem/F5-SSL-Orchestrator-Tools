@@ -59,6 +59,8 @@ The Mask setting tells SSLO to present a valid forged certificate to the client 
 - Before uninstalling, ensure that all services and service chains are removed from security policy rules. Uninstalling while objects are still referenced by a policy will cause MCP desync.
 - If you install any service extensions and then run F5's `sslofix` script, it will always report duplicate blocks in diagnostic mode. This is because the extension technique repurposes the "F5 Tenant Restrictions" service type within SSLO.
 
+[Release Notes](RELEASE_NOTES.md) — Service Extension Installer 
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
