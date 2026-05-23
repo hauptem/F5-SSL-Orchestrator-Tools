@@ -3,7 +3,6 @@
 ## v1.2
 
 - Replaced Python rule converter with `jq -Rs` for JSON encoding of iRules
-- Removed Python 3 runtime dependency from the installer
 - Eliminated temporary `.in`/`.out` files during install
 - Service virtual polling interval reduced from 10 seconds to 5 seconds
 - Removed unnecessary 15-second wait on service chain creation
