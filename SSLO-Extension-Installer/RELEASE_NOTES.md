@@ -7,10 +7,7 @@
 - Eliminated temporary `.in`/`.out` files during install
 - Service virtual polling interval reduced from 10 seconds to 5 seconds
 - Removed unnecessary 15-second wait on service chain creation
-- Uninstaller dynamically computes step count based on discovery results — only phases with work are executed
 - Redundant REST existence checks removed from uninstaller phases
-- iRule comment headers standardized to match project conventions
-- iRule proc blocks moved below event blocks for readability
 - Orphaned `f5-tenant-restrictions` iRules cleaned up after service creation for all extensions
 - Discovery display alignment corrected in uninstaller
 
@@ -27,16 +24,9 @@
 - Uninstaller warns about MCP desync if services are still referenced by security policy rules
 - Completion screen displays required SSL configuration changes for CertError_Page (Mask settings)
 
-### General
-
-- Full discovery before install and uninstall to detect existing objects
-- Polling with timeout replaces blind `sleep` for service readiness
-- REST helper functions with HTTP status validation
-- Trap handler for unexpected exits with recovery guidance
-
 ## v1.0
 
-- Initial release based on [Kevin Stewart's SSL Orchestrator service extensions](https://github.com/f5devcentral/sslo-service-extensions)
+- Initial release based entirely on [Kevin Stewart's SSL Orchestrator service extensions](https://github.com/f5devcentral/sslo-service-extensions)
 - Self-contained installer with all payloads embedded for closed network environments
-- Advanced Blocking Pages and DoH Guardian extensions
-- Full uninstall support with dependency-ordered teardown
+- Advanced Blocking Pages and DoH Guardian extensions supported
+- Full uninstall support
