@@ -1,6 +1,6 @@
 # SSL Orchestrator Service Extensions Installer
 
-Unified installer and uninstaller for F5 SSL Orchestrator service extensions, based on Kevin Stewart's original 1.0 work. These extensions have been directly incorporated into this tool and modified to address architectural limitations in the originals.
+Unified installer and uninstaller for F5 SSL Orchestrator service extensions, based on Kevin Stewart's original 1.0 work. These extensions have been directly incorporated into this tool and modified to provide additional functionality.
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
