@@ -27,5 +27,5 @@
 
 - Initial release based entirely on [Kevin Stewart's SSL Orchestrator service extensions](https://github.com/f5devcentral/sslo-service-extensions)
 - Self-contained installer with all payloads embedded for closed network environments
-- Advanced Blocking Pages and DoH Guardian extensions supported
-- Full uninstall support
+- Advanced Blocking Pages and DoH Guardian extensions supported in 1.0
+- Full uninstall support as long as this installer was used to install those extensions
