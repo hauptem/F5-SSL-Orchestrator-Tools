@@ -8,7 +8,7 @@
 - Replaced Python rule converter with `jq -Rs` for JSON encoding of iRules
 - Eliminated temporary `.in`/`.out` files during install
 - Service virtual polling interval reduced from 10 seconds to 5 seconds
-- Removed unnecessary 15-second wait on service chain creation
+- Removed unnecessary 15-second wait on service chain creation before proceeding - we check at install completion
 - Redundant REST existence checks removed from uninstaller phases
 - Orphaned `f5-tenant-restrictions` iRules cleaned up after service creation for all extensions
 - Discovery display alignment corrected in uninstaller
