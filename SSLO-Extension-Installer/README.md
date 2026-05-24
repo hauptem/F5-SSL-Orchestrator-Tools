@@ -42,7 +42,7 @@ Add `ssloS_CertError_Page` to any inspection service chain where TLS intercept i
 For `ssloS_CertError_Page` to function, the SSLO SSL configuration must be updated:
 - Set **Expire Certificate Response** to **Mask**
 - Set **Untrusted Certificate Authority** to **Mask**
-- Add **sslo-tls-verify-rule** to the topology **Resources**
+- Add **sslo-tls-verify-rule** to the topology virtualserver **Resources**
 
 The Mask setting tells SSLO to present a valid forged certificate to the client even when the server certificate has errors, allowing the block page to be delivered over the established HTTPS session.
 
