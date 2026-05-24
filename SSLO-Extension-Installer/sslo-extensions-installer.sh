@@ -599,10 +599,6 @@ EOF
 # Date: October 2025
 # Author: Kevin Stewart, F5 Networks
 #
-# License: MIT
-# Copyright (c) 2025 Eric Haupt
-# Released under the MIT License.
-#
 # Description:
 #   Captures the server-side TLS certificate verification result into the ctx(tlsverify)
 #   sharedvar during the SSL handshake. This iRule is not attached to a service - it is
