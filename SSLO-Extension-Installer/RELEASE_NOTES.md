@@ -4,6 +4,7 @@
 
 - Replaced Kevin's boilerplate blocking-page-html with my own
  <img width="918" height="635" alt="Image" src="https://github.com/user-attachments/assets/e4ca1895-2ca9-450a-9200-c9ffe584492f" />
+ 
 - Replaced Python rule converter with `jq -Rs` for JSON encoding of iRules
 - Eliminated temporary `.in`/`.out` files during install
 - Service virtual polling interval reduced from 10 seconds to 5 seconds
