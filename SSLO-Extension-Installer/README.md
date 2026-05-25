@@ -15,7 +15,7 @@ This tool was built for two reasons:
 
 **Closed network support.** Kevin's original installers pull iRules, iFiles, and service definitions from GitHub at runtime. Organizations operating in closed or air-gapped networks cannot use them. This installer is fully self-contained with all payloads embedded directly in the script. The only external file is `blocking-page-html`, kept separate for ease of editing.
 
-**Architectural changes.** Kevin's Advanced Blocking Pages extension used a single iRule with a static boolean toggle (`GLOBAL_BLOCK`) to switch between two distinct functions: unconditional category blocking and conditional server certificate error blocking. Because the toggle is global, the two functions are mutually exclusive - you cannot use both simultaneously across different service chains. This installer splits them into discrete SSLO services, each with a single clearly defined role, managed entirely through the SSLO GUI.
+**Architectural changes.** The original Advanced Blocking Pages extension used a single iRule with a static boolean toggle (`GLOBAL_BLOCK`) to switch between two distinct functions: unconditional category blocking and conditional server certificate error blocking. Because the toggle is global, the two functions are mutually exclusive - you cannot use both simultaneously across different service chains. This installer splits them into discrete SSLO services, each with a single clearly defined role, managed entirely through the SSLO GUI.
 
 ## What Changed From Kevin's 1.0
 
