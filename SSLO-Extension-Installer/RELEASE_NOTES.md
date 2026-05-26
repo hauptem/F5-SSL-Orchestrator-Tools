@@ -2,7 +2,7 @@
 
 ## v1.3
 
-- Updated both uninstallers to also remove the application services specific to Block Page or DoH Guard
+- Updated both uninstallers to also remove the application services specific to Block Page or DoH Guard which remained as orphans in previous versions
 
 ## v1.2
 
