@@ -1,6 +1,6 @@
 #!/bin/bash
 # F5 SSL Orchestrator Service Extension Installer
-# Version 1.2
+# Version 1.3
 # Author: Eric Haupt
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
@@ -598,6 +598,10 @@ EOF
 # Revision: 1.0
 # Date: October 2025
 # Author: Kevin Stewart, F5 Networks
+#
+# License: MIT
+# Copyright (c) 2025 Eric Haupt
+# Released under the MIT License.
 #
 # Description:
 #   Captures the server-side TLS certificate verification result into the ctx(tlsverify)
@@ -1394,7 +1398,8 @@ uninstall_blocking_page() {
         fi
 
         ## Compute step count based on what was found
-        INSTALL_TOTAL=2
+        ## Base 3: discovery + orphan cleanup + final verification
+        INSTALL_TOTAL=3
         (( HAS_SC_BLOCK )) && (( INSTALL_TOTAL++ ))
         (( HAS_BLOCK )) && (( INSTALL_TOTAL++ ))
         (( HAS_APP_SERVICE || HAS_APP_FOLDER || HAS_T4_VIRTUAL )) && (( INSTALL_TOTAL++ ))
@@ -1662,7 +1667,40 @@ uninstall_blocking_page() {
         fi
 
         ## -----------------------------------------------------------------------
-        ## Phase 12: Final verification
+        ## Phase 12: Clean up orphaned iAppsLX operation blocks
+        ## -----------------------------------------------------------------------
+        ## The iAppsLX database retains historical CREATE/DELETE/MODIFY blocks
+        ## even after the services are removed. These must be deleted to prevent
+        ## them from appearing in backup tools or interfering with reinstallation.
+        step_screen "Clean up orphaned iAppsLX operation blocks"
+        ORPHAN_NAMES=("ssloS_Blocking_Page" "ssloS_CertError_Page" "ssloSC_Block_Page")
+        rest_get "/mgmt/shared/iapp/blocks" >/dev/null
+        ORPHAN_COUNT=0
+        for dep_name in "${ORPHAN_NAMES[@]}"; do
+            orphan_ids=$(echo "${REST_RESPONSE_BODY}" | jq -r \
+                ".items[]? | select(.name | startswith(\"sslo_ob_\")) | select(.name | endswith(\"${dep_name}\")) | .id" 2>/dev/null)
+            if [[ -n "${orphan_ids}" ]]; then
+                while IFS= read -r oid; do
+                    [[ -z "${oid}" ]] && continue
+                    if rest_delete "orphan block deleted" "/mgmt/shared/iapp/blocks/${oid}"; then
+                        REMOVED+=("Orphan operation block: ${dep_name} (${oid})")
+                        (( ORPHAN_COUNT++ ))
+                    else
+                        warn "Could not remove orphan block ${oid} for ${dep_name}"
+                    fi
+                done <<< "${orphan_ids}"
+            fi
+        done
+        if (( ORPHAN_COUNT > 0 )); then
+            ok "${ORPHAN_COUNT} orphaned operation block(s) removed"
+        else
+            info "No orphaned operation blocks found"
+        fi
+        step_done
+        sleep 1
+
+        ## -----------------------------------------------------------------------
+        ## Phase 13: Final verification
         ## -----------------------------------------------------------------------
         step_screen "Final verification"
         echo -e "${C_WHITE}Re-scanning the BIG-IP to confirm state${C_RESET}"
@@ -1680,6 +1718,16 @@ uninstall_blocking_page() {
         if echo "${REST_RESPONSE_BODY}" | jq -e '.items[]? | select(.name=="ssloSC_Block_Page")' >/dev/null 2>&1; then
             LEFTOVERS+=("Service chain: ssloSC_Block_Page")
         fi
+        for dep_name in "ssloS_Blocking_Page" "ssloS_CertError_Page" "ssloSC_Block_Page"; do
+            orphan_check=$(echo "${REST_RESPONSE_BODY}" | jq -r \
+                ".items[]? | select(.name | startswith(\"sslo_ob_\")) | select(.name | endswith(\"${dep_name}\")) | .name" 2>/dev/null)
+            if [[ -n "${orphan_check}" ]]; then
+                while IFS= read -r oname; do
+                    [[ -z "${oname}" ]] && continue
+                    LEFTOVERS+=("Orphan operation block: ${oname}")
+                done <<< "${orphan_check}"
+            fi
+        done
         if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_Blocking_Page.app"; then
             LEFTOVERS+=(".app folder: /Common/ssloS_Blocking_Page.app")
         fi
@@ -2801,7 +2849,7 @@ DOH_GUARDIAN_SERVICE_EOF
 ## UNINSTALLER
 ## ---------------------------------------------------------------------------
 uninstall_doh_guardian() {
-    INSTALL_TOTAL=9
+    INSTALL_TOTAL=10
     echo -e "${C_WHITE}Objects to be removed:${C_RESET}"
     echo -e "${C_WHITE}  - iAppsLX block:    ssloS_DoH_Guard${C_RESET}"
     echo -e "${C_WHITE}  - LTM iRule:        doh-guardian-rule${C_RESET}"
@@ -3150,7 +3198,37 @@ uninstall_doh_guardian() {
         sleep 1
 
         ## -----------------------------------------------------------------------
-        ## Phase 9: Final verification
+        ## Phase 9: Clean up orphaned iAppsLX operation blocks
+        ## -----------------------------------------------------------------------
+        step_screen "Clean up orphaned iAppsLX operation blocks"
+        ORPHAN_NAMES=("ssloS_DoH_Guard")
+        rest_get "/mgmt/shared/iapp/blocks" >/dev/null
+        ORPHAN_COUNT=0
+        for dep_name in "${ORPHAN_NAMES[@]}"; do
+            orphan_ids=$(echo "${REST_RESPONSE_BODY}" | jq -r \
+                ".items[]? | select(.name | startswith(\"sslo_ob_\")) | select(.name | endswith(\"${dep_name}\")) | .id" 2>/dev/null)
+            if [[ -n "${orphan_ids}" ]]; then
+                while IFS= read -r oid; do
+                    [[ -z "${oid}" ]] && continue
+                    if rest_delete "orphan block deleted" "/mgmt/shared/iapp/blocks/${oid}"; then
+                        REMOVED+=("Orphan operation block: ${dep_name} (${oid})")
+                        (( ORPHAN_COUNT++ ))
+                    else
+                        warn "Could not remove orphan block ${oid} for ${dep_name}"
+                    fi
+                done <<< "${orphan_ids}"
+            fi
+        done
+        if (( ORPHAN_COUNT > 0 )); then
+            ok "${ORPHAN_COUNT} orphaned operation block(s) removed"
+        else
+            info "No orphaned operation blocks found"
+        fi
+        step_done
+        sleep 1
+
+        ## -----------------------------------------------------------------------
+        ## Phase 10: Final verification
         ## -----------------------------------------------------------------------
         step_screen "Final verification"
         echo -e "${C_WHITE}Re-scanning the BIG-IP to confirm state${C_RESET}"
@@ -3161,6 +3239,14 @@ uninstall_doh_guardian() {
         rest_get "/mgmt/shared/iapp/blocks" >/dev/null
         if echo "${REST_RESPONSE_BODY}" | jq -e '.items[]? | select(.name=="ssloS_DoH_Guard")' >/dev/null 2>&1; then
             LEFTOVERS+=("iAppsLX block instance: ssloS_DoH_Guard")
+        fi
+        orphan_check=$(echo "${REST_RESPONSE_BODY}" | jq -r \
+            ".items[]? | select(.name | startswith(\"sslo_ob_\")) | select(.name | endswith(\"ssloS_DoH_Guard\")) | .name" 2>/dev/null)
+        if [[ -n "${orphan_check}" ]]; then
+            while IFS= read -r oname; do
+                [[ -z "${oname}" ]] && continue
+                LEFTOVERS+=("Orphan operation block: ${oname}")
+            done <<< "${orphan_check}"
         fi
         if rest_get "/mgmt/tm/sys/folder/~Common~ssloS_DoH_Guard.app"; then
             LEFTOVERS+=(".app folder: /Common/ssloS_DoH_Guard.app")
