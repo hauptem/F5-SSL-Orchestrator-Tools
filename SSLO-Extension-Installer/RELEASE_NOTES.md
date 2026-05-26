@@ -1,5 +1,9 @@
 # Release Notes
 
+## v1.3
+
+- Updated both uninstallers to also remove the application services specific to Block Page or DoH Guard
+
 ## v1.2
 
 - Replaced Kevin's boilerplate blocking-page-html with my own
