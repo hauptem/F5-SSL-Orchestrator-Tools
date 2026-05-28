@@ -1,10 +1,11 @@
-# SSLO-Replay — F5 SSL Orchestrator Configuration Snapshot and Restore Tool
+# SSLO-Replay Beta Version — F5 SSL Orchestrator Configuration Snapshot and Restore Tool
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
 
+### Note that this is presented as a proof-of-concept beta version. Development and testing is currently underway for a final release.
 
 A menu-driven tool used for capturing F5 SSL Orchestrator configuration as a portable JSON STATE snapshot and replaying it to the same or different BIG-IP via the iControl REST API. Designed for disaster recovery, migration, and policy management in environments where Ansible is not available.
 
@@ -24,14 +25,6 @@ SSLO-Replay captures the logical configuration of an SSLO deployment, strips all
 
 The snapshot is a single JSON file containing every SSLO object and its external dependencies. The replay is deterministic, repeatable, and error-free.
 
-- Need to rebuild an SSLO deployment after an RMA, device wipe, or failed upgrade?
-- Need to migrate a multi-topology SSLO configuration to a new BIG-IP pair?
-- Need to replicate a known-good SSLO deployment to a DR site?
-- Want to push a security policy from one environment to another without rebuilding the topology?
-- Want a portable, human-readable backup of your SSLO configuration that doesn't depend on the device that created it?
-
-**This tool was designed specifically for those purposes.**
-
 ### Features
 
 - **Record** — Captures all SSLO objects (SSL settings, services, service chains, security policies, topologies) with external dependency metadata in a single portable JSON file
@@ -40,7 +33,6 @@ The snapshot is a single JSON file containing every SSLO object and its external
 - **Policy Swap** — Apply a security policy from a snapshot to an existing topology on the target, with rename and overwrite support
 - **Dependency Capture** — Records external BIG-IP objects (iRules, monitors, cipher groups, profiles, SNAT pools) as raw REST API JSON for reference or auto-creation
 - **Prerequisite Validation** — Checks all external references before replay, with interactive resolution for missing objects
-- **Version Locking** — Snapshots are locked to the tool version that created them
 
 ### How It Works
 
