@@ -1,4 +1,4 @@
-# SSLO-Replay v0.3.15-devel — F5 SSL Orchestrator Snapshot and Restore Tool
+# SSLO-Replay — F5 SSL Orchestrator Configuration Snapshot and Restore Tool
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
