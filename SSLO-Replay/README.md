@@ -44,6 +44,8 @@ SSLO-Replay does not try to restore state. It replays intent.
 
 The transformation logic, per-type inputProperty templates, and prerequisite field paths are traced to the F5 Ansible SSLO collection module source code. The tool uses F5's own automation modules as the authoritative reference for the gc processor's input contract.
 
+<img width="771" height="521" alt="Image" src="https://github.com/user-attachments/assets/c7f555d5-534e-43b8-a0ca-7b85877917c4" />
+
 ### Current Limitations
 
 - Certs and keys are not captured or created in the JSON manifest for security reasons — install them on the target before replay
