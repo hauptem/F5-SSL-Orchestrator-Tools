@@ -50,11 +50,11 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 
 ### Current Limitations
 
-- Certs and keys are not captured or created in the JSON manifest for security reasons — install them on the target before replay
+- Certs and keys will never be captured in the JSON manifest for security reasons — install them on the target before replay
 - General Settings (`ssloGS_global`) are environment-specific — configure via the SSLO GUI on the target before replay
 - Per-request policy modifications made outside SSLO with strict updates disabled will not survive replay
 - Extension services (blocking page, DoH guard) must be installed separately
-- After replay, the SSLO GUI may display a "not initialized" warning — click the re-trigger/resume icon to reconcile (cosmetic only)
+- After replay, the SSLO GUI may display a "not initialized" warning — click the red icon in the top right of the SSLO main page GUI to reload SSLO configuration
 
 ## Requirements
 
