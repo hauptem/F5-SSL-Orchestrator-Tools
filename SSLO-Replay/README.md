@@ -15,9 +15,9 @@ Available as a single PowerShell script:
 
 ### The SSLO Backup Problem
 
-F5 does not provide a native mechanism to back up and restore SSL Orchestrator configuration across devices. UCS restore fails because iAppsLX block UUIDs are instance-specific. F5's own SSLO snapshots are internal checkpoints that cannot be exported or imported. The iFile representation carries the same UUID binding. All three mechanisms are tied to the device that created them.
+F5 does not provide a native mechanism to back up and restore SSL Orchestrator configuration across devices. UCS restore might have issues because iAppsLX block UUIDs are instance-specific. F5's own SSLO snapshots are internal checkpoints that cannot be exported or imported. The iFile representation carries the same UUID binding. All three mechanisms are tied to the device that created them.
 
-F5 provides a script to delete an SSLO deployment, but no way to recreate it. The only recovery path is manual recreation through the GUI — clicking through every SSL setting, every service, every service chain, every security policy rule, and every topology. For a deployment with 10 topologies and complex security policies, this is hours of careful manual work.
+F5 provides a script to delete an SSLO deployment, but no way to easily recreate it outside of ansible orchestration. The only recovery path is manual recreation through the GUI — clicking through every SSL setting, every service, every service chain, every security policy rule, and every topology. For a deployment with 10 topologies and complex security policies, this is hours of careful manual work.
 
 ### What SSLO-Replay Solves
 
