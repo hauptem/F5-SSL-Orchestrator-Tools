@@ -1,5 +1,4 @@
-# SSLO-Replay (Beta Version) 
-# F5 SSL Orchestrator Configuration Snapshot and Restore Tool
+# SSLO-Replay (Beta Version) - F5 SSLO Configuration Snapshot and Restore Tool
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
