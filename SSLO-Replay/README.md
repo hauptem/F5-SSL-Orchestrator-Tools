@@ -38,6 +38,8 @@ The snapshot is a single JSON file containing every SSLO object and its external
 
 SSLO-Replay does not try to restore state. It replays intent.
 
+<img width="771" height="345" alt="Image" src="https://github.com/user-attachments/assets/0b5a82c8-417e-4b8a-b003-25d8d9877ddc" />
+
 1. **Record** connects to a BIG-IP, retrieves all iAppsLX blocks, classifies the SSLO objects, strips instance-specific fields (UUIDs, block IDs, restricted hashes), captures external dependencies, and writes a portable JSON snapshot
 2. **Replay** reads the snapshot, validates prerequisites on the target, transforms state blocks into gc processor CREATE format with correct per-type inputProperties, and replays objects in dependency order: SSL settings → services → service chains → security policies → topologies
 3. The gc processor does what it was designed to do — generates fresh UUIDs, builds app folders, wires profiles, creates access policies, and binds each block
