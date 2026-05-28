@@ -17,7 +17,7 @@ Useful scripts and tools for F5's SSL Orchestrator product. Some of these are mo
 | [TLS Recon](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/TLS-Recon) | Discover TLS traffic on non-standard ports during SSLO deployments |
 | [DGCat Admin](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/DGCat-Admin) | Menu-driven tool for LTM Datagroup and URL Category management |
 | [SSLO Replay](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/SSLO-Replay) | SSLO configuration backup and restore by replaying via API |
-| [Service Extension Installer](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/SSLO-Extension-Installer) | An offline installer/uninstaller for SSLO service extensions |
+| [SSLO Extension Installer](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/SSLO-Extension-Installer) | An offline installer/uninstaller for SSLO service extensions |
 
 
 ## License
