@@ -1,0 +1,103 @@
+# SSLO-Replay v0.3.15-devel — F5 SSL Orchestrator Snapshot and Restore Tool
+
+![License](https://img.shields.io/badge/license-MIT-green)
+![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
+![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
+
+
+A menu-driven tool for capturing F5 SSL Orchestrator configuration as a portable JSON snapshot and replaying it to the same or different BIG-IP via the iControl REST API. Designed for disaster recovery, migration, and policy management in environments where Ansible is not available.
+
+Available as a single PowerShell script:
+
+- **PowerShell** (`sslo-replay.ps1`) — For Windows
+
+### The SSLO Backup Problem
+
+F5 does not provide a native mechanism to back up and restore SSL Orchestrator configuration across devices. UCS restore fails because iAppsLX block UUIDs are instance-specific. F5's own SSLO snapshots are internal checkpoints that cannot be exported or imported. The iFile representation carries the same UUID binding. All three mechanisms are tied to the device that created them.
+
+F5 provides a script to delete an SSLO deployment, but no way to recreate it. The only recovery path is manual recreation through the GUI — clicking through every SSL setting, every service, every service chain, every security policy rule, and every topology. For a deployment with 10 topologies and complex security policies, this is hours of careful manual work where a single missed boolean conditional (such as forgetting to change "match any" to "match all" on a multi-condition rule) can silently disable SSL inspection without any alert or warning.
+
+### What SSLO-Replay Solves
+
+SSLO-Replay captures the logical configuration of an SSLO deployment, strips all instance-specific data, and replays it through the gc processor — the same API the GUI and Ansible use. The gc processor generates fresh UUIDs, builds the TMOS objects, and binds the blocks. The result is indistinguishable from having built it by hand.
+
+The snapshot is a single JSON file containing every SSLO object and its external dependencies. The replay is deterministic, repeatable, and error-free.
+
+- Need to rebuild an SSLO deployment after an RMA, device wipe, or failed upgrade?
+- Need to migrate a multi-topology SSLO configuration to a new BIG-IP pair?
+- Need to replicate a known-good SSLO deployment to a DR site?
+- Want to push a security policy from one environment to another without rebuilding the topology?
+- Want a portable, human-readable backup of your SSLO configuration that doesn't depend on the device that created it?
+
+**This tool was designed specifically for those purposes.**
+
+### Features
+
+- **Record** — Captures all SSLO objects (SSL settings, services, service chains, security policies, topologies) with external dependency metadata in a single portable JSON file
+- **Full Replay** — Deterministic recreation of an entire SSLO deployment in dependency order
+- **Scoped Replay** — Replay a single topology with automatic dependency resolution
+- **Policy Swap** — Apply a security policy from a snapshot to an existing topology on the target, with rename and overwrite support
+- **Dependency Capture** — Records external BIG-IP objects (iRules, monitors, cipher groups, profiles, SNAT pools) as raw REST API JSON for reference or auto-creation
+- **Prerequisite Validation** — Checks all external references before replay, with interactive resolution for missing objects
+- **Version Locking** — Snapshots are locked to the tool version that created them
+
+### How It Works
+
+SSLO-Replay does not try to restore state. It replays intent.
+
+1. **Record** connects to a BIG-IP, retrieves all iAppsLX blocks, classifies the SSLO objects, strips instance-specific fields (UUIDs, block IDs, restricted hashes), captures external dependencies, and writes a portable JSON snapshot
+2. **Replay** reads the snapshot, validates prerequisites on the target, transforms state blocks into gc processor CREATE format with correct per-type inputProperties, and replays objects in dependency order: SSL settings → services → service chains → security policies → topologies
+3. The gc processor does what it was designed to do — generates fresh UUIDs, builds app folders, wires profiles, creates access policies, and binds each block
+
+The transformation logic, per-type inputProperty templates, and prerequisite field paths are traced to the F5 Ansible SSLO collection module source code. The tool uses F5's own automation modules as the authoritative reference for the gc processor's input contract.
+
+### Limitations
+
+- Certs and keys are not captured or created — install them on the target before replay
+- General Settings (`ssloGS_global`) are environment-specific — configure via the SSLO GUI on the target before replay
+- Per-request policy modifications made outside SSLO with strict updates disabled will not survive replay
+- Extension services (blocking page, DoH guard) must be installed separately
+- After replay, the SSLO GUI may display a "not initialized" warning — click the re-trigger/resume icon to reconcile (cosmetic only)
+
+## Requirements
+
+- PowerShell 5.1 or later
+- Network access to BIG-IP management interface (port 443)
+- BIG-IP running TMOS 17.x or later with SSLO 12.x or later
+
+## Installation
+
+```powershell
+# Copy to a directory on your Windows management host
+# Run
+.\sslo-replay.ps1
+```
+
+## API Reference
+
+The gc processor input/output contract, per-type inputProperty templates, passphrase token handling, and prerequisite field paths are derived from the F5 Ansible SSLO collection:
+
+- **Collection:** f5networks.f5_bigip 3.15.0-devel
+- **Repository:** https://github.com/F5Networks/f5-ansible-bigip
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## Disclaimer
+
+- This solution is **NOT** officially endorsed, supported, or maintained by F5 Inc.
+- F5 Inc. retains all rights to their trademarks, including but not limited to "F5", "BIG-IP", "TMOS", "SSL Orchestrator", and related marks
+- This is an independent, community-developed solution that utilizes F5 products but is not affiliated with F5 Inc.
+- For official F5 support and solutions, please contact F5 Inc. directly
+
+**Technical Disclaimer:**
+
+- This software is provided "AS IS" without warranty of any kind
+- The authors and contributors are not responsible for any damages or issues that may arise from its use
+- Always test thoroughly in non-production environments before deployment
+- Backup your F5 configuration before implementing any changes
+- Review and understand all code before deploying to production systems
+
+By using this software, you acknowledge that you have read and understood these disclaimers and agree to use this solution at your own risk.
