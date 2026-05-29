@@ -8,7 +8,6 @@
 - Policy swap blocks on missing services and SSL settings only chains and policies are auto-created
 - MODIFY operation blocks excluded from replayable category fixes duplicate policy on replay after policy swap
 - Snapshot summary on clean screen with grouped and sorted dependencies
-- "Record" replaces "Export" in menu and output
 - Replay progress shown in section header bar
 
 ## vb1.3.15.0-devel (Beta 1 - May 28 2026)
