@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay — F5 SSL Orchestrator Snapshot and Restore Tool
 # =============================================================================
-# Version: 0.3.15-devel (beta 1 - May 28 2026)
+# Version: b2.3.15-devel (beta 2 May 29 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -133,6 +133,8 @@ $script:DEP_TYPE_ENDPOINTS = @{
     "gateway_pool"   = "/mgmt/tm/ltm/pool/"
     "access_profile" = "/mgmt/tm/apm/profile/access/"
     "ltm_policy"     = "/mgmt/tm/ltm/policy/"
+    "datagroup"      = "/mgmt/tm/ltm/data-group/internal/"
+    "url_category"   = "/mgmt/tm/sys/url-db/url-category/"
 }
 
 # Portable dependency types — can be auto-created on target from snapshot data
@@ -147,6 +149,8 @@ $script:PORTABLE_DEP_TYPES = @(
     "profile_tcp"
     "profile_http"
     "log_publisher"
+    "datagroup"
+    "url_category"
 )
 
 # Dependency auto-creation order (respects internal dependencies)
@@ -161,6 +165,8 @@ $script:DEP_CREATE_ORDER = @(
     "profile_tcp"
     "profile_http"
     "log_publisher"
+    "datagroup"
+    "url_category"
 )
 
 # Instance-specific fields to strip from dependency configs before auto-creation
@@ -171,6 +177,179 @@ $script:DEP_STRIP_FIELDS = @(
     "fullPath"
     "nameReference"
 )
+
+# Built-in F5 URL categories (from Ansible bigip_sslo_config_policy.py condition_category_list)
+# Any category NOT in this list is custom and must exist on target
+$script:BUILTIN_URL_CATEGORIES = @{
+    "Abortion" = $true
+    "Abused Drugs" = $true
+    "Adult Content" = $true
+    "Adult Material" = $true
+    "Advanced Malware Command and Control" = $true
+    "Advanced Malware Payloads" = $true
+    "Advertisements" = $true
+    "Advocacy Groups" = $true
+    "Alcohol and Tobacco" = $true
+    "Alternative Journals" = $true
+    "Application and Software Download" = $true
+    "Bandwidth" = $true
+    "Blog Commenting" = $true
+    "Blog Posting" = $true
+    "Blogs and Personal Sites" = $true
+    "Bot Networks" = $true
+    "Business and Economy" = $true
+    "Classifieds Posting" = $true
+    "Collaboration - Office" = $true
+    "Compromised Websites" = $true
+    "Computer Security" = $true
+    "Content Delivery Networks" = $true
+    "Crypto Mining" = $true
+    "Cryptocurrency" = $true
+    "Cultural Institutions" = $true
+    "Custom-Encrypted Uploads" = $true
+    "Drugs" = $true
+    "Dynamic Content" = $true
+    "Dynamic DNS" = $true
+    "Education" = $true
+    "Educational Institutions" = $true
+    "Educational Materials" = $true
+    "Educational Video" = $true
+    "Elevated Exposure" = $true
+    "Emerging Exploits" = $true
+    "Entertainment" = $true
+    "Entertainment Video" = $true
+    "Extended Protection" = $true
+    "Facebook Apps" = $true
+    "Facebook Chat" = $true
+    "Facebook Commenting" = $true
+    "Facebook Events" = $true
+    "Facebook Friends" = $true
+    "Facebook Games" = $true
+    "Facebook Groups" = $true
+    "Facebook Mail" = $true
+    "Facebook Photo Upload" = $true
+    "Facebook Posting" = $true
+    "Facebook Questions" = $true
+    "Facebook Video Upload" = $true
+    "File Download Servers" = $true
+    "Files Containing Passwords" = $true
+    "Financial Data and Services" = $true
+    "Gambling" = $true
+    "Games" = $true
+    "Gay or Lesbian or Bisexual Interest" = $true
+    "General Email" = $true
+    "Government" = $true
+    "Hacking" = $true
+    "Health and Medicine" = $true
+    "Hosted Business Applications" = $true
+    "Illegal or Questionable" = $true
+    "Information Technology" = $true
+    "Instant Messaging" = $true
+    "Internet Auctions" = $true
+    "Internet Communication" = $true
+    "Internet Radio and TV" = $true
+    "Internet Telephony" = $true
+    "Intolerance" = $true
+    "Job Search" = $true
+    "Keyloggers and Monitoring" = $true
+    "Lingerie and Swimsuit" = $true
+    "LinkedIn Connections" = $true
+    "LinkedIn Jobs" = $true
+    "LinkedIn Mail" = $true
+    "LinkedIn Updates" = $true
+    "Malicious Embedded Link" = $true
+    "Malicious Embedded iFrame" = $true
+    "Malicious Web Sites" = $true
+    "Marijuana" = $true
+    "Media File Download" = $true
+    "Message Boards and Forums" = $true
+    "Militancy and Extremist" = $true
+    "Military" = $true
+    "Miscellaneous" = $true
+    "Mobile Malware" = $true
+    "Network Errors" = $true
+    "Newly Registered Websites" = $true
+    "News and Media" = $true
+    "Non-Traditional Religions" = $true
+    "Nudity" = $true
+    "Nutrition" = $true
+    "Office - Apps" = $true
+    "Office - Documents" = $true
+    "Office - Drive" = $true
+    "Office - Mail" = $true
+    "Online Brokerage and Trading" = $true
+    "Organizational Email" = $true
+    "Parked Domain" = $true
+    "Pay to Surf" = $true
+    "Peer-to-Peer File Sharing" = $true
+    "Personal Network Storage and Backup" = $true
+    "Personals and Dating" = $true
+    "Phishing and Other Frauds" = $true
+    "Pinners" = $true
+    "Political Organizations" = $true
+    "Potentially Exploited Documents" = $true
+    "Potentially Unwanted Software" = $true
+    "Prescribed Medications" = $true
+    "Private IP Addresses" = $true
+    "Pro-Choice" = $true
+    "Pro-Life" = $true
+    "Productivity" = $true
+    "Professional and Worker Organizations" = $true
+    "Proxy Avoidance" = $true
+    "Real Estate" = $true
+    "Recreation and Hobbies" = $true
+    "Reference and Research" = $true
+    "Religion" = $true
+    "Restaurants and Dining" = $true
+    "Search Engines and Portals" = $true
+    "Security" = $true
+    "Service and Philanthropic Organizations" = $true
+    "Sex" = $true
+    "Sex Education" = $true
+    "Shopping" = $true
+    "Social Networking" = $true
+    "Social Organizations" = $true
+    "Social Web - Facebook" = $true
+    "Social Web - LinkedIn" = $true
+    "Social Web - Twitter" = $true
+    "Social Web - Various" = $true
+    "Social Web - YouTube" = $true
+    "Social and Affiliation Organizations" = $true
+    "Society and Lifestyles" = $true
+    "Special Events" = $true
+    "Sport Hunting and Gun Clubs" = $true
+    "Sports" = $true
+    "Spyware and Adware" = $true
+    "Streaming Media" = $true
+    "Surveillance" = $true
+    "Suspicious Content" = $true
+    "Suspicious Embedded Link" = $true
+    "Tasteless" = $true
+    "Text and Media Messaging" = $true
+    "Traditional Religions" = $true
+    "Travel" = $true
+    "Twitter Follow" = $true
+    "Twitter Mail" = $true
+    "Twitter Posting" = $true
+    "Unauthorized Mobile Marketplaces" = $true
+    "Uncategorized" = $true
+    "Vehicles" = $true
+    "Violence" = $true
+    "Viral Video" = $true
+    "Weapons" = $true
+    "Web Analytics" = $true
+    "Web Chat" = $true
+    "Web Collaboration" = $true
+    "Web Hosting" = $true
+    "Web Images" = $true
+    "Web Infrastructure" = $true
+    "Web and Email Marketing" = $true
+    "Web and Email Spam" = $true
+    "Website Translation" = $true
+    "YouTube Commenting" = $true
+    "YouTube Sharing" = $true
+    "YouTube Video Upload" = $true
+}
 
 # =============================================================================
 # CONNECTION STATE
@@ -1001,7 +1180,7 @@ function Get-BlockDependencyRefs {
         [object]$ConfigData
     )
     
-    $refs = @()
+    $script:_depRefs = [System.Collections.ArrayList]::new()
     
     # Helper to add a ref if it's a real external path
     function Add-Ref {
@@ -1011,7 +1190,7 @@ function Get-BlockDependencyRefs {
         if (Test-IsSsloGenerated -ObjPath $Path) { return }
         if ($Path -notmatch "^/Common/") { return }
         if (Test-IsCertKeyEndpoint -Endpoint $Endpoint) { return }
-        $refs += [ordered]@{ Type = $Type; Path = $Path; Endpoint = $Endpoint }
+        [void]$script:_depRefs.Add([ordered]@{ Type = $Type; Path = $Path; Endpoint = $Endpoint })
     }
     
     switch ($DeploymentType) {
@@ -1074,7 +1253,7 @@ function Get-BlockDependencyRefs {
                     $monPath = $svc.customService.loadBalancing.monitor.fromSystem
                     if ($monPath -and $monPath -ne "" -and $monPath -notin $script:BUILTIN_MONITORS) {
                         # Monitor uses special probe detection — flag with type "monitor"
-                        $refs += [ordered]@{ Type = "monitor"; Path = $monPath; Endpoint = "" }
+                        [void]$script:_depRefs.Add([ordered]@{ Type = "monitor"; Path = $monPath; Endpoint = "" })
                     }
                 }
                 # iRules: customService.iRuleList[].name
@@ -1156,15 +1335,47 @@ function Get-BlockDependencyRefs {
                 Add-Ref "access_profile" $ConfigData.accessProfile "/mgmt/tm/apm/profile/access/"
             }
         }
+        
+        # SECURITY_POLICY: datagroups and URL categories referenced in rule conditions
+        # Field paths from bigip_sslo_config_policy.py condition handling
+        "SECURITY_POLICY" {
+            $allRules = @()
+            if ($ConfigData.rules) { $allRules += $ConfigData.rules }
+            
+            foreach ($rule in $allRules) {
+                foreach ($condition in $rule.conditions) {
+                    if (-not $condition.options) { continue }
+                    $opts = $condition.options
+                    
+                    # Datagroups in subnet match conditions: options.subnet[].subnet where valueType=datagroup
+                    if ($opts.subnet) {
+                        foreach ($entry in $opts.subnet) {
+                            if ($entry.valueType -eq "datagroup" -and $entry.subnet -and $entry.subnet -match "^/Common/") {
+                                Add-Ref "datagroup" $entry.subnet "/mgmt/tm/ltm/data-group/internal/"
+                            }
+                        }
+                    }
+                    
+                    # URL categories in category lookup conditions: options.category[]
+                    if ($opts.category) {
+                        foreach ($catName in $opts.category) {
+                            if ($catName -and $catName -ne "") {
+                                [void]$script:_depRefs.Add([ordered]@{ Type = "url_category"; Path = $catName; Endpoint = "/mgmt/tm/sys/url-db/url-category/" })
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     
-    return ,$refs
+    return ,@($script:_depRefs)
 }
 
 function Invoke-DependencyCapture {
     param([array]$OutputBlocks)
     
-    Write-LogStep "Capturing dependencies..."
+    Write-LogStep "Recording dependencies..."
     
     $depMap = @{}  # Keyed by path for deduplication
     
@@ -1195,29 +1406,58 @@ function Invoke-DependencyCapture {
                 continue
             }
             
-            # Fetch from source
+            # Fetch from source — minimal capture (name and type only, no content)
             $dep = $null
-            if ($ref.Type -eq "monitor") {
-                # Monitor requires type probing
+            if ($ref.Type -eq "url_category") {
+                # Only capture custom URL categories — built-in always exist on any licensed BIG-IP
+                # Built-in list from Ansible bigip_sslo_config_policy.py condition_category_list
+                if (-not $script:BUILTIN_URL_CATEGORIES.ContainsKey($path)) {
+                    $dep = [ordered]@{
+                        type       = "url_category"
+                        path       = $path
+                        endpoint   = ""
+                        portable   = $true
+                        config     = $null
+                    }
+                }
+            } elseif ($ref.Type -eq "monitor") {
+                # Monitor requires type probing to determine the correct endpoint
                 $dep = Get-MonitorDependency -MonitorPath $path
+                # Strip full config, keep type only
+                if ($dep) { $dep["config"] = $null }
+            } elseif ($ref.Type -eq "datagroup") {
+                # Datagroups — fetch type for prereq validation (ip vs string)
+                $dgName = $path -replace "^/Common/", ""
+                $dgResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
+                if ($dgResult.Success) {
+                    $dep = [ordered]@{
+                        type       = "datagroup"
+                        path       = $path
+                        endpoint   = "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
+                        portable   = $true
+                        config     = [ordered]@{ name = $dgResult.Response.name; type = $dgResult.Response.type }
+                    }
+                }
             } else {
-                $dep = Get-DependencyObject -Type $ref.Type -ObjPath $path -Endpoint $ref.Endpoint
+                # All other types — verify existence on source, store name only
+                $objName = $path -replace "^/Common/", ""
+                $endpoint = $ref.Endpoint
+                $fullEndpoint = "${endpoint}~Common~${objName}"
+                $result = Invoke-F5Get -Endpoint $fullEndpoint
+                if ($result.Success) {
+                    $dep = [ordered]@{
+                        type       = $ref.Type
+                        path       = $path
+                        endpoint   = $fullEndpoint
+                        portable   = ($ref.Type -in $script:PORTABLE_DEP_TYPES)
+                        config     = $null
+                    }
+                }
             }
             
             if ($dep) {
                 $dep["referencedBy"] = @($entry.deploymentName)
                 $depMap[$path] = $dep
-                
-                # Cipher group chaining — capture member cipher rules
-                if ($dep.type -eq "cipher_group" -and $dep.config) {
-                    $chainedRules = Get-CipherRuleDependencies -GroupConfig $dep.config
-                    foreach ($rule in $chainedRules) {
-                        if (-not $depMap.ContainsKey($rule.path)) {
-                            $rule["referencedBy"] = @($entry.deploymentName)
-                            $depMap[$rule.path] = $rule
-                        }
-                    }
-                }
             }
         }
     }
@@ -1227,7 +1467,7 @@ function Invoke-DependencyCapture {
     $envCount = $depList.Count - $portableCount
     
     if ($depList.Count -gt 0) {
-        Write-LogOk "$($depList.Count) dependencies captured ($portableCount portable, $envCount environment-specific)"
+        Write-LogOk "$($depList.Count) dependencies recorded"
     } else {
         Write-LogOk "No external dependencies found"
     }
@@ -1332,6 +1572,8 @@ function Get-DepDisplayType {
         "gateway_pool"    { return "Gateway pool" }
         "access_profile"  { return "Access profile" }
         "ltm_policy"      { return "LTM policy" }
+        "datagroup"       { return "Datagroup" }
+        "url_category"    { return "URL category" }
         default           { return $DepType }
     }
 }
@@ -1535,7 +1777,11 @@ function Invoke-SsloDump {
     Write-Host ""
     Write-LogOk "Snapshot saved to: $outputPath"
     
-    # Summary
+    Start-Sleep -Seconds 2
+    Clear-Host
+    Write-LogSection "Snapshot Summary"
+    
+    # SSLO objects
     $lastType = ""
     foreach ($item in $outputBlocks) {
         if ($item.deploymentType -ne $lastType) {
@@ -1546,8 +1792,28 @@ function Invoke-SsloDump {
         Write-Host "    $($item.deploymentName)" -ForegroundColor White
     }
     
+    # Dependencies — grouped by type
+    if ($dependencies -and $dependencies.objects -and $dependencies.objects.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Dependencies" -ForegroundColor White
+        
+        $depByType = @{}
+        foreach ($dep in $dependencies.objects) {
+            if (-not $depByType.ContainsKey($dep.type)) { $depByType[$dep.type] = @() }
+            $depByType[$dep.type] += $dep
+        }
+        
+        foreach ($depType in @($depByType.Keys | Sort-Object)) {
+            $depLabel = Get-DepDisplayType $depType
+            foreach ($dep in ($depByType[$depType] | Sort-Object { $_.path })) {
+                Write-Host "    $depLabel $($dep.path)" -ForegroundColor DarkGray
+            }
+        }
+    }
+    
     Write-Host ""
     Write-LogOk "$($outputBlocks.Count) objects recorded"
+    Write-LogOk "Snapshot saved to: $outputPath"
     Write-Host ""
     
     Press-EnterToContinue
@@ -2102,43 +2368,105 @@ function Invoke-PolicySwap {
     if ($confirm -notin @("y", "Y", "yes", "YES")) { return }
     
     # -------------------------------------------------------------------------
-    # Create policy dependencies
+    # Pre-flight: Validate all dependencies before touching anything
     # -------------------------------------------------------------------------
     Clear-Host
-    Write-LogSection "Creating Policy Dependencies"
+    Write-LogSection "Policy Swap Plan"
     Write-Host ""
     
     $depTree = Get-PolicyDependencyTree -Backup $Backup -PolicyName $policyName
-    $depFailed = $false
+    $planItems = @()
+    $blockers = @()
     
     foreach ($entry in $depTree) {
         $typeLabel = Get-TypeLabel $entry.deploymentType
         $depName = $entry.deploymentName
         $createName = $depName
         
-        # Rename the policy block to the target name
         if ($entry.deploymentType -eq "SECURITY_POLICY" -and $depName -eq $policyName) {
             $createName = $newPolicyName
         }
         
-        # Check if already exists on target
+        # Check if exists on target
         $existingBlockId = $null
         $existsResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$createName'"
         if ($existsResult.Success -and $existsResult.Response.items -and $existsResult.Response.items.Count -gt 0) {
-            # Services and chains: skip if they exist
-            if ($entry.deploymentType -ne "SECURITY_POLICY" -or $createName -ne $newPolicyName) {
-                Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green
-                Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
-                Write-Host " (exists)" -ForegroundColor DarkGray
-                continue
-            }
-            # Target policy already exists — overwrite it via MODIFY
             $existingBlockId = $existsResult.Response.items[0].id
         }
         
+        if ($existingBlockId) {
+            if ($entry.deploymentType -eq "SECURITY_POLICY" -and $createName -eq $newPolicyName) {
+                # Policy exists — will be overwritten
+                Write-Host "  [WARN]" -NoNewline -ForegroundColor Yellow
+                Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
+                Write-Host " (exists — will be overwritten)" -ForegroundColor Yellow
+                $planItems += @{ Entry = $entry; CreateName = $createName; Action = "modify"; BlockId = $existingBlockId }
+            } else {
+                Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green
+                Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
+                Write-Host " (exists)" -ForegroundColor DarkGray
+            }
+        } else {
+            # Missing — can we create it?
+            if ($entry.deploymentType -eq "SERVICE") {
+                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red
+                Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
+                Write-Host " - does not exist on target" -ForegroundColor Red
+                $blockers += "$typeLabel $createName — create on target first or use a full replay"
+            } elseif ($entry.deploymentType -eq "SSL_SETTINGS") {
+                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red
+                Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
+                Write-Host " - does not exist on target" -ForegroundColor Red
+                $blockers += "$typeLabel $createName — create on target first or use a full replay"
+            } else {
+                Write-Host "  [WARN]" -NoNewline -ForegroundColor Yellow
+                Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
+                Write-Host " (will be created)" -ForegroundColor Yellow
+                $planItems += @{ Entry = $entry; CreateName = $createName; Action = "create"; BlockId = $null }
+            }
+        }
+    }
+    
+    # Topology MODIFY
+    Write-Host ""
+    Write-Host "  [WARN]" -NoNewline -ForegroundColor Yellow
+    Write-Host "  topology $($selectedTopo.Name)" -NoNewline -ForegroundColor White
+    Write-Host " (will be modified)" -ForegroundColor Yellow
+    
+    # Stop on blockers
+    if ($blockers.Count -gt 0) {
+        Write-Host ""
+        Write-LogError "$($blockers.Count) issue(s) prevent this operation:"
+        foreach ($b in $blockers) {
+            Write-Host "    $b" -ForegroundColor Red
+        }
+        Write-Host ""
+        Press-EnterToContinue
+        return
+    }
+    
+    # Confirm execution
+    Write-Host ""
+    $proceed = Read-Host "  Proceed with this plan? [y/N]"
+    if ($proceed -notin @("y", "Y", "yes", "YES")) { return }
+    
+    # -------------------------------------------------------------------------
+    # Execute: Create and modify per the plan
+    # -------------------------------------------------------------------------
+    Clear-Host
+    Write-LogSection "Applying Policy"
+    Write-Host ""
+    
+    $depFailed = $false
+    
+    foreach ($item in $planItems) {
+        $entry = $item.Entry
+        $createName = $item.CreateName
+        $typeLabel = Get-TypeLabel $entry.deploymentType
+        
         # For the renamed policy, update the name field inside the config data
         $stateBlock = $entry.block
-        if ($entry.deploymentType -eq "SECURITY_POLICY" -and $depName -eq $policyName -and $createName -ne $depName) {
+        if ($entry.deploymentType -eq "SECURITY_POLICY" -and $entry.deploymentName -eq $policyName -and $createName -ne $entry.deploymentName) {
             $stateBlock = $entry.block | ConvertTo-Json -Depth 30 | ConvertFrom-Json
             foreach ($prop in $stateBlock.inputProperties) {
                 if ($prop.id -eq "f5-ssl-orchestrator-policy" -and $prop.value.name) {
@@ -2147,8 +2475,7 @@ function Invoke-PolicySwap {
             }
         }
         
-        # Build the block
-        if ($existingBlockId) {
+        if ($item.Action -eq "modify") {
             # MODIFY existing policy — overwrite with snapshot config
             Write-LogStep "Updating $typeLabel $createName..."
             $postBlock = Convert-StateBlockToCreate `
@@ -2162,25 +2489,25 @@ function Invoke-PolicySwap {
                 break
             }
             
-            # Patch CREATE block to MODIFY: update operation context and add existingBlockId
+            # Patch CREATE block to MODIFY
             $postBlock.name = "sslo_ob_SECURITY_POLICY_MODIFY_$createName"
             foreach ($prop in $postBlock.inputProperties) {
                 if ($prop.id -eq "f5-ssl-orchestrator-operation-context") {
                     $prop.value.operationType = "MODIFY"
-                    $prop.value.deploymentReference = "https://localhost/mgmt/shared/iapp/blocks/$existingBlockId"
+                    $prop.value.deploymentReference = "https://localhost/mgmt/shared/iapp/blocks/$($item.BlockId)"
                 }
                 if ($prop.id -eq "f5-ssl-orchestrator-policy") {
                     if ($prop.value -is [PSCustomObject]) {
                         if ($prop.value.PSObject.Properties["existingBlockId"]) {
-                            $prop.value.existingBlockId = $existingBlockId
+                            $prop.value.existingBlockId = $item.BlockId
                         } else {
-                            $prop.value | Add-Member -NotePropertyName "existingBlockId" -NotePropertyValue $existingBlockId
+                            $prop.value | Add-Member -NotePropertyName "existingBlockId" -NotePropertyValue $item.BlockId
                         }
                     }
                 }
             }
         } else {
-            # CREATE new policy
+            # CREATE new object
             Write-LogStep "Creating $typeLabel $createName..."
             $postBlock = Convert-StateBlockToCreate `
                 -StateBlock $stateBlock `
@@ -2205,7 +2532,7 @@ function Invoke-PolicySwap {
     
     if ($depFailed) {
         Write-Host ""
-        Write-LogError "Dependency creation failed. Cannot continue."
+        Write-LogError "Operation failed. Review the error above."
         Press-EnterToContinue
         return
     }
@@ -2666,6 +2993,79 @@ function Invoke-SsloRestore {
                         $polPath = if ($pol -is [string]) { $pol } elseif ($pol.name) { $pol.name } else { $null }
                         if ($polPath -and $polPath -match "^/Common/") {
                             Test-PrereqExists "/mgmt/tm/ltm/policy/" $polPath "LTM policy" $depName
+                        }
+                    }
+                }
+            }
+            
+            # SECURITY_POLICY: datagroups and URL categories referenced in rule conditions
+            # Field paths from bigip_sslo_config_policy.py condition handling
+            "SECURITY_POLICY" {
+                Write-Host ""
+                Write-Host "  $typeLabel $depName" -ForegroundColor White
+                
+                $allRules = @()
+                if ($configData.rules) { $allRules += $configData.rules }
+                
+                $checkedCategories = @{}
+                $checkedDatagroups = @{}
+                
+                foreach ($rule in $allRules) {
+                    foreach ($condition in $rule.conditions) {
+                        if (-not $condition.options) { continue }
+                        $opts = $condition.options
+                        
+                        # Datagroups in subnet match conditions
+                        if ($opts.subnet) {
+                            foreach ($entry in $opts.subnet) {
+                                if ($entry.valueType -eq "datagroup" -and $entry.subnet -and $entry.subnet -match "^/Common/") {
+                                    $dgPath = $entry.subnet
+                                    if ($checkedDatagroups.ContainsKey($dgPath)) { continue }
+                                    $checkedDatagroups[$dgPath] = $true
+                                    
+                                    $dgName = $dgPath -replace "^/Common/", ""
+                                    $dgResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
+                                    if ($dgResult.Success) {
+                                        # Validate type matches condition
+                                        $expectedType = "ip"
+                                        $actualType = $dgResult.Response.type
+                                        if ($actualType -ne $expectedType) {
+                                            Write-Host "    Datagroup: $dgPath" -NoNewline -ForegroundColor White
+                                            Write-Host " - WRONG TYPE (is $actualType, policy expects $expectedType)" -ForegroundColor Red
+                                            $script:missingPrereqs += @{ Label = "Datagroup (type mismatch)"; Path = $dgPath; RequiredBy = $depName }
+                                        } else {
+                                            Write-Host "    Datagroup: $dgPath ($actualType)" -ForegroundColor White
+                                        }
+                                    } else {
+                                        Write-Host "    Datagroup: $dgPath" -NoNewline -ForegroundColor White
+                                        Write-Host " - MISSING" -ForegroundColor Red
+                                        $script:missingPrereqs += @{ Label = "Datagroup"; Path = $dgPath; RequiredBy = $depName }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        # URL categories in category lookup conditions
+                        # Built-in categories always exist — only validate custom ones
+                        if ($opts.category) {
+                            foreach ($catName in $opts.category) {
+                                if (-not $catName -or $catName -eq "") { continue }
+                                if ($checkedCategories.ContainsKey($catName)) { continue }
+                                $checkedCategories[$catName] = $true
+                                
+                                # Skip built-in categories (from Ansible condition_category_list)
+                                if ($script:BUILTIN_URL_CATEGORIES.ContainsKey($catName)) { continue }
+                                
+                                $catEncoded = $catName -replace " ", "%20"
+                                $catResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~${catEncoded}"
+                                if ($catResult.Success) {
+                                    Write-Host "    URL category: $catName" -ForegroundColor White
+                                } else {
+                                    Write-Host "    URL category: $catName" -NoNewline -ForegroundColor White
+                                    Write-Host " - MISSING" -ForegroundColor Red
+                                    $script:missingPrereqs += @{ Label = "URL category"; Path = $catName; RequiredBy = $depName }
+                                }
+                            }
                         }
                     }
                 }
