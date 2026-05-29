@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay — F5 SSL Orchestrator Snapshot and Restore Tool
 # =============================================================================
-# Version: b2.3.15-devel (Beta 2 29 May 2026)
+# Version: b2.3.15-devel (Beta 2 May 29 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -66,6 +66,9 @@ $script:OUTPUT_DIR = Join-Path $PSScriptRoot "sslo-replay-snapshots"
 
 # API timeout (seconds)
 $script:API_TIMEOUT = 60
+
+# gc processor config timeout (from orchestratorConfigProcessor.js SSLO_CONFIG_PROCESSOR_TIMEOUT_SECS)
+$script:GC_PROCESSOR_TIMEOUT = 90
 
 # SSLO deployment types in dependency order (replay must follow this sequence)
 $script:DEPENDENCY_ORDER = @(
@@ -938,7 +941,7 @@ function Convert-StateBlockToCreate {
         configurationProcessorReference = @{
             link = "https://localhost/mgmt/shared/iapp/processors/f5-iappslx-ssl-orchestrator-gc"
         }
-        configProcessorTimeoutSeconds = 120
+        configProcessorTimeoutSeconds = $script:GC_PROCESSOR_TIMEOUT
         statsProcessorTimeoutSeconds = 60
         configProcessorAffinity = @{
             processorPolicy = "LOCAL"
@@ -2153,7 +2156,7 @@ function Convert-StateBlockToModify {
         configurationProcessorReference = @{
             link = "https://localhost/mgmt/shared/iapp/processors/f5-iappslx-ssl-orchestrator-gc"
         }
-        configProcessorTimeoutSeconds = 120
+        configProcessorTimeoutSeconds = $script:GC_PROCESSOR_TIMEOUT
         statsProcessorTimeoutSeconds = 60
         configProcessorAffinity = @{
             processorPolicy = "LOCAL"
@@ -3525,44 +3528,50 @@ function Invoke-TopologyRedeploy {
     
     # Classify all SSLO state blocks
     $topologies = @()
-    $services = @()
-    $chains = @()
-    $policies = @()
-    $sslSettings = @()
+    $allObjects = @{}
     
     foreach ($block in $allBlocks) {
         if ($block.state -ne "UNBOUND") { continue }
         $stateType = Get-StateBlockType -BlockName $block.name
         if (-not $stateType) { continue }
         
-        switch ($stateType) {
-            "TOPOLOGY" {
-                # Extract current policy reference for display
-                $currentPolicy = ""
-                foreach ($prop in $block.inputProperties) {
-                    if ($prop.id -eq "f5-ssl-orchestrator-topology") {
-                        if ($prop.value.securityPolicyReference) {
-                            $currentPolicy = $prop.value.securityPolicyReference
-                        }
-                        break
+        $obj = @{
+            Name   = $block.name
+            Type   = $stateType
+            BlockId = $block.id
+            Block  = $block
+        }
+        $allObjects[$block.name] = $obj
+        
+        if ($stateType -eq "TOPOLOGY") {
+            # Extract current policy and SSL references for display
+            $currentPolicy = ""
+            $currentSsl = @()
+            foreach ($prop in $block.inputProperties) {
+                if ($prop.id -eq "f5-ssl-orchestrator-topology") {
+                    if ($prop.value.securityPolicyReference) {
+                        $currentPolicy = $prop.value.securityPolicyReference
                     }
-                }
-                $topologies += @{
-                    Name          = $block.name
-                    BlockId       = $block.id
-                    Block         = $block
-                    CurrentPolicy = $currentPolicy
+                    if ($prop.value.sslSettingReference) {
+                        $refs = $prop.value.sslSettingReference
+                        $currentSsl = if ($refs -is [System.Array]) { $refs } else { @($refs) }
+                    }
+                    break
                 }
             }
-            "SERVICE"         { $services += $block.name }
-            "SERVICE_CHAIN"   { $chains += $block.name }
-            "SECURITY_POLICY" { $policies += $block.name }
-            "SSL_SETTINGS"    { $sslSettings += $block.name }
+            $topologies += @{
+                Name          = $block.name
+                BlockId       = $block.id
+                Block         = $block
+                CurrentPolicy = $currentPolicy
+                CurrentSsl    = $currentSsl
+            }
         }
     }
     
-    $totalObjects = $topologies.Count + $services.Count + $chains.Count + $policies.Count + $sslSettings.Count
-    Write-LogOk "$totalObjects SSLO objects ($($topologies.Count) topologies, $($services.Count) services, $($chains.Count) chains, $($policies.Count) policies, $($sslSettings.Count) SSL)"
+    $topoCount = $topologies.Count
+    $otherCount = $allObjects.Count - $topoCount
+    Write-LogOk "$($allObjects.Count) SSLO objects ($topoCount topologies, $otherCount other)"
     
     if ($topologies.Count -eq 0) {
         Write-LogWarn "No topologies found on this device."
@@ -3590,52 +3599,55 @@ function Invoke-TopologyRedeploy {
         }
     }
     
-    if ($topologies.Count -gt 1) {
-        Write-Host "     " -NoNewline
-        Write-Host "A" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
-        Write-Host "  All topologies" -ForegroundColor White
-    }
-    
     Write-Host ""
-    $rangeLabel = if ($topologies.Count -eq 1) { "[1]" } else { "[1-$($topologies.Count), A]" }
+    $rangeLabel = if ($topologies.Count -eq 1) { "[1]" } else { "[1-$($topologies.Count)]" }
     $topoChoice = Read-Host "  Select $rangeLabel (0 to cancel)"
     
     if ($topoChoice -eq "0") { return }
     
-    # Build selection list
     $selectedTopos = @()
-    if ($topoChoice -in @("A", "a")) {
-        $selectedTopos = $topologies
+    $topoIdx = 0
+    if ([int]::TryParse($topoChoice, [ref]$topoIdx) -and $topoIdx -ge 1 -and $topoIdx -le $topologies.Count) {
+        $selectedTopos = @($topologies[$topoIdx - 1])
     } else {
-        $topoIdx = 0
-        if ([int]::TryParse($topoChoice, [ref]$topoIdx) -and $topoIdx -ge 1 -and $topoIdx -le $topologies.Count) {
-            $selectedTopos = @($topologies[$topoIdx - 1])
-        } else {
-            Write-LogWarn "Invalid selection."
-            Press-EnterToContinue
-            return
-        }
+        Write-LogWarn "Invalid selection."
+        Press-EnterToContinue
+        return
     }
     
     # -------------------------------------------------------------------------
-    # Redeploy plan
+    # Show plan
     # -------------------------------------------------------------------------
     Write-Host ""
     Write-Host "  Redeploy plan:" -ForegroundColor White
     foreach ($topo in $selectedTopos) {
         Write-Host "    [WARN]" -NoNewline -ForegroundColor Yellow
         Write-Host "  MODIFY topology $($topo.Name)" -ForegroundColor White
+        # Show topology-specific objects for context
+        foreach ($sslName in $topo.CurrentSsl) {
+            Write-Host "           SSL settings $sslName" -ForegroundColor DarkGray
+        }
+        if ($topo.CurrentPolicy) {
+            Write-Host "           security policy $($topo.CurrentPolicy)" -ForegroundColor DarkGray
+        }
     }
     
-    Write-Host ""
-    Write-Host "  Untouched:" -ForegroundColor White
+    # Untouched: everything not in the selected topology's stack
     $untouched = @()
-    $untouched += $sslSettings | ForEach-Object { "SSL settings $_" }
-    $untouched += $policies | ForEach-Object { "security policy $_" }
-    $untouched += $chains | ForEach-Object { "service chain $_" }
-    $untouched += $services | ForEach-Object { "service $_" }
-    foreach ($item in $untouched) {
-        Write-Host "    $item" -ForegroundColor DarkGray
+    foreach ($name in $allObjects.Keys) {
+        if ($name -eq $selectedTopos[0].Name) { continue }
+        if ($name -in $selectedTopos[0].CurrentSsl) { continue }
+        if ($name -eq $selectedTopos[0].CurrentPolicy) { continue }
+        $obj = $allObjects[$name]
+        $untouched += "$(Get-TypeLabel $obj.Type) $name"
+    }
+    
+    if ($untouched.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Untouched:" -ForegroundColor White
+        foreach ($item in $untouched) {
+            Write-Host "    $item" -ForegroundColor DarkGray
+        }
     }
     
     Write-Host ""
@@ -3645,11 +3657,48 @@ function Invoke-TopologyRedeploy {
     if ($confirm -notin @("y", "Y", "yes", "YES")) { return }
     
     # -------------------------------------------------------------------------
-    # Execute redeploy
+    # Clean up stuck blocks before redeploy
+    # From blocksRecoveryUtil.js: BINDING/UNBINDING → ERROR → DELETE
     # -------------------------------------------------------------------------
     Clear-Host
     Write-LogSection "Redeploying"
     Write-Host ""
+    
+    Write-LogStep "Checking for stuck blocks..."
+    $stuckCleaned = 0
+    
+    $allBlocksResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks"
+    if ($allBlocksResult.Success -and $allBlocksResult.Response.items) {
+        foreach ($topo in $selectedTopos) {
+            foreach ($block in $allBlocksResult.Response.items) {
+                # Skip healthy states (BOUND, UNBOUND, TEMPLATE)
+                if ($block.state -in @("BOUND", "UNBOUND", "TEMPLATE")) { continue }
+                # Match by name — operation blocks contain the deployment name
+                if ($block.name -notmatch [regex]::Escape($topo.Name)) { continue }
+                
+                Write-LogStep "Clearing stuck block (state: $($block.state), block: $($block.name))..."
+                
+                # Patch to ERROR first (valid transition per blocksRecoveryUtil.js), then DELETE
+                Invoke-F5Patch -Endpoint "/mgmt/shared/iapp/blocks/$($block.id)" -Body @{ state = "ERROR" } | Out-Null
+                Start-Sleep -Seconds 2
+                Invoke-F5Delete -Endpoint "/mgmt/shared/iapp/blocks/$($block.id)" | Out-Null
+                $stuckCleaned++
+            }
+        }
+    }
+    
+    if ($stuckCleaned -gt 0) {
+        Write-LogOk "$stuckCleaned stuck block(s) cleared"
+        Write-Host ""
+        Start-Sleep -Seconds 5
+    } else {
+        Write-LogOk "No stuck blocks found"
+        Write-Host ""
+    }
+    
+    # -------------------------------------------------------------------------
+    # Execute redeploy
+    # -------------------------------------------------------------------------
     
     $redeployFailed = $false
     
@@ -3675,10 +3724,6 @@ function Invoke-TopologyRedeploy {
         }
         
         Write-Host ""
-        
-        if ($selectedTopos.Count -gt 1) {
-            Start-Sleep -Seconds 10
-        }
     }
     
     if ($redeployFailed) {
