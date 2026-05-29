@@ -2,7 +2,7 @@
 
 ## vb2.3.15.0-devel (Beta 2 - May 29 2026)
  
-- New feature: Redeploy SSLO Topology — reads device state into memory, pushes selected topology back through the gc processor as a MODIFY to force a fresh deployment pass. Resolves "not initialized" warnings after replay. Does not clear GUI-level "pending" drafts (Can only be cleared by deleting via the SSLO GUI).
+- New feature: Redeploy SSLO Topology — reads device state into memory, pushes selected topology back through the gc processor as a MODIFY to force a fresh deployment pass. Resolves "not initialized" warnings after replay. Does not clear GUI-level "pending" drafts (Those can only be cleared by deleting via the SSLO GUI).
 - Security policy prereq validation for datagroups (existence and type match) and custom URL categories
 - Built-in F5 URL category filter (168 entries from Ansible `condition_category_list`) — built-ins skipped in both capture and validation
 - Policy swap pre-flight plan shows all actions before touching the target
