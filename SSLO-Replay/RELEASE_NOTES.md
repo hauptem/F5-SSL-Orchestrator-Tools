@@ -1,5 +1,16 @@
 # Release Notes
 
+## vb2.3.15-devel (Beta 2 - May 29 2026)
+ 
+- Security policy prereq validation for datagroups (existence and type match) and custom URL categories
+- Built-in F5 URL category filter (168 entries from Ansible `condition_category_list`) — built-ins skipped in both capture and validation
+- Policy swap pre-flight plan shows all actions before touching the target
+- Policy swap blocks on missing services and SSL settings — only chains and policies are auto-created
+- MODIFY operation blocks excluded from replayable category — fixes duplicate policy on replay after policy swap
+- Snapshot summary on clean screen with grouped and sorted dependencies
+- "Record" replaces "Export" in menu and output
+- Replay progress shown in section header bar
+
 ## vb1.3.15-devel (Beta 1 - May 28 2026)
 
 - Initial beta release — snapshot and replay of SSLO iAppsLX configuration across BIG-IP devices
