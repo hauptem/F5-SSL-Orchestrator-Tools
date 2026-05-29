@@ -54,6 +54,7 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 - General Settings (`ssloGS_global`) are environment-specific; configure via the SSLO GUI on the target before replay
 - Per-request policy modifications made outside SSLO with strict updates disabled will not survive replay
 - Extension services (blocking page, DoH guard) must be installed separately
+- SSLO-Replay is slow, because the REST API stack in a Big-IP is slow. It is not possible to get faster performance until F5 updates the internal processing pipeline. The benefit, however is accuracy and the removal of human error.
 - After replay, the SSLO GUI may display a warning about a pending deployment — click the pulsing red icon in the top right of the SSLO main page GUI "resume upgrade" to reload the SSLO configuration and then wait 15 seconds and refresh the GUI to clear the message.
 <img width="408" height="168" alt="Image" src="https://github.com/user-attachments/assets/92446ab9-4cd2-4236-9146-ad2b027450d9" />
  
