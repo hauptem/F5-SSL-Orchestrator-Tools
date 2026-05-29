@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay — F5 SSL Orchestrator Snapshot and Restore Tool
 # =============================================================================
-# Version: b2.3.15.0-devel (beta 2 May 29 2026)
+# Version: 0.3.15-devel
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -59,7 +59,7 @@
 
 # Tool version — aligned to the F5 Ansible collection version used as API reference
 # Snapshot files are version-locked to the tool that created them
-$script:TOOL_VERSION = "0.3.15.0-devel"
+$script:TOOL_VERSION = "0.3.15-devel"
 
 # Output settings
 $script:OUTPUT_DIR = Join-Path $PSScriptRoot "sslo-replay-snapshots"
@@ -522,12 +522,18 @@ function Invoke-F5Delete {
 }
 
 function Save-F5Config {
+    # Save TMOS configuration
     $result = Invoke-F5Post -Endpoint "/mgmt/tm/sys/config" -Body @{ command = "save" }
-    if ($result.Success) { return $true }
+    $tmshOk = $result.Success
     # BIG-IP closes TCP after a successful save config POST.
     # Invoke-RestMethod treats this as a failure even though the save completed.
-    if ($result.Error -match "underlying connection was closed") { return $true }
-    return $false
+    if ($result.Error -match "underlying connection was closed") { $tmshOk = $true }
+    
+    # Save iAppsLX block database — undocumented endpoint from F5 sslofix utility
+    # Non-fatal: if this fails, the tmsh save above is sufficient
+    Invoke-F5Post -Endpoint "/mgmt/shared/iapp/f5-iappslx-ssl-orchestrator/mcpBlockIO" -Body @{ operation = "save" } | Out-Null
+    
+    return $tmshOk
 }
 
 # =============================================================================
@@ -3487,6 +3493,220 @@ function Invoke-SsloRestore {
 }
 
 # =============================================================================
+# TOPOLOGY REDEPLOY
+# =============================================================================
+
+# Force a fresh deployment pass on an existing topology without changing its configuration.
+# Reads all SSLO blocks from the device into memory, identifies topologies and shared objects,
+# and pushes the selected topology back through the gc processor as a MODIFY operation.
+function Invoke-TopologyRedeploy {
+    Clear-Host
+    Write-LogSection "Redeploy SSLO Topology"
+    Write-Host ""
+    
+    # -------------------------------------------------------------------------
+    # Read device configuration into memory
+    # -------------------------------------------------------------------------
+    Write-LogStep "Reading device configuration..."
+    
+    $result = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks"
+    if (-not $result.Success) {
+        Write-LogError "Failed to retrieve iAppsLX blocks."
+        Press-EnterToContinue
+        return
+    }
+    
+    $allBlocks = $result.Response.items
+    if (-not $allBlocks -or $allBlocks.Count -eq 0) {
+        Write-LogWarn "No iAppsLX blocks found on this device."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Classify all SSLO state blocks
+    $topologies = @()
+    $services = @()
+    $chains = @()
+    $policies = @()
+    $sslSettings = @()
+    
+    foreach ($block in $allBlocks) {
+        if ($block.state -ne "UNBOUND") { continue }
+        $stateType = Get-StateBlockType -BlockName $block.name
+        if (-not $stateType) { continue }
+        
+        switch ($stateType) {
+            "TOPOLOGY" {
+                # Extract current policy reference for display
+                $currentPolicy = ""
+                foreach ($prop in $block.inputProperties) {
+                    if ($prop.id -eq "f5-ssl-orchestrator-topology") {
+                        if ($prop.value.securityPolicyReference) {
+                            $currentPolicy = $prop.value.securityPolicyReference
+                        }
+                        break
+                    }
+                }
+                $topologies += @{
+                    Name          = $block.name
+                    BlockId       = $block.id
+                    Block         = $block
+                    CurrentPolicy = $currentPolicy
+                }
+            }
+            "SERVICE"         { $services += $block.name }
+            "SERVICE_CHAIN"   { $chains += $block.name }
+            "SECURITY_POLICY" { $policies += $block.name }
+            "SSL_SETTINGS"    { $sslSettings += $block.name }
+        }
+    }
+    
+    $totalObjects = $topologies.Count + $services.Count + $chains.Count + $policies.Count + $sslSettings.Count
+    Write-LogOk "$totalObjects SSLO objects ($($topologies.Count) topologies, $($services.Count) services, $($chains.Count) chains, $($policies.Count) policies, $($sslSettings.Count) SSL)"
+    
+    if ($topologies.Count -eq 0) {
+        Write-LogWarn "No topologies found on this device."
+        Press-EnterToContinue
+        return
+    }
+    
+    # -------------------------------------------------------------------------
+    # Select topology
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host "  Topologies:" -ForegroundColor White
+    Write-Host ""
+    
+    for ($i = 0; $i -lt $topologies.Count; $i++) {
+        $num = $i + 1
+        $topo = $topologies[$i]
+        Write-Host "     " -NoNewline
+        Write-Host "$num" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+        Write-Host "  $($topo.Name)" -NoNewline -ForegroundColor White
+        if ($topo.CurrentPolicy) {
+            Write-Host "      policy: $($topo.CurrentPolicy)" -ForegroundColor DarkGray
+        } else {
+            Write-Host ""
+        }
+    }
+    
+    if ($topologies.Count -gt 1) {
+        Write-Host "     " -NoNewline
+        Write-Host "A" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+        Write-Host "  All topologies" -ForegroundColor White
+    }
+    
+    Write-Host ""
+    $rangeLabel = if ($topologies.Count -eq 1) { "[1]" } else { "[1-$($topologies.Count), A]" }
+    $topoChoice = Read-Host "  Select $rangeLabel (0 to cancel)"
+    
+    if ($topoChoice -eq "0") { return }
+    
+    # Build selection list
+    $selectedTopos = @()
+    if ($topoChoice -in @("A", "a")) {
+        $selectedTopos = $topologies
+    } else {
+        $topoIdx = 0
+        if ([int]::TryParse($topoChoice, [ref]$topoIdx) -and $topoIdx -ge 1 -and $topoIdx -le $topologies.Count) {
+            $selectedTopos = @($topologies[$topoIdx - 1])
+        } else {
+            Write-LogWarn "Invalid selection."
+            Press-EnterToContinue
+            return
+        }
+    }
+    
+    # -------------------------------------------------------------------------
+    # Redeploy plan
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host "  Redeploy plan:" -ForegroundColor White
+    foreach ($topo in $selectedTopos) {
+        Write-Host "    [WARN]" -NoNewline -ForegroundColor Yellow
+        Write-Host "  MODIFY topology $($topo.Name)" -ForegroundColor White
+    }
+    
+    Write-Host ""
+    Write-Host "  Untouched:" -ForegroundColor White
+    $untouched = @()
+    $untouched += $sslSettings | ForEach-Object { "SSL settings $_" }
+    $untouched += $policies | ForEach-Object { "security policy $_" }
+    $untouched += $chains | ForEach-Object { "service chain $_" }
+    $untouched += $services | ForEach-Object { "service $_" }
+    foreach ($item in $untouched) {
+        Write-Host "    $item" -ForegroundColor DarkGray
+    }
+    
+    Write-Host ""
+    Write-Host "  Forces a fresh deployment pass through the gc processor." -ForegroundColor DarkGray
+    Write-Host "  No configuration changes are made." -ForegroundColor DarkGray
+    $confirm = Read-Host "  Proceed? [y/N]"
+    if ($confirm -notin @("y", "Y", "yes", "YES")) { return }
+    
+    # -------------------------------------------------------------------------
+    # Execute redeploy
+    # -------------------------------------------------------------------------
+    Clear-Host
+    Write-LogSection "Redeploying"
+    Write-Host ""
+    
+    $redeployFailed = $false
+    
+    foreach ($topo in $selectedTopos) {
+        Write-LogStep "Redeploying topology $($topo.Name)..."
+        
+        $modifyBlock = Convert-StateBlockToModify `
+            -TargetStateBlock $topo.Block `
+            -TopologyName $topo.Name `
+            -BlockId $topo.BlockId `
+            -NewPolicyName $topo.CurrentPolicy
+        
+        if (-not $modifyBlock) {
+            Write-LogError "Could not prepare MODIFY block for $($topo.Name)."
+            $redeployFailed = $true
+            break
+        }
+        
+        if (-not (Invoke-BlockPost -Block $modifyBlock -Label "topology $($topo.Name)" -PollMax 180)) {
+            Write-LogError "Redeploy failed for $($topo.Name)."
+            $redeployFailed = $true
+            break
+        }
+        
+        Write-Host ""
+        
+        if ($selectedTopos.Count -gt 1) {
+            Start-Sleep -Seconds 10
+        }
+    }
+    
+    if ($redeployFailed) {
+        Press-EnterToContinue
+        return
+    }
+    
+    # -------------------------------------------------------------------------
+    # Save configuration
+    # -------------------------------------------------------------------------
+    Write-LogStep "Saving BIG-IP configuration..."
+    if (Save-F5Config) {
+        Write-LogOk "Configuration saved"
+    } else {
+        Write-LogWarn "Could not save configuration. Save manually via BIG-IP GUI or tmsh."
+    }
+    
+    Write-Host ""
+    if ($selectedTopos.Count -eq 1) {
+        Write-LogOk "$($selectedTopos[0].Name) redeployed"
+    } else {
+        Write-LogOk "$($selectedTopos.Count) topologies redeployed"
+    }
+    
+    Press-EnterToContinue
+}
+
+# =============================================================================
 # MENU
 # =============================================================================
 
@@ -3518,11 +3738,16 @@ function Show-MainMenu {
     Write-Host "2" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Replay SSLO Snapshot                                   " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
+    Write-Host "  ║" -NoNewline -ForegroundColor Cyan
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "3" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+    Write-Host "  Redeploy SSLO Topology                                 " -NoNewline -ForegroundColor White
+    Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║                                                              ║" -ForegroundColor Cyan
     Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "3" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+    Write-Host "4" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Connect to a different BIG-IP                          " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
@@ -3567,12 +3792,13 @@ function Main {
         while ($true) {
             Show-MainMenu
             
-            $choice = Read-Host "  Select [0-3]"
+            $choice = Read-Host "  Select [0-4]"
             
             switch ($choice) {
                 "1" { Invoke-SsloDump }
                 "2" { Invoke-SsloRestore }
-                "3" { break }
+                "3" { Invoke-TopologyRedeploy }
+                "4" { break }
                 "0" {
                     Write-Host ""
                     Write-Host "  Exiting." -ForegroundColor White
@@ -3587,7 +3813,7 @@ function Main {
                 }
             }
             
-            if ($choice -eq "3") { break }
+            if ($choice -eq "4") { break }
         }
         
         # Clear host-specific state, keep credentials
