@@ -37,7 +37,7 @@ The `sslo-tls-verify-rule` iRule is unchanged from Kevin's original. It captures
 Assign `ssloSC_Block_Page` as the service chain on any security policy rule where traffic should be blocked. The `ssloS_Blocking_Page` service is the only member of this chain and will unconditionally serve a block page to the client.
 
 **Server certificate error blocking:**
-Add `ssloS_CertError_Page` to any inspection service chain where TLS intercept is enabled. When the origin server presents an invalid certificate, the client receives a block page instead of a browser certificate warning. When the certificate is valid, traffic passes through normally.
+Add `ssloS_CertError_Page` to any inspection service chain where TLS intercept is enabled. When the origin server presents an invalid certificate, the client receives a block page instead of a TCP reset. When the certificate is valid, traffic passes through normally.
 
 For `ssloS_CertError_Page` to function, the SSLO SSL configuration must be updated:
 - Set **Expire Certificate Response** to **Mask**
