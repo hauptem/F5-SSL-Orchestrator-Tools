@@ -2,11 +2,12 @@
 
 ## vb2.3.15.0-devel (Beta 2 - May 29 2026)
  
+- New feature: Redeploy SSLO Topology — reads device state into memory, pushes selected topology back through the gc processor as a MODIFY to force a fresh deployment pass. Clears stuck "pending configuration" state without nuke and rebuild.
 - Security policy prereq validation for datagroups (existence and type match) and custom URL categories
-- Built-in F5 URL category filter (168 entries from Ansible `condition_category_list`) built-ins skipped in both capture and validation
+- Built-in F5 URL category filter (168 entries from Ansible `condition_category_list`) — built-ins skipped in both capture and validation
 - Policy swap pre-flight plan shows all actions before touching the target
-- Policy swap blocks on missing services and SSL settings only chains and policies are auto-created
-- MODIFY operation blocks excluded from replayable category fixes duplicate policy on replay after policy swap
+- MODIFY operation blocks excluded from replayable category ... fixes duplicate policy on replay after policy swap
+- mcpBlockIO block database save added alongside tmsh save (undocumented feature pulled from F5's sslofix script)
 - Snapshot summary on clean screen with grouped and sorted dependencies
 - Replay progress shown in section header bar
 
