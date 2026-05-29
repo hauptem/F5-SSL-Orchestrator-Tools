@@ -40,7 +40,7 @@ SSLO-Replay does not try to restore state. It replays intent.
 
 1. **Record** connects to a BIG-IP, retrieves all iAppsLX blocks, classifies the SSLO objects, strips instance-specific fields (UUIDs, block IDs, restricted hashes), captures external dependencies, and writes a portable JSON snapshot
 2. **Replay** reads the snapshot, validates prerequisites on the target, transforms state blocks into gc processor CREATE format with correct per-type inputProperties, and replays objects in dependency order: SSL settings → services → service chains → security policies → topologies
-3. The gc processor does what it was designed to do — generates fresh UUIDs, builds app folders, wires profiles, creates access policies, and binds each block
+3. The gc processor does what it was designed to do which generates fresh UUIDs, builds app folders, wires profiles, creates access policies, and binds each block
 
 The transformation logic, per-type inputProperty templates, and prerequisite field paths are traced to the F5 Ansible SSLO collection module source code. The tool uses F5's own automation modules as the authoritative reference for the gc processor's input contract.
 
