@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay — F5 SSL Orchestrator Snapshot and Restore Tool
 # =============================================================================
-# Version: b2.3.15-devel (beta 2 May 29 2026)
+# Version: b2.3.15.0-devel (beta 2 May 29 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -26,8 +26,7 @@
 #   captures external dependency metadata (monitors, iRules, cipher groups,
 #   profiles, etc.), and writes a single portable JSON file.
 #
-#   On replay, the tool validates prerequisites, offers to auto-create
-#   portable dependencies or substitute environment-specific references,
+#   On replay, the tool validates prerequisites and external dependencies,
 #   transforms state blocks into gc processor CREATE format with correct
 #   per-type inputProperties, regenerates passphrase tokens, and replays
 #   objects in dependency order through the iAppsLX block API.
@@ -45,8 +44,7 @@
 #   - After replay, the SSLO GUI may display a "not initialized" warning.
 #     Click the re-trigger/resume icon to reconcile. Cosmetic only.
 #   - Monitors are not validated at prereq time — the gc processor
-#     validates at deploy time. Custom monitors must exist on target
-#     or be auto-created from snapshot dependency data.
+#     validates at deploy time. Custom monitors must exist on target.
 #
 # USAGE:
 #   .\sslo-replay.ps1
@@ -59,9 +57,9 @@
 # CONFIGURATION
 # =============================================================================
 
-# Tool version — tracks the F5 Ansible collection version this tool is derived from
+# Tool version — aligned to the F5 Ansible collection version used as API reference
 # Snapshot files are version-locked to the tool that created them
-$script:TOOL_VERSION = "0.3.15-devel"
+$script:TOOL_VERSION = "0.3.15.0-devel"
 
 # Output settings
 $script:OUTPUT_DIR = Join-Path $PSScriptRoot "sslo-replay-snapshots"
@@ -137,7 +135,7 @@ $script:DEP_TYPE_ENDPOINTS = @{
     "url_category"   = "/mgmt/tm/sys/url-db/url-category/"
 }
 
-# Portable dependency types — can be auto-created on target from snapshot data
+# Portable dependency types — environment-independent, safe to recreate on target
 $script:PORTABLE_DEP_TYPES = @(
     "irule"
     "monitor_tcp"
@@ -1463,8 +1461,6 @@ function Invoke-DependencyCapture {
     }
     
     $depList = @($depMap.Values)
-    $portableCount = ($depList | Where-Object { $_.portable -eq $true }).Count
-    $envCount = $depList.Count - $portableCount
     
     if ($depList.Count -gt 0) {
         Write-LogOk "$($depList.Count) dependencies recorded"
@@ -1915,7 +1911,7 @@ function Select-BackupFile {
     Write-LogSection "Select Snapshot"
     Write-Host ""
     
-    # List available backups
+    # List available snapshots
     $backupFiles = @()
     if (Test-Path $script:OUTPUT_DIR) {
         $backupFiles = Get-ChildItem -Path $script:OUTPUT_DIR -Filter "sslo-snapshot_*.json" | Sort-Object LastWriteTime -Descending
@@ -2454,7 +2450,7 @@ function Invoke-PolicySwap {
     # Execute: Create and modify per the plan
     # -------------------------------------------------------------------------
     Clear-Host
-    Write-LogSection "Applying Policy"
+    Write-LogSection "Modifying Policy"
     Write-Host ""
     
     $depFailed = $false
