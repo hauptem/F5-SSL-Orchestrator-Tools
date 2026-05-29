@@ -21,7 +21,7 @@ F5 provides a script to delete an SSLO deployment, but no way to easily recreate
 
 ### What SSLO-Replay Solves
 
-SSLO-Replay captures the logical configuration of an SSLO deployment, strips all instance-specific data, and replays it through the gc processor — the same API the SSLO iAppsLX GUI and Ansible use. The gc processor generates fresh UUIDs, builds the TMOS objects, and binds the blocks. The result is indistinguishable from having built it by hand.
+SSLO-Replay captures the logical configuration of an SSLO deployment, strips all instance-specific data, and replays it through the gc processor — the same API engine the SSLO iAppsLX GUI and Ansible use. The gc processor generates fresh UUIDs, builds the TMOS objects, and binds the blocks. The result is indistinguishable from having built it by hand.
 
 The snapshot is a single JSON file containing every SSLO object and its external dependencies. The replay is deterministic, repeatable, and error-free.
 
