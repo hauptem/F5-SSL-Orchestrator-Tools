@@ -19,5 +19,5 @@
 - Scoped replay feature: select a single topology and the tool resolves its full dependency tree
 - Policy swap feature: apply a snapshot policy to an existing topology with rename and overwrite support
 - Prerequisite validation expanded to all service types (L3, HTTP, ICAP, Layer 2, TAP) 
-- Version-locked snapshots can only be replayed by the tool version that created them due to the f5 Ansible module mapping dependency requirement
+- Version-locked snapshots can only be replayed by the SSLO-Replay script version that created them due to the f5 Ansible module mapping dependency requirement
 - MODIFY operation blocks are excluded from capture... only the CREATE blocks are replayable
