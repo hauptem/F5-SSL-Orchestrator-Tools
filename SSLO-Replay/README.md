@@ -50,6 +50,7 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 
 ### Current Limitations
 
+- Replay was not designed to install the LTM prerequisites, those will be present in a UCS restore. Replay was designed for quick SSLO restoration when you need to "nuke" your entire SSLO because of an sgc issue or when you want some SSLO config portability.
 - Certs and keys will never be captured during a snapshot in the JSON manifest for obvious security reasons. Install them on the target before replay.
 - General Settings (`ssloGS_global`) are environment-specific; configure via the SSLO GUI on the target before replay
 - Per-request policy modifications made outside SSLO with strict updates disabled will not survive replay
