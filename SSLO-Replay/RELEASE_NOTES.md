@@ -8,8 +8,6 @@
 - Policy swap pre-flight plan shows all actions before touching the target
 - MODIFY operation blocks excluded from replayable category ... fixes duplicate policy on replay after policy swap
 - mcpBlockIO block database save added alongside tmsh save (undocumented feature pulled from F5's sslofix script)
-- Snapshot summary on clean screen with grouped and sorted dependencies
-- Replay progress shown in section header bar
 
 ## vb1.3.15.0-devel (Beta 1 - May 28 2026)
 
