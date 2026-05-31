@@ -73,8 +73,8 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 
 ## Documentation
 
-- [Release Notes](RELEASE_NOTES.md) — SSLO-Replay Release notes
-- [User Guide](USERGUIDE.md) — SSLO-Replay User Guide
+- [Release Notes](RELEASE_NOTES.md) — Release notes
+- [User Guide](USERGUIDE.md) — User Guide
 
 ## API Reference
 
