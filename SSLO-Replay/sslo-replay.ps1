@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay — F5 SSL Orchestrator Snapshot and Restore Tool
 # =============================================================================
-# Version: b2.3.15-devel (Beta 2 May 29 2026)
+# Version: 0.3.15-devel
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -23,8 +23,9 @@
 #
 #   The snapshot captures all SSLO objects from the iAppsLX block database,
 #   classifies them by deployment type, strips instance-specific fields,
-#   captures external dependency metadata (monitors, iRules, cipher groups,
-#   profiles, etc.), and writes a single portable JSON file.
+#   captures full configuration of external dependencies (datagroups, URL
+#   categories, monitors, profiles, etc.), and writes a single portable
+#   JSON file.
 #
 #   On replay, the tool validates prerequisites and external dependencies,
 #   transforms state blocks into gc processor CREATE format with correct
@@ -58,8 +59,10 @@
 # =============================================================================
 
 # Tool version — aligned to the F5 Ansible collection version used as API reference
-# Snapshot files are version-locked to the tool that created them
 $script:TOOL_VERSION = "0.3.15-devel"
+
+# Snapshot format version — increments only when the JSON structure changes
+$script:SNAPSHOT_FORMAT_VERSION = "1.0"
 
 # Output settings
 $script:OUTPUT_DIR = Join-Path $PSScriptRoot "sslo-replay-snapshots"
@@ -124,6 +127,9 @@ $script:MONITOR_PROBE_ORDER = @(
 # Dependency type to REST endpoint mapping
 $script:DEP_TYPE_ENDPOINTS = @{
     "irule"          = "/mgmt/tm/ltm/rule/"
+    "certificate"    = "/mgmt/tm/sys/crypto/cert/"
+    "key"            = "/mgmt/tm/sys/crypto/key/"
+    "ca_bundle"      = "/mgmt/tm/sys/crypto/cert/"
     "cipher_group"   = "/mgmt/tm/ltm/cipher/group/"
     "cipher_rule"    = "/mgmt/tm/ltm/cipher/rule/"
     "profile_tcp"    = "/mgmt/tm/ltm/profile/tcp/"
@@ -170,13 +176,16 @@ $script:DEP_CREATE_ORDER = @(
     "url_category"
 )
 
-# Instance-specific fields to strip from dependency configs before auto-creation
+# Instance-specific fields to strip from dependency configs at capture and auto-creation
 $script:DEP_STRIP_FIELDS = @(
     "selfLink"
     "generation"
     "kind"
     "fullPath"
     "nameReference"
+    "appService"
+    "appServiceReference"
+    "subPath"
 )
 
 # Built-in F5 URL categories (from Ansible bigip_sslo_config_policy.py condition_category_list)
@@ -1072,36 +1081,13 @@ function Test-IsSsloGenerated {
     return $false
 }
 
-# Certs and keys are excluded from dependency capture (security)
+# Cert/key endpoints are handled separately in SSL_SETTINGS to capture names
+# without going through Add-Ref (which would try to fetch content)
 function Test-IsCertKeyEndpoint {
     param([string]$Endpoint)
     if ($Endpoint -match "/sys/crypto/cert/") { return $true }
     if ($Endpoint -match "/sys/crypto/key/") { return $true }
     return $false
-}
-
-# Fetch a single dependency object from the source BIG-IP via REST
-function Get-DependencyObject {
-    param(
-        [string]$Type,
-        [string]$ObjPath,
-        [string]$Endpoint
-    )
-    
-    $objName = $ObjPath -replace "^/Common/", ""
-    $fullEndpoint = "${Endpoint}~Common~${objName}"
-    $result = Invoke-F5Get -Endpoint $fullEndpoint
-    
-    if ($result.Success) {
-        return [ordered]@{
-            type       = $Type
-            path       = $ObjPath
-            endpoint   = $fullEndpoint
-            portable   = ($Type -in $script:PORTABLE_DEP_TYPES)
-            config     = $result.Response
-        }
-    }
-    return $null
 }
 
 # Monitors require type probing — the SSLO state data stores only the path,
@@ -1139,45 +1125,6 @@ function Get-MonitorDependency {
     }
 }
 
-# Cipher groups reference cipher rules — capture the rules as chained dependencies
-function Get-CipherRuleDependencies {
-    param([object]$GroupConfig)
-    
-    $rules = @()
-    foreach ($field in @("allow", "exclude", "require")) {
-        if ($GroupConfig.PSObject.Properties[$field]) {
-            $refs = $GroupConfig.$field
-            if ($refs -is [System.Array]) {
-                foreach ($ref in $refs) {
-                    $rulePath = $null
-                    if ($ref -is [PSCustomObject] -and $ref.nameReference -and $ref.nameReference.link) {
-                        # Extract name from the link
-                        $rulePath = $ref.name
-                        if ($rulePath -and -not $rulePath.StartsWith("/Common/")) {
-                            $rulePath = "/Common/$rulePath"
-                        }
-                    } elseif ($ref -is [PSCustomObject] -and $ref.name) {
-                        $rulePath = $ref.name
-                        if ($rulePath -and -not $rulePath.StartsWith("/Common/")) {
-                            $rulePath = "/Common/$rulePath"
-                        }
-                    } elseif ($ref -is [string]) {
-                        $rulePath = $ref
-                        if (-not $rulePath.StartsWith("/Common/")) {
-                            $rulePath = "/Common/$rulePath"
-                        }
-                    }
-                    if ($rulePath) {
-                        $dep = Get-DependencyObject -Type "cipher_rule" -ObjPath $rulePath -Endpoint "/mgmt/tm/ltm/cipher/rule/"
-                        if ($dep) { $rules += $dep }
-                    }
-                }
-            }
-        }
-    }
-    return $rules
-}
-
 # Extract all external dependency references from a single block's config data
 # Returns an array of {Type, Path, Endpoint} tuples for capture
 function Get-BlockDependencyRefs {
@@ -1203,6 +1150,39 @@ function Get-BlockDependencyRefs {
     switch ($DeploymentType) {
         
         "SSL_SETTINGS" {
+            # Certificates and keys — name only, no content, no secrets
+            # These bypass Add-Ref (which filters cert/key endpoints) because we want
+            # name-only references in the manifest so the snapshot is self-documenting.
+            $certSeen = @{}
+            foreach ($section in @("certKeyChain", "caCertKeyChain")) {
+                if ($ConfigData.clientSettings -and $ConfigData.clientSettings.$section) {
+                    foreach ($chain in $ConfigData.clientSettings.$section) {
+                        # Certificate
+                        if ($chain.cert -and $chain.cert -ne "" -and $chain.cert -match "^/Common/" -and -not $certSeen[$chain.cert]) {
+                            $certSeen[$chain.cert] = $true
+                            [void]$script:_depRefs.Add([ordered]@{ Type = "certificate"; Path = $chain.cert; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
+                        }
+                        # Key (may be same name as cert — tracked separately)
+                        $keyPath = "key:$($chain.key)"
+                        if ($chain.key -and $chain.key -ne "" -and $chain.key -match "^/Common/" -and -not $certSeen[$keyPath]) {
+                            $certSeen[$keyPath] = $true
+                            [void]$script:_depRefs.Add([ordered]@{ Type = "key"; Path = $chain.key; Endpoint = "/mgmt/tm/sys/crypto/key/" })
+                        }
+                        # Chain cert (if different from cert)
+                        if ($chain.chain -and $chain.chain -ne "" -and $chain.chain -match "^/Common/" -and -not $certSeen[$chain.chain]) {
+                            $certSeen[$chain.chain] = $true
+                            [void]$script:_depRefs.Add([ordered]@{ Type = "certificate"; Path = $chain.chain; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
+                        }
+                    }
+                }
+            }
+            # Server CA bundle
+            if ($ConfigData.serverSettings -and $ConfigData.serverSettings.caBundle) {
+                $caBundle = $ConfigData.serverSettings.caBundle
+                if ($caBundle -and $caBundle -ne "" -and $caBundle -match "^/Common/") {
+                    [void]$script:_depRefs.Add([ordered]@{ Type = "ca_bundle"; Path = $caBundle; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
+                }
+            }
             # Cipher groups — client and server
             if ($ConfigData.clientSettings -and $ConfigData.clientSettings.ciphers) {
                 $cg = $ConfigData.clientSettings.ciphers.cipherGroup
@@ -1405,35 +1385,53 @@ function Invoke-DependencyCapture {
         foreach ($ref in $refs) {
             $path = $ref.Path
             
-            # Deduplicate — merge referencedBy
-            if ($depMap.ContainsKey($path)) {
-                if ($entry.deploymentName -notin $depMap[$path].referencedBy) {
-                    $depMap[$path].referencedBy += $entry.deploymentName
+            # Deduplicate — key by type:path so cert and key for same name don't collide
+            $dedupKey = "$($ref.Type):${path}"
+            if ($depMap.ContainsKey($dedupKey)) {
+                if ($entry.deploymentName -notin $depMap[$dedupKey].referencedBy) {
+                    $depMap[$dedupKey].referencedBy += $entry.deploymentName
                 }
                 continue
             }
             
-            # Fetch from source — minimal capture (name and type only, no content)
+            # Fetch from source — full config capture for recreatable types
             $dep = $null
-            if ($ref.Type -eq "url_category") {
+            if ($ref.Type -in @("certificate", "key", "ca_bundle")) {
+                # Cert/key/CA bundle — name only, no content, no secrets
+                # Non-portable: these must be pre-installed on the target
+                $dep = [ordered]@{
+                    type       = $ref.Type
+                    path       = $path
+                    endpoint   = ""
+                    portable   = $false
+                    config     = $null
+                }
+            } elseif ($ref.Type -eq "url_category") {
                 # Only capture custom URL categories — built-in always exist on any licensed BIG-IP
                 # Built-in list from Ansible bigip_sslo_config_policy.py condition_category_list
                 if (-not $script:BUILTIN_URL_CATEGORIES.ContainsKey($path)) {
+                    $catEncoded = $path -replace " ", "%20"
+                    $catResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~${catEncoded}"
+                    $catConfig = $null
+                    if ($catResult.Success) {
+                        $catConfig = Remove-DepRuntimeFields -Config $catResult.Response
+                    }
                     $dep = [ordered]@{
                         type       = "url_category"
                         path       = $path
-                        endpoint   = ""
+                        endpoint   = "/mgmt/tm/sys/url-db/url-category/~Common~${catEncoded}"
                         portable   = $true
-                        config     = $null
+                        config     = $catConfig
                     }
                 }
             } elseif ($ref.Type -eq "monitor") {
                 # Monitor requires type probing to determine the correct endpoint
                 $dep = Get-MonitorDependency -MonitorPath $path
-                # Strip full config, keep type only
-                if ($dep) { $dep["config"] = $null }
+                if ($dep -and $dep["config"]) {
+                    $dep["config"] = Remove-DepRuntimeFields -Config $dep["config"]
+                }
             } elseif ($ref.Type -eq "datagroup") {
-                # Datagroups — fetch type for prereq validation (ip vs string)
+                # Datagroups — full capture including records for accurate recreation
                 $dgName = $path -replace "^/Common/", ""
                 $dgResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
                 if ($dgResult.Success) {
@@ -1442,11 +1440,11 @@ function Invoke-DependencyCapture {
                         path       = $path
                         endpoint   = "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
                         portable   = $true
-                        config     = [ordered]@{ name = $dgResult.Response.name; type = $dgResult.Response.type }
+                        config     = Remove-DepRuntimeFields -Config $dgResult.Response
                     }
                 }
             } else {
-                # All other types — verify existence on source, store name only
+                # All other types — fetch full config for snapshot completeness
                 $objName = $path -replace "^/Common/", ""
                 $endpoint = $ref.Endpoint
                 $fullEndpoint = "${endpoint}~Common~${objName}"
@@ -1457,19 +1455,47 @@ function Invoke-DependencyCapture {
                         path       = $path
                         endpoint   = $fullEndpoint
                         portable   = ($ref.Type -in $script:PORTABLE_DEP_TYPES)
-                        config     = $null
+                        config     = Remove-DepRuntimeFields -Config $result.Response
                     }
                 }
             }
             
             if ($dep) {
                 $dep["referencedBy"] = @($entry.deploymentName)
-                $depMap[$path] = $dep
+                $depMap[$dedupKey] = $dep
             }
         }
     }
     
-    $depList = @($depMap.Values)
+    # Sort dependencies by type (infrastructure → objects → policy → data) then by path
+    $depSortOrder = @{
+        "certificate"     = 1
+        "key"             = 2
+        "ca_bundle"       = 3
+        "vlan"            = 4
+        "monitor_tcp"     = 5
+        "monitor_http"    = 6
+        "monitor_https"   = 7
+        "monitor_icmp"    = 8
+        "monitor_unknown" = 9
+        "profile_tcp"     = 10
+        "profile_http"    = 11
+        "cipher_rule"     = 12
+        "cipher_group"    = 13
+        "log_publisher"   = 14
+        "snatpool"        = 15
+        "gateway_pool"    = 16
+        "irule"           = 17
+        "ltm_policy"      = 18
+        "access_profile"  = 19
+        "datagroup"       = 20
+        "url_category"    = 21
+    }
+    $depList = @($depMap.Values | Sort-Object { 
+        $order = $depSortOrder[$_.type]
+        if ($null -eq $order) { $order = 99 }
+        $order
+    }, { $_.path })
     
     if ($depList.Count -gt 0) {
         Write-LogOk "$($depList.Count) dependencies recorded"
@@ -1484,19 +1510,31 @@ function Invoke-DependencyCapture {
 }
 
 # =============================================================================
-# DEPENDENCY CREATION AND SUBSTITUTION (Replay-Time)
+# DEPENDENCY FIELD STRIPPING AND AUTO-CREATION
 # =============================================================================
 
-# Strip instance-specific fields from dependency config before POST to target
+# Strip instance-specific fields from dependency configs for clean storage and auto-creation
 function Remove-DepRuntimeFields {
     param([object]$Config)
     
     $clean = $Config | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    
+    # Remove known instance-specific fields
     foreach ($field in $script:DEP_STRIP_FIELDS) {
         if ($clean.PSObject.Properties[$field]) {
             $clean.PSObject.Properties.Remove($field)
         }
     }
+    
+    # Remove REST API reference link objects (*Reference fields with a link property)
+    # These are just REST navigation links, not configuration data
+    $refFields = @($clean.PSObject.Properties | Where-Object { 
+        $_.Name -match "Reference$" -and $_.Value -is [PSCustomObject] -and $_.Value.PSObject.Properties["link"]
+    } | ForEach-Object { $_.Name })
+    foreach ($field in $refFields) {
+        $clean.PSObject.Properties.Remove($field)
+    }
+    
     return $clean
 }
 
@@ -1567,6 +1605,9 @@ function Get-DepDisplayType {
         "monitor_https"   { return "HTTPS monitor" }
         "monitor_icmp"    { return "ICMP monitor" }
         "monitor_unknown" { return "Monitor" }
+        "certificate"     { return "Certificate" }
+        "key"             { return "Key" }
+        "ca_bundle"       { return "CA bundle" }
         "cipher_group"    { return "Cipher group" }
         "cipher_rule"     { return "Cipher rule" }
         "profile_tcp"     { return "TCP profile" }
@@ -1756,16 +1797,22 @@ function Invoke-SsloDump {
     $safeName = $script:RemoteHostname -replace '[^a-zA-Z0-9\-\.]', '_'
     $filename = "sslo-snapshot_${safeName}_${timestamp}.json"
     
+    $depCount = if ($dependencies -and $dependencies.objects) { $dependencies.objects.Count } else { 0 }
+    
     $backup = [ordered]@{
         metadata = [ordered]@{
-            tool         = "sslo-replay"
-            version      = $script:TOOL_VERSION
-            url          = "https://github.com/hauptem/F5-SSL-Orchestrator-Tools"
-            hostname     = $script:RemoteHostname
-            tmosVersion  = $script:TMOSVersion
-            ssloVersion  = $script:SSLOVersion
-            timestamp    = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-            blockCount   = $outputBlocks.Count
+            snapshotVersion  = $script:SNAPSHOT_FORMAT_VERSION
+            tool             = "sslo-replay"
+            toolVersion      = $script:TOOL_VERSION
+            repository       = "https://github.com/hauptem/F5-SSL-Orchestrator-Tools"
+            source           = [ordered]@{
+                hostname     = $script:RemoteHostname
+                tmosVersion  = $script:TMOSVersion
+                ssloVersion  = $script:SSLOVersion
+            }
+            timestamp        = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+            blockCount       = $outputBlocks.Count
+            dependencyCount  = $depCount
         }
         blocks = $outputBlocks
         dependencies = $dependencies
@@ -1852,7 +1899,7 @@ function Import-SsloBackup {
         return $null
     }
     
-    $requiredMeta = @("tool", "version", "hostname", "tmosVersion", "timestamp", "blockCount")
+    $requiredMeta = @("snapshotVersion", "tool", "toolVersion", "source", "timestamp", "blockCount")
     foreach ($field in $requiredMeta) {
         if (-not $backup.metadata.PSObject.Properties[$field]) {
             Write-LogError "Missing metadata field: $field"
@@ -1865,9 +1912,9 @@ function Import-SsloBackup {
         return $null
     }
     
-    if ($backup.metadata.version -ne $script:TOOL_VERSION) {
-        Write-LogWarn "Snapshot version $($backup.metadata.version) does not match this tool (v$($script:TOOL_VERSION))."
-        Write-LogWarn "Use SSLO-Replay v$($backup.metadata.version) to replay this snapshot."
+    if ([version]$backup.metadata.snapshotVersion -gt [version]$script:SNAPSHOT_FORMAT_VERSION) {
+        Write-LogWarn "Snapshot format v$($backup.metadata.snapshotVersion) is newer than this tool supports (v$($script:SNAPSHOT_FORMAT_VERSION))."
+        Write-LogWarn "Update SSLO-Replay to the latest version."
         Write-Host "  https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
         return $null
     }
@@ -1903,7 +1950,7 @@ function Import-SsloBackup {
         return $null
     }
     
-    # Validate dependencies section (optional — older snapshots may not have it)
+    # Dependencies section (optional)
     $depCount = 0
     if ($backup.PSObject.Properties["dependencies"] -and $backup.dependencies -and $backup.dependencies.objects) {
         $depCount = $backup.dependencies.objects.Count
@@ -2609,9 +2656,9 @@ function Invoke-SsloRestore {
     Clear-Host
     Write-LogSection "Snapshot Details"
     Write-Host ""
-    Write-LogInfo "Source host:     $($backup.metadata.hostname)"
-    Write-LogInfo "TMOS version:    $($backup.metadata.tmosVersion)"
-    Write-LogInfo "SSLO version:    $($backup.metadata.ssloVersion)"
+    Write-LogInfo "Source host:     $($backup.metadata.source.hostname)"
+    Write-LogInfo "TMOS version:    $($backup.metadata.source.tmosVersion)"
+    Write-LogInfo "SSLO version:    $($backup.metadata.source.ssloVersion)"
     Write-LogInfo "Snapshot date:   $($backup.metadata.timestamp)"
     Write-LogInfo "Block count:     $($backup.metadata.blockCount)"
     
@@ -2621,14 +2668,14 @@ function Invoke-SsloRestore {
     Write-Host ""
     $mismatches = @()
     
-    if ($backup.metadata.hostname -ne $script:RemoteHostname) {
-        $mismatches += @{ Label = "Hostname"; Backup = $backup.metadata.hostname; Target = $script:RemoteHostname }
+    if ($backup.metadata.source.hostname -ne $script:RemoteHostname) {
+        $mismatches += @{ Label = "Hostname"; Backup = $backup.metadata.source.hostname; Target = $script:RemoteHostname }
     }
-    if ($backup.metadata.tmosVersion -ne $script:TMOSVersion) {
-        $mismatches += @{ Label = "TMOS"; Backup = $backup.metadata.tmosVersion; Target = $script:TMOSVersion }
+    if ($backup.metadata.source.tmosVersion -ne $script:TMOSVersion) {
+        $mismatches += @{ Label = "TMOS"; Backup = $backup.metadata.source.tmosVersion; Target = $script:TMOSVersion }
     }
-    if ($backup.metadata.ssloVersion -and $backup.metadata.ssloVersion -ne $script:SSLOVersion) {
-        $mismatches += @{ Label = "SSLO"; Backup = $backup.metadata.ssloVersion; Target = $script:SSLOVersion }
+    if ($backup.metadata.source.ssloVersion -and $backup.metadata.source.ssloVersion -ne $script:SSLOVersion) {
+        $mismatches += @{ Label = "SSLO"; Backup = $backup.metadata.source.ssloVersion; Target = $script:SSLOVersion }
     }
     
     if ($mismatches.Count -gt 0) {
