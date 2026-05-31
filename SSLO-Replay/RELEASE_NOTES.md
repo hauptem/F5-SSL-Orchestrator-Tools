@@ -4,6 +4,7 @@
 
 - Replay Snapshot format v1.0 specification finalized defines the JSON structure as a contract independent of sslo-replay script changes
 - `snapshotVersion` field (string, currently `"1.0"`) format changes tracked independently, the script rejects newer formats it cannot parse
+- Fixed: replayable topology blocks caused duplicate component blocks (policies, service chains, SSL settings) during full replay — the embedded dependent objects in the operation block collided with standalone blocks deployed earlier in the sequence. Topology blocks now always go through CREATE conversion regardless of backupType which will prevent duplicate object creation during replay
 - Metadata restructured: source device info moved to `source` sub-object, `toolVersion` replaces `version`, `repository` replaces `url`, `dependencyCount` added
 - Full dependency config capture datagroups with all records, custom URL categories, monitors, profiles, iRules, cipher groups, log publishers, and all other portable types now stored with complete configuration from source device
 - Cert/key/CA bundle name-only references added to dependency manifest — paths captured for the prereq checklist, content never stored
