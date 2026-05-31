@@ -10,7 +10,7 @@
 - Cert/key/CA bundle name-only references added to dependency manifest. Paths are captured for the prereq checklist, cert/key content is never stored in a snapshot
 - Dependency configs cleaned at capture time REST metadata, app service bindings, and `*Reference` link objects stripped
 - Dependencies sorted by type group (PKI → network → monitors → profiles → crypto → data → categories), then alphabetically within each group
-- Dedup key changed from path-only to type:path composite — prevents cert and key for the same name from colliding
+- Dedup key changed from path-only to type:path composite which prevents certs and keys for the same name from colliding
 - Version-lock removed snapshots are no longer rejected for tool version mismatch, only for snapshot format version incompatibility
 - Dead code removed: `Get-DependencyObject` and `Get-CipherRuleDependencies` (defined but never called)
 
