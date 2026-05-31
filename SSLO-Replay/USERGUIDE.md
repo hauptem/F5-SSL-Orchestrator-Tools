@@ -99,7 +99,8 @@ Deployment order: SSL settings → services → service chains → security poli
 
 ### After replay
 
-The SSLO GUI may show a blinking red icon in the top right and/or "not initialized" indicator. Click the "Resume" red icon in the SSLO GUI to reinitialize/reload the SSLO block configuration and wait 30 seconds.
+After replay, the SSLO GUI may display a warning about a pending deployment or initilization; click the pulsing red icon in the top right of the SSLO main page GUI "resume upgrade" to reload the SSLO configuration and then wait 15 seconds and refresh the GUI. The message should clear.
+<img width="408" height="168" alt="Image" src="https://github.com/user-attachments/assets/92446ab9-4cd2-4236-9146-ad2b027450d9" />
 
 ---
 
