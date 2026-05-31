@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay — F5 SSL Orchestrator Snapshot and Restore Tool
 # =============================================================================
-# Version: 0.3.15-devel
+# Version: vb3.3.15-devel (Beta 3 May 31 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
