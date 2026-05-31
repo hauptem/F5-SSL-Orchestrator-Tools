@@ -1,5 +1,74 @@
 # Release Notes
 
+## vb3.3.15.0-devel (Beta 3 - May 31 2026)
+
+- Replay Snapshot format v1.0 specification finalized defines the JSON structure as a contract independent of tool changes
+- `snapshotVersion` field (string, currently `"1.0"`) format changes tracked independently, tool rejects newer formats it cannot parse
+- Metadata restructured: source device info moved to `source` sub-object, `toolVersion` replaces `version`, `repository` replaces `url`, `dependencyCount` added
+- Full dependency config capture datagroups with all records, custom URL categories, monitors, profiles, iRules, cipher groups, log publishers, and all other portable types now stored with complete configuration from source device
+- Cert/key/CA bundle name-only references added to dependency manifest — paths captured for the prereq checklist, content never stored
+- Dependency configs cleaned at capture time REST metadata, app service bindings, and `*Reference` link objects stripped
+- Dependencies sorted by type group (PKI → network → monitors → profiles → crypto → data → categories), then alphabetically within each group
+- Dedup key changed from path-only to type:path composite — prevents cert and key for the same name from colliding
+- Version-lock removed snapshots are no longer rejected for tool version mismatch, only for snapshot format version incompatibility
+- Dead code removed: `Get-DependencyObject` and `Get-CipherRuleDependencies` (defined but never called)
+
+ # SSLO Replay Snapshot Format v1.0
+
+```
+{
+  metadata
+    snapshotVersion     "1.0"
+    tool                "sslo-replay"
+    toolVersion         "0.3.15-devel"
+    repository          github URL
+    source
+      hostname          source device hostname
+      tmosVersion       TMOS version
+      ssloVersion       SSLO RPM version
+    timestamp           ISO 8601
+    blockCount          number of blocks
+    dependencyCount     number of dependencies
+
+  blocks[]
+    deploymentType      SERVICE | SERVICE_CHAIN | SECURITY_POLICY | SSL_SETTINGS | TOPOLOGY
+    deploymentName      object name (ssloS_, ssloSC_, ssloP_, ssloT_, sslo_)
+    backupType          "replayable" | "state"
+    block               cleaned iAppsLX block (inputProperties only, runtime fields stripped)
+
+  dependencies
+    capturedAt          timestamp
+    objects[]           sorted by type group, then alphabetically by path
+      type              see dependency types below
+      path              /Common/object_name or category name
+      endpoint          REST endpoint used to fetch/create
+      portable          true if auto-creatable on target
+      config            full cleaned config from source, null for certs/keys
+      referencedBy[]    list of SSLO object names referencing this dependency
+}
+```
+
+## Block fields stripped at capture
+
+`id`, `existingBlockId`, `selfLink`, `generation`, `lastUpdateMicros`, `restrictedId`, `restrictedHash`, `obRestrictedAttribute`, `state`, `dataProperties`, `audit`
+
+## Dependency config fields stripped at capture
+
+`selfLink`, `generation`, `kind`, `fullPath`, `nameReference`, `appService`, `appServiceReference`, `subPath`, `*Reference` link objects
+
+## Dependency types
+
+Name only: `certificate`, `key`, `ca_bundle`
+
+Config stored, not portable: `vlan`, `snatpool`, `gateway_pool`, `ltm_policy`, `access_profile`
+
+Config stored, portable: `monitor_*`, `profile_tcp`, `profile_http`, `cipher_rule`, `cipher_group`, `log_publisher`, `irule`, `datagroup`, `url_category`
+
+## File naming
+
+`sslo-snapshot_{hostname}_{yyyyMMdd-HHmmss}.json`
+
+
 ## vb2.3.15.0-devel (Beta 2 - May 29 2026)
  
 - New feature: Redeploy SSLO Topology — reads device state into memory, pushes selected topology back through the gc processor as a MODIFY to force a fresh deployment pass. Resolves "not initialized" warnings after replay. Does not clear GUI-level "pending" drafts (Those can only be cleared by deleting via the SSLO GUI).
