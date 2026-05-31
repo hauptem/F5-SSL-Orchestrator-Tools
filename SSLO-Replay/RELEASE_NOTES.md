@@ -7,7 +7,7 @@
 - Fixed: replayable topology blocks caused duplicate component blocks (policies, service chains, SSL settings) during full replay — the embedded dependent objects in the operation block collided with standalone blocks deployed earlier in the sequence. Topology blocks now always go through CREATE conversion regardless of backupType which will prevent duplicate object creation during replay
 - Metadata restructured: source device info moved to `source` sub-object, `toolVersion` replaces `version`, `repository` replaces `url`, `dependencyCount` added
 - Full dependency config capture datagroups with all records, custom URL categories, monitors, profiles, iRules, cipher groups, log publishers, and all other portable types now stored with complete configuration from source device
-- Cert/key/CA bundle name-only references added to dependency manifest — paths captured for the prereq checklist, content never stored
+- Cert/key/CA bundle name-only references added to dependency manifest. Paths are captured for the prereq checklist, cert/key content is never stored in a snapshot
 - Dependency configs cleaned at capture time REST metadata, app service bindings, and `*Reference` link objects stripped
 - Dependencies sorted by type group (PKI → network → monitors → profiles → crypto → data → categories), then alphabetically within each group
 - Dedup key changed from path-only to type:path composite — prevents cert and key for the same name from colliding
