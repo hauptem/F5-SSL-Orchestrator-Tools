@@ -74,6 +74,10 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 .\sslo-replay.ps1
 ```
 
+## Documentation
+
+- [Release Notes](RELEASE_NOTES.md) — SSLO-Replay Release notes
+
 ## API Reference
 
 The gc processor input/output contract, per-type inputProperty templates, passphrase token handling, and prerequisite field paths are derived from the F5 Ansible SSLO collection:
