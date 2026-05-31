@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay — F5 SSL Orchestrator Snapshot and Restore Tool
 # =============================================================================
-# Version: b3.3.15-devel (beta version 3 - May 31 2026)
+# Version: 0.3.15-devel
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -3389,7 +3389,11 @@ function Invoke-SsloRestore {
         # Prepare the block for POST
         $postBlock = $null
         
-        if ($item.BackupType -eq $script:CAT_STATE) {
+        # Topology blocks always go through CREATE conversion regardless of backupType.
+        # Replayable topology blocks contain embedded dependent objects (policy, service
+        # chains, SSL settings) that would cause the gc processor to create duplicate
+        # component blocks when standalone blocks for those objects already exist.
+        if ($item.BackupType -eq $script:CAT_STATE -or $item.DeploymentType -eq "TOPOLOGY") {
             $postBlock = Convert-StateBlockToCreate `
                 -StateBlock $item.Block `
                 -DeploymentType $item.DeploymentType `
