@@ -66,23 +66,22 @@ Menu option 2. After loading and validating the snapshot, the tool presents a su
 
 The target device needs:
 
-1. **TMOS licensed and provisioned** — LTM and APM at minimum
-2. **SSLO installed and General Settings configured** — run through the SSLO guided config at least once
-3. **Certificates and keys installed** — match the names in the snapshot (check the dependencies section)
-4. **VLANs created** — the ingress and service-side VLANs referenced by topologies and services
-5. **Network infrastructure** — self IPs, routes, anything the services need to reach inspection devices
+1. **SSLO installed and General Settings configured** — run through the SSLO guided config at least once
+2. **Certificates and keys installed** — match the names in the snapshot (check the dependencies section)
+3. **VLANs created** — the ingress and service-side VLANs referenced by topologies and services
+4. **Network infrastructure** — self IPs, routes, anything the services need to reach inspection devices
 
 The tool validates all of this before touching the blocks API. If something is missing, it tells you what and where it is referenced.
 
 ### Portable dependencies
 
-Datagroups, custom URL categories, monitors, profiles, cipher groups, and iRules are portable. If any are missing on the target, the tool offers to create them automatically from the stored config. This only works if the snapshot was taken with full dependency capture (snapshot format v1.0 or later).
+Datagroups, custom URL categories, monitors, profiles, cipher groups, and iRules are portable. If any are missing on the target, the tool offers to create them automatically from the stored config. However this only works if the snapshot was taken with full dependency capture (snapshot format v1.0 or later).
 
 ### Replay modes
 
 **Full replay** deploys every object in the snapshot in dependency order.
 
-**Scoped replay** lets you pick a single topology. The tool resolves the dependency tree — the topology's SSL settings, security policy, service chains, and services — and replays only those objects. Other topologies in the snapshot are skipped.
+**Scoped replay** lets you pick a single topology. The tool resolves the dependency tree - the topology's SSL settings, security policy, service chains, and services — and replays only those objects. Other topologies in the snapshot are skipped.
 
 ### What happens during replay
 
@@ -90,19 +89,17 @@ Datagroups, custom URL categories, monitors, profiles, cipher groups, and iRules
 2. Snapshot validation and summary display
 3. Target compatibility check (hostname, TMOS version, SSLO version — warns on mismatch, does not block)
 4. Scope selection (full or single topology)
-5. Prerequisite validation — walks every block and checks all external references on the target
-6. Pre-replay analysis — checks which objects already exist on the target and skips them, displays a plan of what will be deployed
+5. Prerequisite validation walks every block and checks all external references on the target
+6. Pre-replay analysis checks which objects already exist on the target and skips them, displays a plan of what will be deployed
 7. Confirmation prompt
-8. Block deployment — each block is POSTed to `/mgmt/shared/iapp/blocks` as a CREATE operation with fresh passphrase tokens. The tool waits for each block to reach BOUND state before proceeding to the next
-9. Configuration save — tmsh save and mcpBlockIO block database save
+8. Block deployment each block is POSTed to `/mgmt/shared/iapp/blocks` as a CREATE operation with fresh passphrase tokens. The tool waits for each block to reach BOUND state before proceeding to the next
+9. Configuration save; tmsh save and mcpBlockIO block database save
 
 Deployment order: SSL settings → services → service chains → security policies → topologies. Each object waits up to 90 seconds for the gc processor to complete.
 
 ### After replay
 
-The SSLO GUI may show a yellow triangle or "not initialized" indicator on replayed topologies. This is cosmetic. Click the re-trigger or resume icon in the SSLO GUI to clear it, or use menu option 3 (Redeploy) to push a MODIFY through the gc processor.
-
-Traffic processing begins as soon as the topology reaches BOUND state. The GUI indicator does not affect functionality.
+The SSLO GUI may show a blinking red icon in the top right and/or "not initialized" indicator. Click the "Resume" red icon in the SSLO GUI to reinitialize/reload the SSLO block configuration and wait 30 seconds.
 
 ---
 
@@ -125,7 +122,7 @@ Services and SSL settings must already exist on the target. The tool will not cr
 
 ---
 
-## Redeploying a Topology
+## Redeploying a Topology (experimental)
 
 Menu option 3. Reads the current state of a topology from the connected device and pushes it back through the gc processor as a MODIFY operation.
 
@@ -144,29 +141,25 @@ Before the MODIFY, the tool scans for any blocks in a stuck state (BINDING, UNBI
 
 This is the checklist for standing up a new device to receive a replay.
 
-### Step 1: Base TMOS
-
-License, provision LTM and APM, configure management IP, NTP, DNS. Standard BIG-IP setup.
-
-### Step 2: Network infrastructure
+### Step 1: Network infrastructure
 
 Create VLANs and self IPs for the inspection zone. If services use L3 inline inspection, create the to-service and from-service VLANs and assign self IPs. Create the ingress VLAN where client traffic enters.
 
 The snapshot's dependency section lists every VLAN referenced by services and topologies.
 
-### Step 3: Certificates and keys
+### Step 2: Certificates and keys
 
 Install the SSL intercept CA certificate and key. Match the names exactly — the snapshot references them by path (e.g., `/Common/my-intercept-ca`). If the names differ on the target, the prereq check will flag them.
 
 The CA bundle (`/Common/ca-bundle.crt`) ships with TMOS. No action needed unless you use a custom bundle.
 
-### Step 4: SSLO General Settings
+### Step 3: SSLO General Settings
 
 Open the SSLO guided configuration and complete the General Settings wizard. This creates the base SSLO infrastructure: the default access profile, iAppsLX block framework, log publishers, and resolver config. Replay cannot proceed without it.
 
-### Step 5: Replay
+### Step 4: Replay
 
-Run the tool, connect to the target, select option 2, pick the snapshot file. The tool handles the rest.
+Run the tool, connect to the target, select option 2, pick the snapshot file. 
 
 ---
 
@@ -180,18 +173,6 @@ The gc processor timed out. Check `/var/log/restnoded/restnoded.log` on the BIG-
 
 The tool lists every missing object with its type and which SSLO object references it. Create the missing objects and retry. For portable dependencies (datagroups, URL categories, monitors), the tool offers auto-creation if the snapshot has stored configs.
 
-### GUI shows "not initialized" after replay
-
-Use menu option 3 (Redeploy) against the topology. This pushes a MODIFY through the gc processor and clears the warning. Alternatively, click the re-trigger icon in the SSLO GUI.
-
-### Stuck blocks from a previous failed deployment
-
-The tool detects and cleans these automatically during redeploy (menu option 3). Blocks in BINDING, UNBINDING, or ERROR state that match the topology name are cleaned up before the fresh deployment. During replay, objects that already exist on the target are skipped rather than cleaned. If you need to clear stuck blocks manually: PATCH the block to ERROR state, wait 2 seconds, DELETE it.
-
 ### Policy swap blocked on missing service
 
 The policy references a service chain that references a service not present on the target. Services are not auto-created during policy swap because they require network infrastructure (VLANs, self IPs, pool members) that the tool cannot verify. Deploy the service first through a full replay or the SSLO GUI, then retry the policy swap.
-
-### Snapshot from a different TMOS or SSLO version
-
-The tool warns but does not block. SSLO inputProperties are generally stable across minor versions. Major version jumps (e.g., SSLO 9.x to 12.x) may have incompatible property changes. Test in a lab first.
