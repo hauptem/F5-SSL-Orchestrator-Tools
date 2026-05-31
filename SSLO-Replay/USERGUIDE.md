@@ -48,7 +48,7 @@ The snapshot has three sections. `metadata` identifies the source device and too
 
 Certs and keys are listed by name only. Their content is never captured.
 
-See SNAPSHOT-FORMAT.md for the full specification.
+See the release notes for the full snapshot format specification.
 
 ---
 
