@@ -71,10 +71,6 @@ The target device needs:
 
 The tool validates all of this before touching the blocks API. If something is missing, it tells you what and where it is referenced.
 
-### Portable dependencies
-
-Datagroups, custom URL categories, monitors, profiles, cipher groups, and iRules are portable. If any are missing on the target, the tool offers to create them automatically from the stored config. However this only works if the snapshot was taken with full dependency capture (snapshot format v1.0 or later).
-
 ### Replay modes
 
 **Full replay** deploys every object in the snapshot in dependency order.
@@ -171,7 +167,7 @@ The gc processor timed out. Check `/var/log/restnoded/restnoded.log` on the BIG-
 
 ### Prerequisite check reports missing objects
 
-The tool lists every missing object with its type and which SSLO object references it. Create the missing objects and retry. For portable dependencies (datagroups, URL categories, monitors), the tool offers auto-creation if the snapshot has stored configs.
+The tool lists every missing object with its type and which SSLO object references it. Create the missing objects and retry. 
 
 ### Policy swap blocked on missing service
 
