@@ -8,9 +8,7 @@
 
 PowerShell 5.1 or later. No modules or dependencies required.
 
-On launch you get a connection prompt. Enter the BIG-IP management IP and credentials. The tool validates connectivity, checks TMOS and SSLO versions, and drops you into the main menu.
-
-Username defaults to `admin`. The connection uses iControl REST over HTTPS on port 443. Self-signed certificates are accepted.
+On launch you get a connection prompt. Enter the BIG-IP management IP and credentials. The tool validates connectivity, checks TMOS and SSLO versions, and drops you into the main menu. The connection uses iControl REST over HTTPS on port 443.
 
 ## Main Menu
 
