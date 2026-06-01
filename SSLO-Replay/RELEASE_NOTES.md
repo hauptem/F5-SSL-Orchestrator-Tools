@@ -5,7 +5,6 @@
 - Refined scope of the project back to just SSLO configuration backup and replay. Removed the ability to install LTM dependencies
 - Dependencies removed from snapshot JSON; the `.json` file is now pure SSLO blocks and metadata
 - Dependency manifest exported as a separate human-readable `.txt` file alongside the snapshot, grouped by type with full configs for reference
-- Dependency auto-creation removed; Replay handles SSLO blocks only, prerequisites are the operator's responsibility 
 - Dead code removed: `New-DependencyOnTarget`, `Apply-SubstitutionMap`, `Get-DependencyObject`, `Get-CipherRuleDependencies`, `DEP_TYPE_ENDPOINTS`, `DEP_CREATE_ORDER`
 
 ## vb3.3.15.0-devel (Beta 3 - May 31 2026)
