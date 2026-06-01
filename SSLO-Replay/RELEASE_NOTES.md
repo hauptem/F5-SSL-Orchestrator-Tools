@@ -44,15 +44,6 @@
     backupType          "replayable" | "state"
     block               cleaned iAppsLX block (inputProperties only, runtime fields stripped)
 
-  dependencies
-    capturedAt          timestamp
-    objects[]           sorted by type group, then alphabetically by path
-      type              see dependency types below
-      path              /Common/object_name or category name
-      endpoint          REST endpoint used to fetch/create
-      portable          true if auto-creatable on target
-      config            full cleaned config from source, null for certs/keys
-      referencedBy[]    list of SSLO object names referencing this dependency
 }
 ```
 
@@ -60,22 +51,10 @@
 
 `id`, `existingBlockId`, `selfLink`, `generation`, `lastUpdateMicros`, `restrictedId`, `restrictedHash`, `obRestrictedAttribute`, `state`, `dataProperties`, `audit`
 
-## Dependency config fields stripped at capture
-
-`selfLink`, `generation`, `kind`, `fullPath`, `nameReference`, `appService`, `appServiceReference`, `subPath`, `*Reference` link objects
-
-## Dependency types
-
-Name only: `certificate`, `key`, `ca_bundle`
-
-Config stored, not portable: `vlan`, `snatpool`, `gateway_pool`, `ltm_policy`, `access_profile`
-
-Config stored, portable: `monitor_*`, `profile_tcp`, `profile_http`, `cipher_rule`, `cipher_group`, `log_publisher`, `irule`, `datagroup`, `url_category`
-
 ## File naming
 
 `sslo-snapshot_{hostname}_{yyyyMMdd-HHmmss}.json`
-
+`sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt`
 
 ## vb2.3.15.0-devel (Beta 2 - May 29 2026)
  
