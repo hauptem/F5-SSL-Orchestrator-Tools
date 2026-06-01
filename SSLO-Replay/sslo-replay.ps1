@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay — F5 SSL Orchestrator Snapshot and Restore Tool
 # =============================================================================
-# Version: vb3.3.15-devel (Beta 3 May 31 2026)
+# Version: vb4.3.15-devel (Beta 4 June 1 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -124,27 +124,7 @@ $script:MONITOR_PROBE_ORDER = @(
     @{ Type = "monitor_icmp";  Endpoint = "/mgmt/tm/ltm/monitor/gateway-icmp/" }
 )
 
-# Dependency type to REST endpoint mapping
-$script:DEP_TYPE_ENDPOINTS = @{
-    "irule"          = "/mgmt/tm/ltm/rule/"
-    "certificate"    = "/mgmt/tm/sys/crypto/cert/"
-    "key"            = "/mgmt/tm/sys/crypto/key/"
-    "ca_bundle"      = "/mgmt/tm/sys/crypto/cert/"
-    "cipher_group"   = "/mgmt/tm/ltm/cipher/group/"
-    "cipher_rule"    = "/mgmt/tm/ltm/cipher/rule/"
-    "profile_tcp"    = "/mgmt/tm/ltm/profile/tcp/"
-    "profile_http"   = "/mgmt/tm/ltm/profile/http/"
-    "snatpool"       = "/mgmt/tm/ltm/snatpool/"
-    "log_publisher"  = "/mgmt/tm/sys/log-config/publisher/"
-    "vlan"           = "/mgmt/tm/net/vlan/"
-    "gateway_pool"   = "/mgmt/tm/ltm/pool/"
-    "access_profile" = "/mgmt/tm/apm/profile/access/"
-    "ltm_policy"     = "/mgmt/tm/ltm/policy/"
-    "datagroup"      = "/mgmt/tm/ltm/data-group/internal/"
-    "url_category"   = "/mgmt/tm/sys/url-db/url-category/"
-}
-
-# Portable dependency types — environment-independent, safe to recreate on target
+# Dependency types that include full recreatable config in the snapshot
 $script:PORTABLE_DEP_TYPES = @(
     "irule"
     "monitor_tcp"
@@ -160,23 +140,7 @@ $script:PORTABLE_DEP_TYPES = @(
     "url_category"
 )
 
-# Dependency auto-creation order (respects internal dependencies)
-$script:DEP_CREATE_ORDER = @(
-    "cipher_rule"
-    "cipher_group"
-    "monitor_tcp"
-    "monitor_http"
-    "monitor_https"
-    "monitor_icmp"
-    "irule"
-    "profile_tcp"
-    "profile_http"
-    "log_publisher"
-    "datagroup"
-    "url_category"
-)
-
-# Instance-specific fields to strip from dependency configs at capture and auto-creation
+# Instance-specific fields to strip from dependency configs at capture
 $script:DEP_STRIP_FIELDS = @(
     "selfLink"
     "generation"
@@ -1510,10 +1474,10 @@ function Invoke-DependencyCapture {
 }
 
 # =============================================================================
-# DEPENDENCY FIELD STRIPPING AND AUTO-CREATION
+# DEPENDENCY FIELD STRIPPING
 # =============================================================================
 
-# Strip instance-specific fields from dependency configs for clean storage and auto-creation
+# Strip instance-specific fields from dependency configs for clean storage
 function Remove-DepRuntimeFields {
     param([object]$Config)
     
@@ -1536,63 +1500,6 @@ function Remove-DepRuntimeFields {
     }
     
     return $clean
-}
-
-# Create a portable dependency on the target BIG-IP from snapshot data
-function New-DependencyOnTarget {
-    param([object]$DepRecord)
-    
-    if (-not $DepRecord.config) { return $false }
-    
-    $endpoint = $script:DEP_TYPE_ENDPOINTS[$DepRecord.type]
-    if (-not $endpoint) {
-        # Monitor types have their own endpoints
-        if ($DepRecord.type -match "^monitor_") {
-            foreach ($probe in $script:MONITOR_PROBE_ORDER) {
-                if ($probe.Type -eq $DepRecord.type) {
-                    $endpoint = $probe.Endpoint
-                    break
-                }
-            }
-        }
-    }
-    if (-not $endpoint) { return $false }
-    
-    $cleanConfig = Remove-DepRuntimeFields -Config $DepRecord.config
-    $result = Invoke-F5Post -Endpoint $endpoint -Body $cleanConfig
-    return $result.Success
-}
-
-# Recursively replace all occurrences of source paths with target paths
-# Applied in memory before block POST — snapshot file is never modified
-function Apply-SubstitutionMap {
-    param(
-        [object]$Data,
-        [hashtable]$Map
-    )
-    
-    if ($null -eq $Data) { return $Data }
-    
-    if ($Data -is [string]) {
-        if ($Map.ContainsKey($Data)) { return $Map[$Data] }
-        return $Data
-    }
-    
-    if ($Data -is [System.Array]) {
-        $result = @()
-        foreach ($item in $Data) {
-            $result += (Apply-SubstitutionMap -Data $item -Map $Map)
-        }
-        return ,$result
-    }
-    
-    if ($Data -is [PSCustomObject]) {
-        foreach ($prop in @($Data.PSObject.Properties)) {
-            $prop.Value = Apply-SubstitutionMap -Data $prop.Value -Map $Map
-        }
-    }
-    
-    return $Data
 }
 
 # Map internal dependency type to user-facing label
@@ -1797,8 +1704,6 @@ function Invoke-SsloDump {
     $safeName = $script:RemoteHostname -replace '[^a-zA-Z0-9\-\.]', '_'
     $filename = "sslo-snapshot_${safeName}_${timestamp}.json"
     
-    $depCount = if ($dependencies -and $dependencies.objects) { $dependencies.objects.Count } else { 0 }
-    
     $backup = [ordered]@{
         metadata = [ordered]@{
             snapshotVersion  = $script:SNAPSHOT_FORMAT_VERSION
@@ -1812,10 +1717,8 @@ function Invoke-SsloDump {
             }
             timestamp        = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
             blockCount       = $outputBlocks.Count
-            dependencyCount  = $depCount
         }
         blocks = $outputBlocks
-        dependencies = $dependencies
     }
     
     # Ensure output directory exists
@@ -1828,6 +1731,100 @@ function Invoke-SsloDump {
     
     Write-Host ""
     Write-LogOk "Snapshot saved to: $outputPath"
+    
+    # Generate dependency manifest (text file, not used by the tool)
+    $depFilePath = $null
+    if ($dependencies -and $dependencies.objects -and $dependencies.objects.Count -gt 0) {
+        $depFilename = "sslo-dependencies_${safeName}_${timestamp}.txt"
+        $depFilePath = Join-Path $script:OUTPUT_DIR $depFilename
+        
+        $depGroups = [ordered]@{
+            "CERTIFICATES AND KEYS" = @("certificate", "key", "ca_bundle")
+            "VLANS"                 = @("vlan")
+            "MONITORS"              = @("monitor_tcp", "monitor_http", "monitor_https", "monitor_icmp", "monitor_unknown")
+            "PROFILES"              = @("profile_tcp", "profile_http")
+            "CIPHER CONFIGURATION"  = @("cipher_rule", "cipher_group")
+            "LOG PUBLISHERS"        = @("log_publisher")
+            "NETWORK OBJECTS"       = @("snatpool", "gateway_pool")
+            "IRULES"                = @("irule")
+            "POLICIES"              = @("ltm_policy", "access_profile")
+            "DATAGROUPS"            = @("datagroup")
+            "URL CATEGORIES"        = @("url_category")
+        }
+        
+        $lines = @()
+        $lines += "SSLO-Replay Dependency Manifest"
+        $lines += "=" * 72
+        $lines += "Source:   $($script:RemoteHostname) (TMOS $($script:TMOSVersion), SSLO $($script:SSLOVersion))"
+        $lines += "Date:     $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        $lines += "Snapshot: $filename"
+        $lines += ""
+        $lines += "These objects must exist on the target device before replay."
+        $lines += "Configs are included below for reference when recreating."
+        $lines += ""
+        
+        foreach ($groupName in $depGroups.Keys) {
+            $groupTypes = $depGroups[$groupName]
+            $groupDeps = @($dependencies.objects | Where-Object { $_.type -in $groupTypes })
+            if ($groupDeps.Count -eq 0) { continue }
+            
+            $lines += "=" * 72
+            $lines += $groupName
+            $lines += "=" * 72
+            $lines += ""
+            
+            foreach ($dep in $groupDeps) {
+                $displayType = Get-DepDisplayType $dep.type
+                $refs = ($dep.referencedBy -join ", ")
+                $lines += "  ${displayType}: $($dep.path)"
+                $lines += "  Referenced by: $refs"
+                
+                if ($dep.config) {
+                    $lines += ""
+                    
+                    # Type-specific readable output
+                    if ($dep.type -eq "datagroup") {
+                        $lines += "  Type: $($dep.config.type)"
+                        if ($dep.config.records) {
+                            $lines += "  Records:"
+                            foreach ($rec in $dep.config.records) {
+                                $entry = "    $($rec.name)"
+                                if ($rec.data) { $entry += " := $($rec.data)" }
+                                $lines += $entry
+                            }
+                        }
+                    } elseif ($dep.type -eq "url_category") {
+                        $configJson = $dep.config | ConvertTo-Json -Depth 10
+                        foreach ($cl in ($configJson -split "`n")) {
+                            $lines += "    $cl"
+                        }
+                    } elseif ($dep.type -eq "vlan" -and $dep.config.tag) {
+                        $lines += "  VLAN tag: $($dep.config.tag)"
+                        if ($dep.config.interfaces) {
+                            $lines += "  Interfaces: $(($dep.config.interfaces | ForEach-Object { $_.name }) -join ', ')"
+                        }
+                    } elseif ($dep.type -match "^monitor_") {
+                        if ($dep.config.interval) { $lines += "  Interval: $($dep.config.interval)" }
+                        if ($dep.config.timeout) { $lines += "  Timeout: $($dep.config.timeout)" }
+                        if ($dep.config.send) { $lines += "  Send: $($dep.config.send)" }
+                        if ($dep.config.recv) { $lines += "  Recv: $($dep.config.recv)" }
+                        if ($dep.config.destination) { $lines += "  Destination: $($dep.config.destination)" }
+                    } else {
+                        # Generic: dump as indented JSON
+                        $configJson = $dep.config | ConvertTo-Json -Depth 10
+                        foreach ($cl in ($configJson -split "`n")) {
+                            $lines += "    $cl"
+                        }
+                    }
+                }
+                
+                $lines += ""
+            }
+        }
+        
+        $lines -join "`r`n" | Out-File -FilePath $depFilePath -Encoding UTF8
+        Write-LogOk "Dependencies saved to: $depFilePath"
+    }
     
     Start-Sleep -Seconds 2
     Clear-Host
@@ -1844,10 +1841,10 @@ function Invoke-SsloDump {
         Write-Host "    $($item.deploymentName)" -ForegroundColor White
     }
     
-    # Dependencies — grouped by type
+    # Dependencies
     if ($dependencies -and $dependencies.objects -and $dependencies.objects.Count -gt 0) {
         Write-Host ""
-        Write-Host "  Dependencies" -ForegroundColor White
+        Write-Host "  Dependencies ($($dependencies.objects.Count))" -ForegroundColor White
         
         $depByType = @{}
         foreach ($dep in $dependencies.objects) {
@@ -1865,7 +1862,10 @@ function Invoke-SsloDump {
     
     Write-Host ""
     Write-LogOk "$($outputBlocks.Count) objects recorded"
-    Write-LogOk "Snapshot saved to: $outputPath"
+    Write-LogOk "Snapshot: $outputPath"
+    if ($depFilePath) {
+        Write-LogOk "Dependencies: $depFilePath"
+    }
     Write-Host ""
     
     Press-EnterToContinue
@@ -1950,14 +1950,7 @@ function Import-SsloBackup {
         return $null
     }
     
-    # Dependencies section (optional)
-    $depCount = 0
-    if ($backup.PSObject.Properties["dependencies"] -and $backup.dependencies -and $backup.dependencies.objects) {
-        $depCount = $backup.dependencies.objects.Count
-    }
-    
-    $depMsg = if ($depCount -gt 0) { ", $depCount dependencies" } else { "" }
-    Write-LogOk "Snapshot validated: $validCount blocks${depMsg} ($invalidCount invalid)"
+    Write-LogOk "Snapshot validated: $validCount blocks ($invalidCount invalid)"
     
     return $backup
 }
@@ -2834,14 +2827,6 @@ function Invoke-SsloRestore {
     $script:missingPrereqs = @()
     $script:checkedPrereqs = @{}
     
-    # Build dependency index from snapshot (if available)
-    $depIndex = @{}
-    if ($backup.PSObject.Properties["dependencies"] -and $backup.dependencies -and $backup.dependencies.objects) {
-        foreach ($dep in $backup.dependencies.objects) {
-            if ($dep.path) { $depIndex[$dep.path] = $dep }
-        }
-    }
-    
     # Helper: check a single object exists on target
     function Test-PrereqExists {
         param([string]$Endpoint, [string]$ObjPath, [string]$Label, [string]$RequiredBy)
@@ -3126,131 +3111,24 @@ function Invoke-SsloRestore {
     }
     
     # -------------------------------------------------------------------------
-    # Step 5a: Resolve missing prerequisites (if dependency data available)
+    # Step 5a: Check for missing prerequisites
     # -------------------------------------------------------------------------
-    $createQueue = @()
-    $substitutionMap = @{}
-    
-    if ($script:missingPrereqs.Count -gt 0 -and $depIndex.Count -gt 0) {
-        Write-Host ""
-        Write-LogStep "Resolving $($script:missingPrereqs.Count) missing prerequisite(s)..."
-        Write-Host ""
-        
-        $unresolved = @()
-        
-        foreach ($missing in $script:missingPrereqs) {
-            $dep = $depIndex[$missing.Path]
-            
-            if (-not $dep) {
-                # No dependency record — unresolvable
-                $unresolved += "$($missing.Label): $($missing.Path) (required by $($missing.RequiredBy))"
-                continue
-            }
-            
-            $displayType = Get-DepDisplayType $dep.type
-            
-            if ($dep.portable -eq $true -and $dep.config) {
-                # Portable — offer to auto-create
-                Write-Host "    ${displayType}: $($missing.Path)" -NoNewline -ForegroundColor White
-                Write-Host " - snapshot has this object" -ForegroundColor Yellow
-                $create = Read-Host "    Create from snapshot? [y/N]"
-                if ($create -in @("y", "Y", "yes", "YES")) {
-                    $createQueue += $dep
-                    Write-LogOk "Queued: ${displayType} $($missing.Path)"
-                } else {
-                    $unresolved += "$($missing.Label): $($missing.Path) (required by $($missing.RequiredBy))"
-                }
-            } else {
-                # Environment-specific — show reference, offer substitution
-                Write-Host "    ${displayType}: $($missing.Path)" -NoNewline -ForegroundColor White
-                Write-Host " - environment-specific" -ForegroundColor Yellow
-                
-                # Show key config details for reference
-                if ($dep.config) {
-                    if ($dep.type -eq "vlan" -and $dep.config.tag) {
-                        Write-Host "    Source config: tag $($dep.config.tag)" -ForegroundColor DarkGray
-                    }
-                    if ($dep.type -eq "snatpool" -and $dep.config.members) {
-                        $members = ($dep.config.members -join ", ")
-                        Write-Host "    Source config: $members" -ForegroundColor DarkGray
-                    }
-                    if ($dep.type -eq "gateway_pool" -and $dep.config.members) {
-                        Write-Host "    Source config: pool with $($dep.config.members.Count) members" -ForegroundColor DarkGray
-                    }
-                }
-                
-                $sub = Read-Host "    Enter target path (or press Enter to fail)"
-                if (-not [string]::IsNullOrWhiteSpace($sub)) {
-                    $substitutionMap[$missing.Path] = $sub
-                    Write-LogOk "Substitution: $($missing.Path) -> $sub"
-                } else {
-                    $unresolved += "$($missing.Label): $($missing.Path) (required by $($missing.RequiredBy))"
-                }
-            }
-            Write-Host ""
-        }
-        
-        if ($unresolved.Count -gt 0) {
-            Write-Host ""
-            Write-LogError "$($unresolved.Count) unresolved prerequisite(s):"
-            foreach ($u in $unresolved) {
-                Write-Host "    $u" -ForegroundColor Red
-            }
-            Write-Host ""
-            Press-EnterToContinue
-            return
-        }
-    } elseif ($script:missingPrereqs.Count -gt 0) {
-        # No dependency data — fail with list (original behavior, no exit 1)
+    if ($script:missingPrereqs.Count -gt 0) {
         Write-Host ""
         Write-LogError "$($script:missingPrereqs.Count) missing prerequisite(s). Install them on the target before replaying."
+        Write-Host ""
         foreach ($missing in $script:missingPrereqs) {
-            Write-Host "    $($missing.Label): $($missing.Path) (required by $($missing.RequiredBy))" -ForegroundColor Red
+            Write-Host "    $($missing.Label): $($missing.Path)" -NoNewline -ForegroundColor Red
+            Write-Host " (required by $($missing.RequiredBy))" -ForegroundColor DarkGray
         }
+        Write-Host ""
+        Write-Host "    See the dependency manifest file for configs and reference." -ForegroundColor Yellow
         Write-Host ""
         Press-EnterToContinue
         return
     }
     
     Write-LogOk "All prerequisites verified ($($script:checkedPrereqs.Count) objects checked)"
-    
-    # -------------------------------------------------------------------------
-    # Step 5b: Create queued dependencies on target
-    # -------------------------------------------------------------------------
-    if ($createQueue.Count -gt 0) {
-        Start-Sleep -Seconds 2
-        Clear-Host
-        Write-LogSection "Creating Dependencies"
-        Write-Host ""
-        
-        # Sort by creation order
-        $sortedQueue = @()
-        foreach ($type in $script:DEP_CREATE_ORDER) {
-            $matching = $createQueue | Where-Object { $_.type -eq $type }
-            if ($matching) { $sortedQueue += $matching }
-        }
-        # Append any types not in the order list
-        $remaining = $createQueue | Where-Object { $_.type -notin $script:DEP_CREATE_ORDER }
-        if ($remaining) { $sortedQueue += $remaining }
-        
-        $depCreated = 0
-        foreach ($dep in $sortedQueue) {
-            $displayType = Get-DepDisplayType $dep.type
-            if (New-DependencyOnTarget -DepRecord $dep) {
-                Write-LogOk "${displayType} $($dep.path)"
-                $depCreated++
-            } else {
-                Write-LogError "${displayType} $($dep.path) - creation failed"
-                Write-Host ""
-                Write-LogError "Cannot continue. Fix the dependency and retry."
-                Press-EnterToContinue
-                return
-            }
-        }
-        
-        Write-Host ""
-        Write-LogOk "$depCreated dependencies created"
-    }
     
     Start-Sleep -Seconds 2
     
@@ -3422,11 +3300,6 @@ function Invoke-SsloRestore {
                     break
                 }
             }
-        }
-        
-        # Apply substitution map (if any paths were remapped during prereq resolution)
-        if ($substitutionMap.Count -gt 0) {
-            $postBlock = Apply-SubstitutionMap -Data $postBlock -Map $substitutionMap
         }
         
         # POST the block
