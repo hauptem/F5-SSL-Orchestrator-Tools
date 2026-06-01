@@ -30,7 +30,7 @@ Option 1 records from the connected device. Option 2 reads a snapshot file and p
 
 Menu option 1. Pulls all iAppsLX blocks from the connected device, classifies them, captures dependencies, and writes a JSON file.
 
-The tool captures every SSLO object on the device: SSL settings, services, service chains, security policies, and topologies. It also captures all external dependencies those objects reference — datagroups with their records, custom URL categories, monitors, profiles, cipher groups, iRules, and cert/key names.
+The tool captures every SSLO object on the device: SSL settings, services, service chains, security policies, and topologies. It also captures all external dependencies those objects reference such as datagroups with their records, custom URL categories, monitors, profiles, cipher groups, iRules, and cert/key names.
 
 General Settings (`ssloGS_global`) are captured for reference but excluded from replay. They are environment-specific and must be configured on each device through the SSLO GUI.
 
@@ -81,7 +81,7 @@ Datagroups, custom URL categories, monitors, profiles, cipher groups, and iRules
 
 **Full replay** deploys every object in the snapshot in dependency order.
 
-**Scoped replay** lets you pick a single topology. The tool resolves the dependency tree - the topology's SSL settings, security policy, service chains, and services — and replays only those objects. Other topologies in the snapshot are skipped.
+**Scoped replay** lets you pick a single topology. The tool resolves the dependency tree: the topology's SSL settings, security policy, service chains, and services, and replays only those objects. 
 
 ### What happens during replay
 
