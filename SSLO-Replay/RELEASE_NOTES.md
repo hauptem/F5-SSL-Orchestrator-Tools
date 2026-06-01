@@ -54,6 +54,7 @@
 ## File naming
 
 `sslo-snapshot_{hostname}_{yyyyMMdd-HHmmss}.json`
+
 `sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt`
 
 ## vb2.3.15.0-devel (Beta 2 - May 29 2026)
