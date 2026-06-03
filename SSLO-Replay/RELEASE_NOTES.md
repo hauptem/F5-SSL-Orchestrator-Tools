@@ -19,7 +19,6 @@
 - Dependencies sorted by type group (PKI → network → monitors → profiles → crypto → data → categories), then alphabetically within each group
 - Dedup key changed from path-only to type:path composite which prevents certs and keys for the same name from colliding
 - Version-lock removed snapshots are no longer rejected for tool version mismatch, only for snapshot format version incompatibility
-- Dead code removed: `Get-DependencyObject` and `Get-CipherRuleDependencies` 
 
  # SSLO Replay Snapshot Format v1.0
 
