@@ -1,17 +1,22 @@
 #!/bin/bash
 # =============================================================================
-# SSL Orchestrator - Clean Slate
+# SSL Orchestrator Tools - Clean Slate Script
 # =============================================================================
-# Version:  1.0
-# Author: Eric Haupt
+# Version:  1.1 June 10 2026
+# Created by: Eric Haupt
 # Based on: Kevin Stewart's original "sslo nuclear delete" script v7.0 from 
 #           https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete
 #
-# Requirements:  SSL Orchestrator 12.x or higher / TMOS 17.x or higher
+# v1.1 Changes:
+#   - Excluded the cm namespace from the tmsh deletion candidate list. The
+#     "grep sslo" selection could match cm device objects when a hostname
+#     contains "sslo" (e.g. cm device sslo1.lab.local). 
+#
+# Requirements:  SSL Orchestrator 12.0 or higher / TMOS 17.x, 21.x
 #
 # PURPOSE:
-#   Removes all SSL Orchestrator (SSLO) configuration objects, clears REST 
-#   storage, and reinstalls the SSLO RPM.
+#   Forcibly removes all SSL Orchestrator (SSLO) configuration objects,
+#   clears REST storage, and reinstalls the SSLO RPM for a clean slate install.
 #
 # WARNING:
 #   THIS SCRIPT IS DESTRUCTIVE. It will permanently delete ALL SSLO configuration 
@@ -24,8 +29,6 @@
 #
 # OUTPUT:
 #   A log file is written to /var/log/sslo-clean-<timestamp>.log
-#
-# https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 # =============================================================================
 
 set -euo pipefail
@@ -122,7 +125,8 @@ preflight_checks() {
 # =============================================================================
 get_credentials() {
     log_section "Credentials"
-    log_info "Enter BIG-IP admin credentials."
+    log_info "Enter BIG-IP admin credentials (used for REST API calls)."
+    log_info "Credentials are NOT written to the log file."
     echo ""
 
     read -rp "  Username [admin]: " input_user
@@ -155,7 +159,17 @@ confirm_execution() {
     log_warn "This script will PERMANENTLY DELETE all SSL Orchestrator"
     log_warn "configuration on this BIG-IP. This cannot be undone."
     log ""
-    log_info "Device:   $(hostname)"
+    # Device identity for the wrong-box guard. Fall back through tmsh and
+    # uname so this line can never print blank (observed once in the field).
+    local device_name
+    device_name=$(hostname 2>/dev/null || true)
+    if [ -z "${device_name}" ]; then
+        device_name=$(tmsh list sys global-settings hostname 2>/dev/null | awk '/hostname/ {print $2}' || true)
+    fi
+    if [ -z "${device_name}" ]; then
+        device_name=$(uname -n 2>/dev/null || echo "UNKNOWN-DEVICE")
+    fi
+    log_info "Device:   ${device_name}"
     log_info "Log file: ${LOGFILE}"
     log ""
 
@@ -347,11 +361,17 @@ unbind_sslo_blocks() {
 delete_sslo_objects() {
     log_section "Step 5 of 7: Deleting SSLO tmsh Objects"
 
+    # NOTE: SSLO never creates objects in the cm namespace. Any "cm ..." line
+    # matched here is an over-match caused by a device/device-group NAME that
+    # contains "sslo" (e.g. a hostname like sslo1.lab.local). Deleting cm
+    # objects can destroy device trust on an HA peer, so the entire cm
+    # namespace is excluded from the candidate list.
     local sslo_objects
     sslo_objects=$(tmsh list 2>/dev/null \
         | grep -v "^\s" \
         | grep sslo \
         | sed -e 's/{//g;s/}//g' \
+        | grep -v "^cm " \
         | grep -v "apm profile access /Common/ssloDefault_accessProfile" \
         | grep -v "apm log-setting /Common/default-sslo-log-setting" \
         | grep -v "net dns-resolver /Common/ssloGS_global.app/ssloGS-net-resolver" \
