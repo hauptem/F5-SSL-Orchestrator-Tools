@@ -31,8 +31,7 @@ The snapshot is a single JSON file containing every SSLO object and its external
 - **Full Replay** — Deterministic recreation of an entire SSLO deployment in dependency order
 - **Scoped Replay** — Replay a single topology with automatic dependency resolution
 - **Policy Swap** — Apply a security policy from a snapshot to an existing topology on the target, with rename and overwrite support
-- **Dependency Capture** — Records external BIG-IP objects (iRules, monitors, cipher groups, profiles, SNAT pools) as raw REST API JSON for reference or auto-creation
-- **Prerequisite Validation** — Checks all external references before replay, with interactive resolution for missing objects
+- **Dependency Capture** — Records external BIG-IP objects (iRules, monitors, cipher groups, profiles, SNAT pools) as .txt file for reference
 
 ### How It Works
 
