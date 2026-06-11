@@ -1,4 +1,6 @@
-# DGCat-Admin v5.3 Release Notes (will be released following final testing)
+# DGCat-Admin v5.3 Release Notes 
+
+(will be released following final testing)
 
 **Merge Mode Safety**
 - tmsh Modify and fleet merge deploys now reject keys/values containing whitespace, braces, quotes, backslash, ';', or '#' — these are embedded unquoted in the tmsh options string and can corrupt the parse or delete unintended records. Full Replace is unaffected.
