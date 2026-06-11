@@ -1,3 +1,26 @@
+# DGCat-Admin v5.3 Release Notes (will be released following final testing)
+
+**Merge Mode Safety**
+- tmsh Modify and fleet merge deploys now reject keys/values containing whitespace, braces, quotes, backslash, ';', or '#' — these are embedded unquoted in the tmsh options string and can corrupt the parse or delete unintended records. Full Replace is unaffected.
+- Value changes to existing records are now detected, shown in change previews, and rejected by tmsh Modify and merge deploys since tmsh records add/delete cannot apply them — use Full Replace. Previously these reported success while applying nothing.
+
+**Case Sensitivity**
+- CSV merge, import dedup, URL category merge, and editor change analysis now use case-sensitive comparisons matching BIG-IP datagroup key semantics. Case-distinct keys are no longer silently collapsed or dropped.
+- Editor pending-change detection is now case-sensitive; case-distinct entries can be added.
+
+**Backups**
+- Backups verify the read succeeded before writing — a failed or timed-out GET no longer produces a valid-looking empty backup file
+- Each backup gets its own timestamp; repeated backups of the same object within a session no longer overwrite each other
+- Backup rotation fixed — MAX_BACKUPS was never enforced (rotation pattern didn't match hostname-prefixed filenames, and fleet site subfolders weren't searched)
+- URL category backups now rotate
+- Fleet Backup reports FAIL for hosts where the object doesn't exist instead of writing an empty backup
+
+**fleet.conf Validation**
+- Malformed lines (missing or extra '|', empty site or host field) are now hard validation errors with line numbers; previously skipped silently, dropping hosts from the fleet
+
+**Cleanup**
+- Comment normalization pass — single voice, compact function headers, corrected stale menu option labels
+
 # DGCat-Admin v5.2 Release Notes 
 
 - This release was focused on file input validation for fleet.conf, bootstrap.conf, and csv file import
