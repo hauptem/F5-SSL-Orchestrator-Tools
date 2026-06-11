@@ -10,7 +10,6 @@
 - Each backup gets its own timestamp; repeated backups of the same object within a session no longer overwrite each other
 - Backup rotation fixed — MAX_BACKUPS was never enforced (rotation pattern didn't match hostname-prefixed filenames, and fleet site subfolders weren't searched)
 - URL category backups now rotate
-- Fleet Backup reports FAIL for hosts where the object doesn't exist instead of writing an empty backup
 - Malformed lines (missing or extra '|', empty site or host field) are now hard validation errors 
 - Comment normalization pass corrected stale menu option labels
 
