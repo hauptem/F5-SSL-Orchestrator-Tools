@@ -1,6 +1,6 @@
 # DGCat-Admin v5.3 Release Notes 
 
-# (Expected release the week of June 15 following completion of testing)
+# (Expected release: week of June 15 following completion of testing)
 
 - tmsh Modify and fleet merge deploys now reject keys/values containing whitespace, braces, quotes, backslash, ';', or '#' — these are embedded unquoted in the tmsh options string and can corrupt the parse or delete unintended records. Full Replace is unaffected.
 - Value changes to existing records are now detected, shown in change previews, and rejected by tmsh Modify and merge deploys since tmsh records add/delete cannot apply them — use Full Replace. Previously these reported success while applying nothing.
