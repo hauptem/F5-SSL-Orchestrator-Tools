@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.2
+# Version: 5.3
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -28,7 +28,7 @@ set -euo pipefail
 # =============================================================================
 
 # Backup settings
-BACKUP_DIR="dgcat-admin-backups"
+BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
 MAX_BACKUPS=10
 BACKUPS_ENABLED=0
 
@@ -286,9 +286,10 @@ ensure_backup_dir() {
 
 # Cleanup old backups beyond retention limit
 cleanup_old_backups() {
-    local dg_name="$1"
+    local prefix="$1"
+    local directory="${2:-${BACKUP_DIR}}"
     local backup_files
-    backup_files=$(ls -1t "${BACKUP_DIR}/${dg_name}_"*.csv 2>/dev/null || true)
+    backup_files=$(ls -1t "${directory}/${prefix}_"*.csv 2>/dev/null || true)
     
     if [ -n "${backup_files}" ]; then
         local count=0
@@ -574,11 +575,17 @@ setup_remote_connection() {
         return 1
     fi
     
-    read -rp "  Username: " REMOTE_USER
+    # Clear the selection list before login; re-anchor with the chosen target
+    clear
+    log_section "DGCat Connection Setup"
+    echo ""
+    echo -e "  ${WHITE}Connecting to: ${YELLOW}${REMOTE_HOST}${NC}"
+    echo ""
+    
+    read -rp "  Username [admin]: " REMOTE_USER
     
     if [ -z "${REMOTE_USER}" ]; then
-        log_error "No username provided."
-        return 1
+        REMOTE_USER="admin"
     fi
     
     read -srp "  Password: " REMOTE_PASS
@@ -896,6 +903,16 @@ build_tmsh_records_delete() {
         result="${result} ${key}"
     done
     echo "${result}"
+}
+
+# Gate for tmsh merge mode: keys and values are embedded unquoted in the tmsh
+# options string. Whitespace splits tokens (a multi-word delete key would delete
+# other records); braces, quotes, backslash, ';', and '#' corrupt the parse.
+# Full Replace (REST JSON) is unaffected
+# Input: strings one per line on stdin
+# Returns: 0 if all safe, 1 if any string contains unsafe characters
+tmsh_safe_strings() {
+    ! grep -q "[[:space:]{}\"\\\\;#']"
 }
 
 # URL-encode a tmsh options string for REST API query parameter
@@ -1248,13 +1265,33 @@ load_fleet_config() {
         line=$(echo "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         [ -z "${line}" ] && continue
         
+        # Require exactly one '|' delimiter (cut would otherwise land the
+        # whole line in both fields and a bare hostname becomes its own site)
+        local pipes="${line//[^|]/}"
+        if [ ${#pipes} -eq 0 ]; then
+            error_lines+=("Line ${line_num}: ${line}")
+            error_msgs+=("Missing '|' delimiter (expected format: SITE|HOST)")
+            continue
+        fi
+        if [ ${#pipes} -gt 1 ]; then
+            error_lines+=("Line ${line_num}: ${line}")
+            error_msgs+=("Too many '|' delimiters (expected format: SITE|HOST)")
+            continue
+        fi
+        
         # Parse SITE|HOST format
         local site host
         site=$(echo "${line}" | cut -d'|' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         host=$(echo "${line}" | cut -d'|' -f2 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         
-        # Skip lines without both fields
-        if [ -z "${site}" ] || [ -z "${host}" ]; then
+        if [ -z "${site}" ]; then
+            error_lines+=("Line ${line_num}: ${line}")
+            error_msgs+=("Empty site ID (expected format: SITE|HOST)")
+            continue
+        fi
+        if [ -z "${host}" ]; then
+            error_lines+=("Line ${line_num}: ${line}")
+            error_msgs+=("Empty host (expected format: SITE|HOST)")
             continue
         fi
         
@@ -1457,15 +1494,26 @@ backup_remote_internal_datagroup() {
     local orig_host="${REMOTE_HOST}"
     REMOTE_HOST="${host}"
     
+    # Verified single GET - a backup written from a failed read would look
+    # valid but contain zero records, worse than no backup at all
+    if ! api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+        REMOTE_HOST="${orig_host}"
+        return 0
+    fi
+    REMOTE_HOST="${orig_host}"
+    
+    local dg_type records
+    dg_type=$(echo "${API_RESPONSE}" | jq -r '.type // empty' 2>/dev/null || true)
+    records=$(echo "${API_RESPONSE}" | jq -r '.records // [] | .[] | "\(.name),\(.data // "")"' 2>/dev/null || true)
+    
     # Ensure site directory exists
     ensure_site_log_dir "${site_id}"
     
     local safe_hostname
     safe_hostname=$(echo "${host}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_${partition}_${dg_name}_${TIMESTAMP}.csv"
-    
-    local dg_type
-    dg_type=$(get_internal_datagroup_type_remote "${partition}" "${dg_name}")
+    local backup_ts
+    backup_ts=$(date +%Y%m%d_%H%M%S)
+    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_${partition}_${dg_name}_${backup_ts}.csv"
     
     {
         echo "# Datagroup Backup: /${partition}/${dg_name}"
@@ -1475,18 +1523,13 @@ backup_remote_internal_datagroup() {
         echo "# Created: $(date)"
         echo "# Reason: Pre-deploy backup"
         echo "#"
-        get_internal_datagroup_records_remote "${partition}" "${dg_name}" | while IFS='|' read -r key value; do
-            echo "${key},${value}"
-        done
-    } > "${backup_file}" 2>/dev/null
+        if [ -n "${records}" ]; then
+            printf '%s\n' "${records}"
+        fi
+    } > "${backup_file}" 2>/dev/null || return 0
     
-    REMOTE_HOST="${orig_host}"
-    
-    if [ -f "${backup_file}" ]; then
-        echo "${backup_file}"
-        return 0
-    fi
-    return 1
+    echo "${backup_file}"
+    return 0
 }
 
 # Create backup of URL category on remote host
@@ -1501,6 +1544,16 @@ backup_remote_url_category() {
     local orig_host="${REMOTE_HOST}"
     REMOTE_HOST="${host}"
     
+    # Verified single GET - see backup_remote_internal_datagroup
+    if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}"; then
+        REMOTE_HOST="${orig_host}"
+        return 0
+    fi
+    REMOTE_HOST="${orig_host}"
+    
+    local entries
+    entries=$(echo "${API_RESPONSE}" | jq -r '.urls // [] | .[].name' 2>/dev/null || true)
+    
     # Ensure site directory exists
     ensure_site_log_dir "${site_id}"
     
@@ -1508,7 +1561,9 @@ backup_remote_url_category() {
     safe_hostname=$(echo "${host}" | sed 's/[^a-zA-Z0-9_-]/_/g')
     local safe_catname
     safe_catname=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_urlcat_${safe_catname}_${TIMESTAMP}.csv"
+    local backup_ts
+    backup_ts=$(date +%Y%m%d_%H%M%S)
+    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_urlcat_${safe_catname}_${backup_ts}.csv"
     
     {
         echo "# URL Category Backup: ${cat_name}"
@@ -1517,16 +1572,13 @@ backup_remote_url_category() {
         echo "# Created: $(date)"
         echo "# Reason: Pre-deploy backup"
         echo "#"
-        get_url_category_entries_remote "${cat_name}"
-    } > "${backup_file}" 2>/dev/null
+        if [ -n "${entries}" ]; then
+            printf '%s\n' "${entries}"
+        fi
+    } > "${backup_file}" 2>/dev/null || return 0
     
-    REMOTE_HOST="${orig_host}"
-    
-    if [ -f "${backup_file}" ]; then
-        echo "${backup_file}"
-        return 0
-    fi
-    return 1
+    echo "${backup_file}"
+    return 0
 }
 
 # =============================================================================
@@ -2352,21 +2404,30 @@ backup_datagroup() {
     local partition="$1"
     local dg_name="$2"
     local dg_class="${3:-internal}"
+
+    # Verified single GET - a backup written from a failed read would look
+    # valid but contain zero records, worse than no backup at all
+    if ! api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+        return 0
+    fi
+    local dg_type records
+    dg_type=$(echo "${API_RESPONSE}" | jq -r '.type // empty' 2>/dev/null || true)
+    records=$(echo "${API_RESPONSE}" | jq -r '.records // [] | .[] | "\(.name),\(.data // "")"' 2>/dev/null || true)
+
     # Include partition and class in backup filename to avoid collisions
     local safe_partition
     safe_partition=$(echo "${partition}" | sed 's/\//_/g')
     local safe_hostname
     safe_hostname=$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    
+
     # Determine backup path: fleet hosts go in site subfolder
     local backup_path
     backup_path=$(get_connected_backup_dir)
-    
-    local backup_file="${backup_path}/${safe_hostname}_${safe_partition}_${dg_name}_${dg_class}_${TIMESTAMP}.csv"
-    local dg_type
-    
-    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
-    
+
+    local backup_ts
+    backup_ts=$(date +%Y%m%d_%H%M%S)
+    local backup_file="${backup_path}/${safe_hostname}_${safe_partition}_${dg_name}_${dg_class}_${backup_ts}.csv"
+
     {
         echo "# Datagroup Backup: /${partition}/${dg_name}"
         echo "# Partition: ${partition}"
@@ -2375,15 +2436,49 @@ backup_datagroup() {
         echo "# Created: $(date)"
         echo "# Format: key,value"
         echo "#"
-        get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" | while IFS='|' read -r key value; do
-            echo "${key},${value}"
-        done
-    } > "${backup_file}"
-    
-    if [ -f "${backup_file}" ]; then
-        cleanup_old_backups "${safe_partition}_${dg_name}_${dg_class}"
-        echo "${backup_file}"
+        if [ -n "${records}" ]; then
+            printf '%s\n' "${records}"
+        fi
+    } > "${backup_file}" 2>/dev/null || return 0
+
+    cleanup_old_backups "${safe_hostname}_${safe_partition}_${dg_name}_${dg_class}" "${backup_path}"
+    echo "${backup_file}"
+    return 0
+}
+# Backup a URL category to CSV file
+# Outputs: backup file path, or nothing on failure
+backup_url_category() {
+    local cat_name="$1"
+
+    # Verified single GET - see backup_datagroup
+    if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${cat_name}"; then
+        return 0
     fi
+    local entries
+    entries=$(echo "${API_RESPONSE}" | jq -r '.urls // [] | .[].name' 2>/dev/null || true)
+
+    local safe_name
+    safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    local safe_hostname
+    safe_hostname=$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    local backup_path
+    backup_path=$(get_connected_backup_dir)
+    local backup_ts
+    backup_ts=$(date +%Y%m%d_%H%M%S)
+    local backup_file="${backup_path}/${safe_hostname}_urlcat_${safe_name}_${backup_ts}.csv"
+
+    {
+        echo "# URL Category Backup: ${cat_name}"
+        echo "# Created: $(date)"
+        echo "# Reason: Pre-change backup"
+        echo "#"
+        if [ -n "${entries}" ]; then
+            printf '%s\n' "${entries}"
+        fi
+    } > "${backup_file}" 2>/dev/null || return 0
+
+    cleanup_old_backups "${safe_hostname}_urlcat_${safe_name}" "${backup_path}"
+    echo "${backup_file}"
     return 0
 }
 # Create datagroup
@@ -2718,7 +2813,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.2                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.3                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -3573,19 +3668,10 @@ menu_delete_url_category() {
     # Backup before delete
     if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
         log_step "Creating backup before deletion..."
-        local safe_name
-        safe_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-        local backup_file="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
+        local backup_file
+        backup_file=$(backup_url_category "${selected_category}")
         
-        {
-            echo "# URL Category Backup: ${selected_category}"
-            echo "# Created: $(date)"
-            echo "# Reason: Pre-deletion backup"
-            echo "#"
-            get_url_category_entries "${selected_category}"
-        } > "${backup_file}" 2>/dev/null
-        
-        if [ -f "${backup_file}" ]; then
+        if [ -n "${backup_file}" ] && [ -f "${backup_file}" ]; then
             log_ok "Backup saved: ${backup_file}"
         else
             log_warn "Could not create backup."
@@ -4918,13 +5004,14 @@ editor_submenu() {
                 local -A work_lookup=()
                 local -a additions=()
                 local -a deletions=()
+                local -a value_changes=()
                 
                 for ((ca_i=0; ca_i<${#original_keys[@]}; ca_i++)); do
-                    orig_lookup["${original_keys[$ca_i]}"]=1
+                    orig_lookup["${original_keys[$ca_i]}"]="${original_values[$ca_i]:-}"
                 done
                 
                 for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
-                    work_lookup["${working_keys[$ca_i]}"]=1
+                    work_lookup["${working_keys[$ca_i]}"]="${working_values[$ca_i]:-}"
                 done
                 
                 # Deleted = in original but not in working
@@ -4938,6 +5025,14 @@ editor_submenu() {
                 for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
                     if [ -z "${orig_lookup[${working_keys[$ca_i]}]+x}" ]; then
                         additions+=("${working_keys[$ca_i]}")
+                    fi
+                done
+                
+                # Value changed = key in both, value differs (tmsh cannot apply these)
+                for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
+                    if [ -n "${orig_lookup[${working_keys[$ca_i]}]+x}" ] && \
+                       [ "${orig_lookup[${working_keys[$ca_i]}]}" != "${working_values[$ca_i]:-}" ]; then
+                        value_changes+=("${working_keys[$ca_i]}")
                     fi
                 done
                 
@@ -4963,6 +5058,16 @@ editor_submenu() {
                     done
                 fi
                 
+                if [ ${#value_changes[@]} -gt 0 ]; then
+                    if [ ${#additions[@]} -gt 0 ] || [ ${#deletions[@]} -gt 0 ]; then
+                        echo ""
+                    fi
+                    echo -e "  ${YELLOW}Value changes (${#value_changes[@]}):${NC}"
+                    for entry in "${value_changes[@]}"; do
+                        echo -e "    ${YELLOW}~ ${entry}${NC}"
+                    done
+                fi
+                
                 echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
                 echo -e "  ${WHITE}Final count: ${#working_keys[@]} entries${NC}"
                 echo ""
@@ -4981,18 +5086,7 @@ editor_submenu() {
                     if [ "${edit_type}" == "datagroup" ]; then
                         backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
                     else
-                        # For URL categories, create a simple backup
-                        local safe_name
-                        safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-                        backup_file="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
-                        {
-                            echo "# URL Category Backup: ${cat_name}"
-                            echo "# Created: $(date)"
-                            echo "#"
-                            for ((bk_i=0; bk_i<${#original_keys[@]}; bk_i++)); do
-                                echo "${original_keys[$bk_i]}"
-                            done
-                        } > "${backup_file}" 2>/dev/null
+                        backup_file=$(backup_url_category "${cat_name}")
                     fi
                     
                     if [ -n "${backup_file}" ] && [ -f "${backup_file}" ]; then
@@ -5020,6 +5114,36 @@ editor_submenu() {
                     
                     case "${apply_mode_choice}" in
                         1)
+                            # Gate: tmsh records add/delete cannot change an existing record's value
+                            if [ ${#value_changes[@]} -gt 0 ]; then
+                                log_error "tmsh Modify unavailable: ${#value_changes[@]} record(s) have changed values,"
+                                log_error "which records add/delete cannot apply."
+                                log_error "Use Full Replace mode for this change set. No changes have been made."
+                                press_enter_to_continue
+                                continue
+                            fi
+                            # Gate: tmsh passthrough embeds keys/values unquoted
+                            local wgate_check=""
+                            local wg_i wgv_i
+                            for ((wg_i=0; wg_i<${#additions[@]}; wg_i++)); do
+                                wgate_check="${wgate_check}${additions[$wg_i]}"$'\n'
+                                for ((wgv_i=0; wgv_i<${#working_keys[@]}; wgv_i++)); do
+                                    if [ "${working_keys[$wgv_i]}" == "${additions[$wg_i]}" ]; then
+                                        wgate_check="${wgate_check}${working_values[$wgv_i]:-}"$'\n'
+                                        break
+                                    fi
+                                done
+                            done
+                            for ((wg_i=0; wg_i<${#deletions[@]}; wg_i++)); do
+                                wgate_check="${wgate_check}${deletions[$wg_i]}"$'\n'
+                            done
+                            if ! printf '%s' "${wgate_check}" | tmsh_safe_strings; then
+                                log_error "tmsh Modify unavailable: one or more keys or values contain characters"
+                                log_error "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
+                                log_error "Use Full Replace mode for this change set. No changes have been made."
+                                press_enter_to_continue
+                                continue
+                            fi
                             log_step "Applying changes to datagroup (tmsh modify)..."
                             local inc_errors=0
                             
@@ -5157,6 +5281,7 @@ editor_submenu() {
                 # Analyze changes (may be empty if deploying current state)
                 local -a deploy_additions=()
                 local -a deploy_deletions=()
+                local -a deploy_value_changes=()
                 
                 if has_pending_changes; then
                     deploy_has_local_changes=true
@@ -5169,11 +5294,11 @@ editor_submenu() {
                     local -A work_lookup=()
                     
                     for ((ca_i=0; ca_i<${#original_keys[@]}; ca_i++)); do
-                        orig_lookup["${original_keys[$ca_i]}"]=1
+                        orig_lookup["${original_keys[$ca_i]}"]="${original_values[$ca_i]:-}"
                     done
                     
                     for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
-                        work_lookup["${working_keys[$ca_i]}"]=1
+                        work_lookup["${working_keys[$ca_i]}"]="${working_values[$ca_i]:-}"
                     done
                     
                     # Build lists of additions and deletions using lookup tables
@@ -5189,6 +5314,14 @@ editor_submenu() {
                     for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
                         if [ -z "${orig_lookup[${working_keys[$ca_i]}]+x}" ]; then
                             deploy_additions+=("${working_keys[$ca_i]}")
+                        fi
+                    done
+                    
+                    # Value changed = key in both, value differs (tmsh cannot apply these)
+                    for ((ca_i=0; ca_i<${#working_keys[@]}; ca_i++)); do
+                        if [ -n "${orig_lookup[${working_keys[$ca_i]}]+x}" ] && \
+                           [ "${orig_lookup[${working_keys[$ca_i]}]}" != "${working_values[$ca_i]:-}" ]; then
+                            deploy_value_changes+=("${working_keys[$ca_i]}")
                         fi
                     done
                     
@@ -5232,6 +5365,23 @@ editor_submenu() {
                         fi
                     fi
                     
+                    if [ ${#deploy_value_changes[@]} -gt 0 ]; then
+                        if [ ${#deploy_additions[@]} -gt 0 ] || [ ${#deploy_deletions[@]} -gt 0 ]; then
+                            echo ""
+                        fi
+                        echo -e "  ${YELLOW}Value changes (${#deploy_value_changes[@]}):${NC}"
+                        local show_count=0
+                        for entry in "${deploy_value_changes[@]}"; do
+                            if [ ${show_count} -lt 10 ]; then
+                                echo -e "    ${YELLOW}~ ${entry}${NC}"
+                            fi
+                            show_count=$((show_count + 1))
+                        done
+                        if [ ${#deploy_value_changes[@]} -gt 10 ]; then
+                            echo -e "    ${YELLOW}... and $((${#deploy_value_changes[@]} - 10)) more${NC}"
+                        fi
+                    fi
+                    
                     echo ""
                     echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
                     echo -e "  ${WHITE}Final entry count: ${#working_keys[@]}${NC}"
@@ -5268,6 +5418,39 @@ editor_submenu() {
                             continue
                             ;;
                     esac
+                    
+                    # Gate: merge mode embeds keys/values unquoted in tmsh; reject
+                    # unsafe change sets before any device is modified
+                    if [ "${deploy_mode}" == "merge" ] && [ "${edit_type}" == "datagroup" ]; then
+                        if [ ${#deploy_value_changes[@]} -gt 0 ]; then
+                            log_error "Merge mode unavailable: ${#deploy_value_changes[@]} record(s) have changed values,"
+                            log_error "which tmsh records add/delete cannot apply."
+                            log_error "Use Full Replace mode to deploy this change set. No changes have been made."
+                            press_enter_to_continue
+                            continue
+                        fi
+                        local dgate_check=""
+                        local dg_i dgv_i
+                        for ((dg_i=0; dg_i<${#deploy_additions[@]}; dg_i++)); do
+                            dgate_check="${dgate_check}${deploy_additions[$dg_i]}"$'\n'
+                            for ((dgv_i=0; dgv_i<${#working_keys[@]}; dgv_i++)); do
+                                if [ "${working_keys[$dgv_i]}" == "${deploy_additions[$dg_i]}" ]; then
+                                    dgate_check="${dgate_check}${working_values[$dgv_i]:-}"$'\n'
+                                    break
+                                fi
+                            done
+                        done
+                        for ((dg_i=0; dg_i<${#deploy_deletions[@]}; dg_i++)); do
+                            dgate_check="${dgate_check}${deploy_deletions[$dg_i]}"$'\n'
+                        done
+                        if ! printf '%s' "${dgate_check}" | tmsh_safe_strings; then
+                            log_error "Merge mode unavailable: one or more keys or values contain characters"
+                            log_error "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
+                            log_error "Use Full Replace mode to deploy this change set. No changes have been made."
+                            press_enter_to_continue
+                            continue
+                        fi
+                    fi
                 else
                     # No pending changes - deploy current state as full replace
                     local deploy_mode="replace"
@@ -5410,18 +5593,7 @@ editor_submenu() {
                     if [ "${edit_type}" == "datagroup" ]; then
                         current_backup=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
                     else
-                        local safe_name
-                        safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-                        current_backup="$(get_connected_backup_dir)/$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')_urlcat_${safe_name}_${TIMESTAMP}.csv"
-                        {
-                            echo "# URL Category Backup: ${cat_name}"
-                            echo "# Host: ${REMOTE_HOST}"
-                            echo "# Created: $(date)"
-                            echo "#"
-                            for ((bk_i=0; bk_i<${#original_keys[@]}; bk_i++)); do
-                                echo "${original_keys[$bk_i]}"
-                            done
-                        } > "${current_backup}" 2>/dev/null
+                        current_backup=$(backup_url_category "${cat_name}")
                     fi
                     
                     if [ -n "${current_backup}" ] && [ -f "${current_backup}" ]; then
@@ -6782,7 +6954,7 @@ main() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.2                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.3                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
