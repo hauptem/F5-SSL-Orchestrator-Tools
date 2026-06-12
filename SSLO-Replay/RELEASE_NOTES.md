@@ -1,6 +1,6 @@
 # Release Notes
 
-# vb5.3.15.0-devel (Beta 5 - June 12 2026)
+## vb5.3.15.0-devel (Beta 5 - June 12 2026)
 
 - Replay aborts if the target inventory cannot be retrieved - a failed read previously disabled existing-object detection silently, allowing a full snapshot to deploy onto an already-populated device
 - Key passphrase prompt added to SSL settings replay - passphrases are not recoverable from state blocks and were previously restored blank
