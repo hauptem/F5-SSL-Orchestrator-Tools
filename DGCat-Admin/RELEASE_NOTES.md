@@ -9,7 +9,6 @@
 - Fixed a latent set -e exit when a remote backup write failed during fleet deploy
 - Malformed fleet.conf lines (missing or extra '|', empty site or host field) are now hard validation errors with line numbers; a line without a delimiter previously registered the hostname as its own site
 - Username prompt defaults to admin when left blank, matching suite convention
-
 - 5.3 is the final bash release; the PowerShell version will be the only one maintained going forward - however at 5.3 all desired features have been implemented. Any further updates to the bash version will be targeted bugfixes
 
 # DGCat-Admin v5.2 Release Notes 
