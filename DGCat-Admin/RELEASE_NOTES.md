@@ -1,7 +1,5 @@
 # DGCat-Admin v5.3 Release Notes 
 
-**(Expected release: week of June 15 following completion of testing)**
-
 - tmsh Modify and fleet merge deploys now reject keys/values containing whitespace, braces, quotes, backslash, ';', or '#' 
 - Value changes to existing records are now detected, shown in change previews, and rejected by tmsh Modify and merge deploys since tmsh records add/delete cannot apply them — use Full Replace. Previously these reported success while applying nothing.
 - CSV merge, import dedup, URL category merge, and editor change analysis now use case-sensitive comparisons matching BIG-IP datagroup key semantics. Case-distinct keys are no longer silently collapsed or dropped.
