@@ -1,4 +1,4 @@
-# DGCat-Admin v5.x — User Guide
+# DGCat-Admin v5.x - User Guide
 
 ## Table of Contents
 
@@ -27,8 +27,8 @@
 
 DGCat-Admin is a menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. It connects to BIG-IP devices via the iControl REST API and is available in two versions with identical functionality:
 
-- **Bash** (`dgcat-admin.sh`) — Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or Big-IQ.
-- **PowerShell** (`dgcat-admin.ps1`) — Requires PowerShell 5.1 or later. Runs from any Windows workstation.
+- **Bash** (`dgcat-admin.sh`) - Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or Big-IQ. v5.3 is the final bash release; the PowerShell version is maintained going forward.
+- **PowerShell** (`dgcat-admin.ps1`) - Requires PowerShell 5.1 or later. Runs from any Windows workstation.
 
 Both versions require network access to the BIG-IP management interface on port 443 and an account with administrative API access.
 
@@ -68,7 +68,7 @@ Fleet deployment uses a validate-then-apply model. Before any changes are made t
 
 ### Editor Model
 
-The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes — adding entries, deleting entries, bulk-deleting by pattern without touching the actual Big-IP configuration. All edits are staged in a candidate configuration. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you change your mind and quit out of DGCat-Admin without writing to the connected host or deploying to remote hosts, nothing changes on your Big-IP's at all.
+The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes - adding entries, deleting entries, bulk-deleting by pattern without touching the actual Big-IP configuration. All edits are staged in a candidate configuration. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you change your mind and quit out of DGCat-Admin without writing to the connected host or deploying to remote hosts, nothing changes on your Big-IP's at all.
 
 ---
 
@@ -101,7 +101,7 @@ There is no installation process, no dependencies beyond the above, and no confi
 
 ### Initial Configuration
 
-The top of the script contains a configuration section with three settings you may want to adjust:
+The top of the script contains a configuration section with four settings you may want to adjust:
 
 ```bash
 BACKUP_DIR="dgcat-admin-backups"
@@ -141,7 +141,7 @@ If you have a fleet configuration file, the tool displays your fleet hosts as nu
 
 Type a number to select a fleet host, or type any hostname or IP address to connect to a device that isn't in your fleet. Type `0` to exit.
 
-After selecting a host, you're prompted for a username and password. 
+After selecting a host, the screen clears and shows the target, then you're prompted for a username (Enter defaults to admin) and password. 
 
 ```
   [....]  Connecting to bigip01-mgmt.dc1.example.com...
@@ -179,14 +179,14 @@ Imports a CSV file into a datagroup or URL category.
 
 You provide a datagroup name and partition. If the datagroup already exists, the tool shows its current state and asks how you want to proceed:
 
-- **Overwrite** — Replace all existing entries with the contents of the CSV file
-- **Merge** — Add the CSV entries to the existing entries, deduplicating by key
+- **Overwrite** - Replace all existing entries with the contents of the CSV file
+- **Merge** - Add the CSV entries to the existing entries, deduplicating by key
 
 If the datagroup doesn't exist, you select a type:
 
-- **string** — For domains, hostnames, URLs, or any text keys
-- **address** — For IP addresses and CIDR subnets
-- **integer** — For port numbers or other numeric keys
+- **string** - For domains, hostnames, URLs, or any text keys
+- **address** - For IP addresses and CIDR subnets
+- **integer** - For port numbers or other numeric keys
 
 Before applying, the tool previews the file contents and asks you to confirm the key/value format.
 
@@ -228,7 +228,7 @@ This is where you view contents and make changes. The editor supports browsing, 
 
 ### How It Works
 
-When you open a datagroup or URL category in the editor, the tool fetches the current state from the BIG-IP and loads it into memory. All changes you make happen in memory only — the live object is not modified until you explicitly apply.
+When you open a datagroup or URL category in the editor, the tool fetches the current state from the BIG-IP and loads it into memory. All changes you make happen in memory only - the live object is not modified until you explicitly apply.
 
 The editor displays a full paginated view with all available commands:
 
@@ -254,9 +254,13 @@ Press `x` to delete by pattern. Enter a search string and the tool shows all mat
 
 ### Applying Changes
 
-Press `w` to apply your changes to the current device. The tool shows a summary of all additions and deletions, creates a backup of the current state, and asks for confirmation before applying. After a successful apply, the tool offers to save the BIG-IP configuration.
+Press `w` to apply your changes to the current device. The tool shows a summary of all additions, deletions, and value changes, creates a backup of the current state, and asks for confirmation before applying.
 
-### - Deploying to Fleet
+For datagroups, you then select an apply mode. **tmsh Modify** adds and deletes only the changed records. **Full Replace** writes the entire record set via REST. tmsh Modify is refused when the change set includes value changes to existing records or keys/values containing characters unsafe for tmsh (whitespace, braces, quotes, backslash, `;`, `#`); use Full Replace for those change sets. The same restrictions apply to fleet Merge mode.
+
+After a successful apply, the tool offers to save the BIG-IP configuration.
+
+### Deploying to Fleet
 
 Press `D` to deploy changes to multiple BIG-IPs. This option is available when a fleet configuration is loaded. The full deployment workflow is described in the next section.
 
@@ -272,7 +276,7 @@ Fleet deployment lets you push the current state of a datagroup or URL category 
 
 ### Fleet Configuration
 
-A file called `fleet.conf` is created by the script in your backup directory at first execution if the script does not already exist. The format is one entry per line, with a site label and hostname or IP separated by a pipe character:
+A file called `fleet.conf` is created by the script in your backup directory at first execution if the file does not already exist. The format is one entry per line, with a site label and hostname or IP separated by a pipe character:
 
 ```
 # DGCat-Admin Fleet Configuration File
@@ -318,7 +322,7 @@ From the editor, press `D`. The tool first checks whether you have pending chang
 
 If there are pending changes, the tool analyzes and displays them, then asks you to continue to deployment options.
 
-If there are no pending changes — for example, you already applied changes via `w` and now want to push that state to the fleet, or you loaded the datagroup from a CSV and want to replicate it — the tool asks whether you want to deploy the current state anyway. This is the typical workflow for replication: load or update an object on one BIG-IP, then deploy it to the rest.
+If there are no pending changes - for example, you already applied changes via `w` and now want to push that state to the fleet, or you loaded the datagroup from a CSV and want to replicate it - the tool asks whether you want to deploy the current state anyway. This is the typical workflow for replication: load or update an object on one BIG-IP, then deploy it to the rest.
 
 ### Deployment Modes
 
@@ -326,15 +330,15 @@ After confirming your intent to deploy, you select a deployment mode:
 
 **Full Replace** overwrites the target object on each fleet host with the exact state from the current device. After deployment, every device has an identical copy. This is the right choice when you want strict parity across your fleet.
 
-**Merge** applies only your additions and deletions to each target, preserving any entries that are specific to that device. For datagroups, the tool pulls the current records from each target, applies the changes in memory, and writes the merged result. For URL categories, the tool uses the API's native add and delete operations. This is the right choice when different sites have intentional differences — such as site-specific bypass entries or local address ranges — and you only want to propagate the changes you made, not overwrite everything.
+**Merge** applies only your additions and deletions to each target, preserving any entries that are specific to that device. For datagroups, the tool pulls the current records from each target, applies the changes in memory, and writes the merged result. For URL categories, the tool uses the API's native add and delete operations. This is the right choice when different sites have intentional differences - such as site-specific bypass entries or local address ranges - and you only want to propagate the changes you made, not overwrite everything.
 
 ### Deployment Scope
 
 Next, you select which devices to deploy to:
 
-- **All fleet hosts** — Every host in your fleet except the one you're currently connected to
-- **Select by site** — Choose one or more sites by number (comma-separated for multiple)
-- **Select by host** — Choose individual hosts by number (comma-separated for multiple)
+- **All fleet hosts** - Every host in your fleet except the one you're currently connected to
+- **Select by site** - Choose one or more sites by number (comma-separated for multiple)
+- **Select by host** - Choose individual hosts by number (comma-separated for multiple)
 
 The device you're connected to is automatically excluded from the fleet target list since it's handled separately.
 
@@ -346,9 +350,9 @@ Before anything changes, the tool displays a deployment preview showing the obje
 
 Deployment proceeds in up to three steps:
 
-**Step 1: Pre-deploy validation.** The tool connects to every target host using the same credentials, verifies the object exists, and creates a backup. Hosts that fail connectivity or don't have the object are flagged. The tool shows the validation results and asks whether you want to proceed. If too many hosts are unreachable, you can abort here — nothing has changed on any device.
+**Step 1: Pre-deploy validation.** The tool connects to every target host using the same credentials, verifies the object exists, and creates a backup. Hosts that fail connectivity or don't have the object are flagged. The tool shows the validation results and asks whether you want to proceed. If too many hosts are unreachable, you can abort here - nothing has changed on any device.
 
-**Step 2: Apply to current device.** If there are pending changes, the tool applies them to the connected device first. If there are no pending changes (replication deploy), this step is skipped entirely — the current device already has the correct state.
+**Step 2: Apply to current device.** If there are pending changes, the tool applies them to the connected device first. If there are no pending changes (replication deploy), this step is skipped entirely - the current device already has the correct state.
 
 **Step 3: Deploy to fleet.** The tool applies changes to each validated host in sequence. Each host's result is shown in real time. If the same error occurs on three consecutive hosts (indicating a systemic problem rather than an isolated failure), the tool warns you and asks whether to continue or stop.
 
@@ -367,7 +371,7 @@ After all hosts have been processed, a summary table shows the status of every d
   Total: 3 succeeded, 0 failed, 1 skipped
 ```
 
-Status meanings in the deploy summary: **OK** means the deployment succeeded. **SKIP** means the host was never attempted — it failed pre-deploy validation (unreachable, object not found, or backup failed). **FAIL** means the host passed validation but the actual deployment failed. This distinction lets you quickly identify hosts that need attention versus hosts that were simply unavailable.
+Status meanings in the deploy summary: **OK** means the deployment succeeded. **SKIP** means the host was never attempted - it failed pre-deploy validation (unreachable, object not found, or backup failed). **FAIL** means the host passed validation but the actual deployment failed. This distinction lets you quickly identify hosts that need attention versus hosts that were simply unavailable.
 
 ### What Fleet Deploy Will Not Do
 
@@ -389,9 +393,9 @@ You choose whether to inspect a datagroup or a URL category, then provide the ob
 
 Next, you choose which fleet hosts to query:
 
-- **All fleet hosts** — Every host in `fleet.conf`
-- **Select by site** — All hosts at one or more specific sites
-- **Select by host** — Individual hosts by number
+- **All fleet hosts** - Every host in `fleet.conf`
+- **Select by site** - All hosts at one or more specific sites
+- **Select by host** - Individual hosts by number
 
 ### Pulling Data
 
@@ -399,7 +403,7 @@ The tool connects to each selected host, retrieves the object's entries, and bui
 
 <img width="754" height="344" alt="Image" src="https://github.com/user-attachments/assets/9ac7334c-281b-4783-80d7-1d46b6c4a84e" />
 
-The "unique entries across fleet" count is the deduplicated total — the union of all entries across every pulled host. Per-host counts let you spot imbalances at a glance before running a diff.
+The "unique entries across fleet" count is the deduplicated total - the union of all entries across every pulled host. Per-host counts let you spot imbalances at a glance before running a diff.
 
 ### Searching
 
@@ -413,7 +417,7 @@ Press `s` and enter a case-insensitive search pattern. The tool finds every entr
 
 ### Diffing
 
-Press `d` to run a full diff across all pulled hosts. The diff shows every entry that is not present on every host, with per-host presence detail for each one. Entries that are consistent across the entire fleet are counted but not displayed — if everything matches, the tool reports that all entries are consistent.
+Press `d` to run a full diff across all pulled hosts. The diff shows every entry that is not present on every host, with per-host presence detail for each one. Entries that are consistent across the entire fleet are counted but not displayed - if everything matches, the tool reports that all entries are consistent.
 
 ```
   All 312 entries consistent across all 4 hosts.
@@ -449,9 +453,9 @@ You choose whether to back up a datagroup or a URL category, then provide the ob
 
 The scope selection is identical to Fleet Search:
 
-- **All fleet hosts** — Every host in `fleet.conf`
-- **Select by site** — One or more sites by number (comma-separated for multiple)
-- **Select by host** — Individual hosts by number (comma-separated for multiple)
+- **All fleet hosts** - Every host in `fleet.conf`
+- **Select by site** - One or more sites by number (comma-separated for multiple)
+- **Select by host** - Individual hosts by number (comma-separated for multiple)
 
 ### Execution
 
@@ -486,9 +490,9 @@ The bootstrap manifest is a file called `bootstrap.conf` stored in the backup di
 object|name|attribute
 ```
 
-- **object** — `dg` for datagroup, `cat` for URL category
-- **name** — must start with a letter, no spaces allowed
-- **attribute** — `string`, `address`, or `integer` for datagroups; `allow`, `block`, or `confirm` for URL categories
+- **object** - `dg` for datagroup, `cat` for URL category
+- **name** - must start with a letter, no spaces allowed
+- **attribute** - `string`, `address`, or `integer` for datagroups; `allow`, `block`, or `confirm` for URL categories
 
 Lines starting with `#` are comments. Example:
 
@@ -507,11 +511,11 @@ Select option 1 from the Bootstrap submenu to generate a boilerplate `bootstrap.
 
 ### Importing and Deploying
 
-Select option 2 to import. The tool validates every line — object type, name format, attribute match, and duplicate detection. If any line fails validation, the entire file is rejected with line-specific error messages.
+Select option 2 to import. The tool validates every line - object type, name format, attribute match, and duplicate detection. If any line fails validation, the entire file is rejected with line-specific error messages.
 
 After validation, the tool displays a plan summary showing all datagroups and URL categories that will be created, with their types and actions.
 
-You then select a partition for the datagroups, followed by deployment scope using the standard scope selection (all hosts, by site, or by host). The connected host is included as a selectable target — bootstrap does not auto-apply to any host. Objects that already exist on a target are skipped.
+You then select a partition for the datagroups, followed by deployment scope using the standard scope selection (all hosts, by site, or by host). The connected host is included as a selectable target - bootstrap does not auto-apply to any host. Objects that already exist on a target are skipped.
 
 ---
 
@@ -595,13 +599,13 @@ If you prefer to have the tool automatically backup before every apply action yo
 Backups are stored in the configured backup directory with timestamped filenames. When the connected host is part of a fleet site, backups are organized into the site's subdirectory alongside fleet deployment backups:
 
 ```
-DC1/Common_bypass-domains_internal_20260327_143052.csv
+DC1/bigip01-mgmt_dc1_example_com_Common_bypass-domains_internal_20260327_143052.csv
 ```
 
 When connected to a host that is not part of any fleet site, backups go to the root backup directory:
 
 ```
-Common_bypass-domains_internal_20260327_143052.csv
+bigip01-mgmt_dc1_example_com_Common_bypass-domains_internal_20260327_143052.csv
 ```
 
 Fleet deployment backups for remote hosts are always organized by site:
@@ -657,7 +661,7 @@ The tool could not reach the BIG-IP management interface. Verify that the hostna
 The BIG-IP is reachable but the REST API service (restjavad) is unavailable. The GUI may still work because it runs through a separate service (httpd/tmui). Restart restjavad via SSH: `bigstart restart restjavad` and allow 30-60 seconds for it to initialize. Monitor with `bigstart status restjavad` until it shows `run` and try to reconnect.
 
 **"Authentication failed. Check username/password."**
-The BIG-IP rejected the credentials. Verify the username and password. The account needs administrative API access — typically the `admin` role. Accounts with limited roles may not have permission to query or modify datagroups.
+The BIG-IP rejected the credentials. Verify the username and password. The account needs administrative API access - typically the `admin` role. Accounts with limited roles may not have permission to query or modify datagroups.
 
 ### Import Issues
 
@@ -668,7 +672,7 @@ One or more CIDR entries in your CSV have non-zero host bits for their prefix le
 Your CSV contained duplicate keys or URLs. The tool automatically removes duplicates before applying. The reported count reflects what will land in the datagroup or URL category.
 
 **"Failed to populate URL category"**
-The URL category was created but the API timed out while applying URLs. This can happen with very large URL categories (>10000 records). The category likely contains the data — verify in the GUI or by viewing it in the tool. If it is empty, retry using overwrite mode. If timeouts persist, increase `API_REQUEST_TIMEOUT` (bash) or `$script:API_TIMEOUT` (PowerShell) in the script header. The default is 60 seconds.
+The URL category was created but the API timed out while applying URLs. This can happen with very large URL categories (>10000 records). The category likely contains the data - verify in the GUI or by viewing it in the tool. If it is empty, retry using overwrite mode. If timeouts persist, increase `API_REQUEST_TIMEOUT` (bash) or `$script:API_TIMEOUT` (PowerShell) in the script header. The default is 60 seconds.
 
 ### Partition Issues
 
@@ -677,8 +681,8 @@ The partition listed in your `PARTITIONS` configuration does not exist on the BI
 
 ### Fleet Issues
 
-**"Duplicate hosts detected in fleet.conf"**
-The tool found the same hostname or IP listed more than once in `fleet.conf`. Both conflicting entries are displayed so you can locate them. The script halts until `fleet.conf` is corrected or deleted. 
+**"fleet.conf validation failed"**
+One or more lines in `fleet.conf` are malformed: missing or extra `|` delimiter, empty site or host field, invalid characters, or a duplicate host. Each failing line is displayed with its line number and reason. The script halts until `fleet.conf` is corrected or deleted.
 
 **"No fleet hosts passed validation. No changes have been made."**
 Every target host either failed to connect or didn't have the target object. Verify network connectivity and credentials. Remember that fleet deployment uses the same credentials you used to connect to the initial Big-IP.
@@ -690,7 +694,7 @@ The host is reachable and credentials are valid, but the target datagroup or URL
 The host is unreachable or restjavad is down. Verify network connectivity and REST API availability on the target. See the 503 guidance above.
 
 **Hosts showing as SKIP in the deploy summary.**
-The host failed pre-deploy validation — either it was unreachable, the target object doesn't exist, or the backup failed. SKIP means deployment was never attempted on that host.
+The host failed pre-deploy validation - either it was unreachable, the target object doesn't exist, or the backup failed. SKIP means deployment was never attempted on that host.
 
 ### Editor Issues
 
@@ -703,4 +707,4 @@ Datasets over 8,000 entries will cause the bash editor to become very slow or un
 ### General Issues
 
 **Slow API responses with large datasets.**
-Operations on URL categories with thousands of entries may take longer due to BIG-IP management plane processing time. The default API timeout is 60 seconds. For very large categories (10,000+ entries), you may need to increase this value in the script header. If performance is consistently poor, check the BIG-IP management plane utilization — other automation or monitoring tools competing for API access can slow things down.
+Operations on URL categories with thousands of entries may take longer due to BIG-IP management plane processing time. The default API timeout is 60 seconds. For very large categories (10,000+ entries), you may need to increase this value in the script header. If performance is consistently poor, check the BIG-IP management plane utilization - other automation or monitoring tools competing for API access can slow things down.
