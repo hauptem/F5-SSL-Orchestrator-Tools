@@ -8,7 +8,7 @@
 - Editor pending-change detection is now case-sensitive; case-distinct entries can be added.
 - Backups verify the read succeeded before writing; a failed or timed-out GET no longer produces a valid-looking empty backup file
 - Each backup gets its own timestamp; repeated backups of the same object within a session no longer overwrite each other
-- Backup rotation fixed — MAX_BACKUPS was never enforced (rotation pattern didn't match hostname-prefixed filenames, and fleet site subfolders weren't searched)
+- Backup rotation fixed 
 - URL category backups now rotate
 - Malformed lines (missing or extra '|', empty site or host field) are now hard validation errors 
 - Comment normalization pass corrected stale menu option labels
