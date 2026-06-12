@@ -1,15 +1,17 @@
 # DGCat-Admin v5.3 Release Notes 
 
-- tmsh Modify and fleet merge deploys now reject keys/values containing whitespace, braces, quotes, backslash, ';', or '#' 
-- Value changes to existing records are now detected, shown in change previews, and rejected by tmsh Modify and merge deploys since tmsh records add/delete cannot apply them — use Full Replace. Previously these reported success while applying nothing.
-- CSV merge, import dedup, URL category merge, and editor change analysis now use case-sensitive comparisons matching BIG-IP datagroup key semantics. Case-distinct keys are no longer silently collapsed or dropped.
-- Editor pending-change detection is now case-sensitive; case-distinct entries can be added.
-- Backups verify the read succeeded before writing; a failed or timed-out GET no longer produces a valid-looking empty backup file
-- Each backup gets its own timestamp; repeated backups of the same object within a session no longer overwrite each other
-- Backup rotation fixed 
-- URL category backups now rotate
-- Malformed lines (missing or extra '|', empty site or host field) are now hard validation errors 
-- Comment normalization pass corrected stale menu option labels
+- tmsh Modify and fleet merge deploys now reject keys/values containing whitespace, braces, quotes, backslash, ';', or '#' since these are embedded unquoted in the tmsh options string and can corrupt the parse or delete unintended records; Full Replace is unaffected
+- Value changes to existing records are now detected, shown in change previews, and rejected by tmsh Modify and merge deploys (tmsh records add/delete cannot apply them); previously these reported success while applying nothing
+- Backups verify the read succeeded before writing - a failed or timed-out GET no longer produces a valid-looking empty backup file
+- Each backup gets its own timestamp; repeated backups of the same object in a session no longer overwrite each other
+- Backup rotation fixed - MAX_BACKUPS was never enforced due to a filename pattern mismatch; URL category backups now rotate as well
+- URL category backups consolidated into a single backup function; delete, editor apply, and fleet deploy previously used three inline copies
+- Fixed a latent set -e exit when a remote backup write failed during fleet deploy
+- Fleet Backup reports FAIL for hosts where the object doesn't exist instead of writing an empty backup
+- Malformed fleet.conf lines (missing or extra '|', empty site or host field) are now hard validation errors with line numbers; a line without a delimiter previously registered the hostname as its own site
+- Username prompt defaults to admin when left blank, matching suite convention
+- Screen clears after host selection, showing the chosen target before login
+- 5.3 is the final bash release; the PowerShell version will be the only one maintained going forward - however at 5.3 all desired features have been implemented. Any further updates to the bash version will be targeted bugfixes
 
 # DGCat-Admin v5.2 Release Notes 
 
