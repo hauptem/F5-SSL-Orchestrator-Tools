@@ -12,9 +12,6 @@
 - ERROR-state failures now include the block's error detail in the output
 - Stuck-block cleanup during redeploy uses anchored name matching - the previous substring match could clear blocks belonging to a topology whose name contains the selected one
 - Snapshots are verified after writing (round-trip parse and block count check); import warns when metadata blockCount does not match file contents
-- Typed replay confirmation changed from CONFIRM to REPLAY and is now case-sensitive
-- #Requires -Version 5.1 directive was inert due to a stray space and is now enforced
-- Comment normalization pass
 
 ## vb4.3.15.0-devel (Beta 4 - June 1 2026)
 
