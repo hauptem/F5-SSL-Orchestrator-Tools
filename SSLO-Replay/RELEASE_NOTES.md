@@ -1,5 +1,21 @@
 # Release Notes
 
+# vb5.3.15.0-devel (Beta 5 - June 12 2026)
+
+- Replay aborts if the target inventory cannot be retrieved - a failed read previously disabled existing-object detection silently, allowing a full snapshot to deploy onto an already-populated device
+- Key passphrase prompt added to SSL settings replay - passphrases are not recoverable from state blocks and were previously restored blank; prompts once per unique key and asks neutrally, since a pfId is present whether or not the key has a passphrase
+- Gateway pool prerequisite check fixed - it read egressNetwork.gatewayPool, which does not exist (correct field is outboundGateways.referredObj per the F5 Ansible module source), so gateway pools were never validated before replay
+- Existing objects in ERROR or stuck state are now flagged in the replay plan with a warning to remove them before re-replaying; previously shown as a plain "exists" and silently skipped on every retry
+- Policy swap failures now list the changes completed before the failure, including policy content already live on the target
+- Replay halts for confirmation after 3 consecutive object failures instead of grinding through the remainder
+- Objects posted without a returned block ID are reported as unverified instead of replayed; "Replay complete" requires zero failed and zero unverified
+- ERROR-state failures now include the block's error detail in the output
+- Stuck-block cleanup during redeploy uses anchored name matching - the previous substring match could clear blocks belonging to a topology whose name contains the selected one
+- Snapshots are verified after writing (round-trip parse and block count check); import warns when metadata blockCount does not match file contents
+- Typed replay confirmation changed from CONFIRM to REPLAY and is now case-sensitive
+- #Requires -Version 5.1 directive was inert due to a stray space and is now enforced
+- Comment normalization pass
+
 ## vb4.3.15.0-devel (Beta 4 - June 1 2026)
 
 - Refined scope of the project back to just SSLO configuration backup and replay. Removed the ability to install LTM dependencies
