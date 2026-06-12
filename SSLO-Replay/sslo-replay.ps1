@@ -2901,6 +2901,100 @@ function Invoke-SsloRestore {
                 
                 $backup.blocks = @($backup.blocks | Where-Object { $requiredNames.ContainsKey($_.deploymentName) })
                 Write-LogOk "Scoped to topology $($selectedTopo.deploymentName) ($($backup.blocks.Count) objects)"
+                
+                # ---------------------------------------------------------
+                # Dynamic naming (optional): rename the topology stack to a
+                # new base name. Renaming applies ONLY to the topology, its
+                # SSL settings, and its security policy. Services, service
+                # chains, and /Common/ dependencies are never renamed - they
+                # are outside replay's naming scope by design
+                # ---------------------------------------------------------
+                $renameTypes = @{ "TOPOLOGY" = "sslo_"; "SSL_SETTINGS" = "ssloT_"; "SECURITY_POLICY" = "ssloP_" }
+                
+                # Detect the common base name across the renameable stack
+                $stems = @{}
+                $renameable = @($backup.blocks | Where-Object { $renameTypes.ContainsKey($_.deploymentType) })
+                foreach ($rb in $renameable) {
+                    $pfx = $renameTypes[$rb.deploymentType]
+                    if ($rb.deploymentName.StartsWith($pfx)) {
+                        $stem = $rb.deploymentName.Substring($pfx.Length)
+                        if (-not $stems.ContainsKey($stem)) { $stems[$stem] = 0 }
+                        $stems[$stem]++
+                    }
+                }
+                
+                $detectedBase = $null
+                if ($stems.Count -eq 1 -and $renameable.Count -ge 2) {
+                    $detectedBase = @($stems.Keys)[0]
+                }
+                
+                if ($detectedBase) {
+                    Write-Host ""
+                    Write-LogInfo "Detected base name: $detectedBase (topology, SSL settings, security policy)"
+                    $newBase = Read-Host "  New base name (Enter to keep $detectedBase)"
+                    
+                    if (-not [string]::IsNullOrWhiteSpace($newBase) -and $newBase -cne $detectedBase) {
+                        # Names cascade into TMOS and APM object names downstream - keep them short and clean
+                        if ($newBase -notmatch '^[A-Za-z0-9_]{1,20}$') {
+                            Write-LogError "Base name must be 1-20 characters: letters, numbers, underscores."
+                            Press-EnterToContinue
+                            return
+                        }
+                        
+                        # Rename map: the three full prefixed block names of this stack.
+                        # State blocks echo gc-generated artifacts (virtuals, log settings,
+                        # generated profiles, .app folder paths) that embed the full block
+                        # name in values AND keys, so a field walk cannot enumerate them.
+                        # Full names are long, unique, mutually non-substring tokens, so a
+                        # per-block textual substitution is deterministic. The round-trip
+                        # check proves the only change was the mapped rename
+                        $renameMap = @{}
+                        foreach ($rb in $renameable) {
+                            $renameMap[$rb.deploymentName] = "$($renameTypes[$rb.deploymentType])$newBase"
+                        }
+                        
+                        # Pass 1: rename and verify every block before committing any
+                        $renamedBlocks = @{}
+                        $renameOk = $true
+                        for ($bi = 0; $bi -lt $backup.blocks.Count; $bi++) {
+                            $origJson = $backup.blocks[$bi].block | ConvertTo-Json -Depth 30
+                            $newJson = $origJson
+                            foreach ($oldName in $renameMap.Keys) {
+                                $newJson = $newJson.Replace($oldName, $renameMap[$oldName])
+                            }
+                            # Round-trip invariant: reverse substitution must restore the
+                            # original exactly - proves no dependency path, chain, or
+                            # service reference was altered, and that the new base does
+                            # not collide with any name already present in the block
+                            $revJson = $newJson
+                            foreach ($oldName in $renameMap.Keys) {
+                                $revJson = $revJson.Replace($renameMap[$oldName], $oldName)
+                            }
+                            if ($revJson -cne $origJson) {
+                                $renameOk = $false
+                                break
+                            }
+                            $renamedBlocks[$bi] = $newJson
+                        }
+                        
+                        if (-not $renameOk) {
+                            Write-LogError "Rename verification failed - the new base name conflicts with existing content."
+                            Write-LogError "Replay aborted, no changes made."
+                            Press-EnterToContinue
+                            return
+                        }
+                        
+                        # Pass 2: commit
+                        for ($bi = 0; $bi -lt $backup.blocks.Count; $bi++) {
+                            $backup.blocks[$bi].block = $renamedBlocks[$bi] | ConvertFrom-Json
+                            if ($renameMap.ContainsKey($backup.blocks[$bi].deploymentName)) {
+                                $backup.blocks[$bi].deploymentName = $renameMap[$backup.blocks[$bi].deploymentName]
+                            }
+                        }
+                        
+                        Write-LogOk "Base name applied: $detectedBase -> $newBase"
+                    }
+                }
             } else {
                 Write-LogWarn "Invalid selection."
                 Press-EnterToContinue
