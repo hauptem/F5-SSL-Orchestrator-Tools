@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.2
+# Version: 5.3
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -19,7 +19,7 @@
 #
 # =============================================================================
 
-# Requires -Version 5.1
+#Requires -Version 5.1
 
 # =============================================================================
 # CONFIGURATION
@@ -55,7 +55,6 @@ $script:EDIT_PAGE_SIZE = 20
 # CONNECTION SETTINGS
 # =============================================================================
 
-# Connection settings
 $script:RemoteHost = ""
 $script:RemoteUser = ""
 $script:RemotePass = ""
@@ -170,11 +169,13 @@ function Press-EnterToContinue {
     Read-Host "  Press Enter to continue"
 }
 
+# Test a single entry for valid integer format
 function Test-IntegerFormat {
     param([string]$Entry)
     return $Entry -match '^-?[0-9]+$'
 }
 
+# Test a single entry for IPv4/IPv6 address or CIDR format
 function Test-AddressFormat {
     param([string]$Entry)
     if ($Entry -match '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$') { return $true }
@@ -182,6 +183,8 @@ function Test-AddressFormat {
     return $false
 }
 
+# Check IPv4 CIDR entries for non-zero host bits that BIG-IP will reject
+# Returns: array of @{ Original; Correct } for misaligned entries
 function Test-CidrAlignment {
     param([string[]]$Keys)
     
@@ -266,7 +269,7 @@ function Test-IntegerEntries {
 }
 
 # Validate URL category CSV entries are valid domains
-# Checks raw entries before format conversion
+# Check raw entries before format conversion
 # Returns: array of @{ Entry; Reason } for invalid entries
 function Test-UrlCsvEntries {
     param([string[]]$Keys)
@@ -304,16 +307,19 @@ function Test-UrlCsvEntries {
     return $errors
 }
 
+# Test whether a name matches a protected system datagroup
 function Test-ProtectedDatagroup {
     param([string]$Name)
     return $script:PROTECTED_DATAGROUPS -contains $Name
 }
 
+# Strip a leading /Partition/ prefix from an object name
 function Remove-PartitionPrefix {
     param([string]$Name)
     return $Name -replace '^/[^/]*/', ''
 }
 
+# Convert CRLF line endings to LF in place
 function ConvertTo-UnixLineEndings {
     param([string]$FilePath)
     $FilePath = (Resolve-Path $FilePath).Path
@@ -325,6 +331,7 @@ function ConvertTo-UnixLineEndings {
     }
 }
 
+# Test whether a file contains CRLF line endings
 function Test-WindowsLineEndings {
     param([string]$FilePath)
     $FilePath = (Resolve-Path $FilePath).Path
@@ -332,6 +339,7 @@ function Test-WindowsLineEndings {
     return $content.Contains("`r`n")
 }
 
+# Create the backup directory if needed and verify it is writable
 function Confirm-BackupDir {
     if (-not (Test-Path $script:BACKUP_DIR)) {
         try {
@@ -350,14 +358,19 @@ function Confirm-BackupDir {
     }
 }
 
+# Prune rotated backups beyond MAX_BACKUPS for a filename pattern
 function Remove-OldBackups {
-    param([string]$Pattern)
-    $files = @(Get-ChildItem -Path $script:BACKUP_DIR -Filter "${Pattern}_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    param(
+        [string]$Pattern,
+        [string]$Directory = $script:BACKUP_DIR
+    )
+    $files = @(Get-ChildItem -Path $Directory -Filter "${Pattern}_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
     if ($files -and $files.Count -gt $script:MAX_BACKUPS) {
         $files | Select-Object -Skip $script:MAX_BACKUPS | Remove-Item -Force -ErrorAction SilentlyContinue
     }
 }
 
+# Normalize a domain to BIG-IP URL category format (https://domain/)
 function Format-DomainForUrlCategory {
     param([string]$Domain)
     $Domain = $Domain -replace '^https?://', ''
@@ -377,6 +390,8 @@ function Format-DomainForUrlCategory {
 # API Helper Functions
 # -----------------------------------------------------------------------------
 
+# Send a REST request to the connected BIG-IP
+# Returns: @{ Success; Response; StatusCode; Error }
 function Invoke-F5Api {
     param(
         [string]$Method,
@@ -442,6 +457,7 @@ function Invoke-F5Delete {
 # Connection Functions
 # -----------------------------------------------------------------------------
 
+# Prompt for target and credentials, build the auth header, verify connectivity
 function Initialize-RemoteConnection {
     Write-LogSection "DGCat Connection Setup"
     
@@ -488,10 +504,17 @@ function Initialize-RemoteConnection {
         return $false
     }
     
-    $script:RemoteUser = Read-Host "  Username"
+    # Clear the selection list before login; re-anchor with the chosen target
+    Clear-Host
+    Write-LogSection "DGCat Connection Setup"
+    Write-Host ""
+    Write-Host "  Connecting to: " -NoNewline -ForegroundColor White
+    Write-Host $script:RemoteHost -ForegroundColor Yellow
+    Write-Host ""
+    
+    $script:RemoteUser = Read-Host "  Username [admin]"
     if ([string]::IsNullOrWhiteSpace($script:RemoteUser)) {
-        Write-LogError "No username provided."
-        return $false
+        $script:RemoteUser = "admin"
     }
     
     $securePass = Read-Host "  Password" -AsSecureString
@@ -553,6 +576,7 @@ function Initialize-RemoteConnection {
 # System Functions
 # -----------------------------------------------------------------------------
 
+# Save the running configuration on the connected BIG-IP
 function Save-F5Config {
     $result = Invoke-F5Post -Endpoint "/mgmt/tm/sys/config" -Body @{ command = "save" }
     if ($result.Success) { return $true }
@@ -562,6 +586,7 @@ function Save-F5Config {
     return $false
 }
 
+# Test whether a partition exists (direct query, no cache)
 function Test-PartitionRemote {
     param([string]$Partition)
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/auth/partition/$Partition"
@@ -572,6 +597,7 @@ function Test-PartitionRemote {
 # Datagroup Functions
 # -----------------------------------------------------------------------------
 
+# List internal datagroups in a partition, excluding iApp-owned objects
 function Get-DatagroupListRemote {
     param([string]$Partition)
     
@@ -589,12 +615,14 @@ function Get-DatagroupListRemote {
     return $items
 }
 
+# Test whether an internal datagroup exists
 function Test-DatagroupExistsRemote {
     param([string]$Partition, [string]$Name)
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
     return $result.Success
 }
 
+# Get a datagroup's type (string, address, or integer)
 function Get-DatagroupTypeRemote {
     param([string]$Partition, [string]$Name)
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
@@ -602,6 +630,8 @@ function Get-DatagroupTypeRemote {
     return ""
 }
 
+# Get datagroup records
+# Returns: array of @{ Key; Value }
 function Get-DatagroupRecordsRemote {
     param([string]$Partition, [string]$Name)
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
@@ -616,6 +646,7 @@ function Get-DatagroupRecordsRemote {
     return $records
 }
 
+# Create an empty internal datagroup
 function New-DatagroupRemote {
     param([string]$Partition, [string]$Name, [string]$Type)
     $body = @{ name = $Name; partition = $Partition; type = $Type }
@@ -623,6 +654,8 @@ function New-DatagroupRemote {
     return $result.Success
 }
 
+# Replace a datagroup's full record set via PATCH
+# Returns: full API result hashtable
 function Set-DatagroupRecordsRemote {
     param([string]$Partition, [string]$Name, [array]$Records)
     $body = @{ records = $Records }
@@ -630,12 +663,14 @@ function Set-DatagroupRecordsRemote {
     return $result
 }
 
+# Delete an internal datagroup
 function Remove-DatagroupRemote {
     param([string]$Partition, [string]$Name)
     $result = Invoke-F5Delete -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
     return $result.Success
 }
 
+# Build REST records array from parallel key/value arrays
 function ConvertTo-RecordsJson {
     param([array]$Keys, [array]$Values)
     $records = @()
@@ -647,6 +682,19 @@ function ConvertTo-RecordsJson {
         }
     }
     return $records
+}
+
+# Gate for tmsh merge mode: keys and values are embedded unquoted in the tmsh
+# options string. Whitespace splits tokens (a multi-word delete key would delete
+# other records); braces, quotes, backslash, ';', and '#' corrupt the parse.
+# Full Replace (REST JSON) is unaffected
+function Test-TmshSafeStrings {
+    param([string[]]$Strings)
+    foreach ($s in $Strings) {
+        if ([string]::IsNullOrEmpty($s)) { continue }
+        if ($s -match '[\s{}"\\;#'']') { return $false }
+    }
+    return $true
 }
 
 # Build tmsh-style record string for incremental add
@@ -703,12 +751,14 @@ function Remove-DatagroupRecordsIncremental {
 # URL Category Functions
 # -----------------------------------------------------------------------------
 
+# Test whether a URL category exists
 function Test-UrlCategoryExistsRemote {
     param([string]$Name)
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$Name"
     return $result.Success
 }
 
+# List URL category names, sorted
 function Get-UrlCategoryListRemote {
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category"
     if (-not $result.Success) { return @() }
@@ -719,6 +769,8 @@ function Get-UrlCategoryListRemote {
     return @($names | Sort-Object)
 }
 
+# Get URL entries for a category
+# Returns: array of URL strings
 function Get-UrlCategoryEntriesRemote {
     param([string]$Name)
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$Name"
@@ -730,6 +782,7 @@ function Get-UrlCategoryEntriesRemote {
     return $urls
 }
 
+# Get the URL count for a category
 function Get-UrlCategoryCountRemote {
     param([string]$Name)
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$Name"
@@ -738,6 +791,7 @@ function Get-UrlCategoryCountRemote {
     return 0
 }
 
+# Create a URL category with initial URLs and default action
 function New-UrlCategoryRemote {
     param([string]$Name, [string]$DefaultAction, [array]$Urls)
     $body = @{ name = $Name; displayName = $Name; defaultAction = $DefaultAction; urls = $Urls }
@@ -745,6 +799,7 @@ function New-UrlCategoryRemote {
     return $result.Success
 }
 
+# Merge new URLs into a category (GET, merge, PATCH full set)
 function Add-UrlCategoryEntriesRemote {
     param([string]$Name, [array]$NewUrls)
     
@@ -754,8 +809,8 @@ function Add-UrlCategoryEntriesRemote {
     $existing = @()
     if ($result.Response.urls) { $existing = @($result.Response.urls) }
     
-    # Merge and deduplicate by name
-    $merged = @{}
+    # Merge and deduplicate by name (ordinal: BIG-IP names are case-sensitive)
+    $merged = [System.Collections.Hashtable]::new()
     foreach ($url in $existing) { $merged[$url.name] = $url }
     foreach ($url in $NewUrls) { $merged[$url.name] = $url }
     
@@ -764,6 +819,7 @@ function Add-UrlCategoryEntriesRemote {
     return $patchResult.Success
 }
 
+# Remove URLs from a category (GET, filter, PATCH full set)
 function Remove-UrlCategoryEntriesRemote {
     param([string]$Name, [string[]]$UrlsToDelete)
     
@@ -780,6 +836,7 @@ function Remove-UrlCategoryEntriesRemote {
     return $patchResult.Success
 }
 
+# Replace a category's full URL set via PATCH
 function Set-UrlCategoryEntriesRemote {
     param([string]$Name, [array]$Urls)
     $body = @{ urls = $Urls }
@@ -787,12 +844,14 @@ function Set-UrlCategoryEntriesRemote {
     return $result.Success
 }
 
+# Delete a URL category
 function Remove-UrlCategoryRemote {
     param([string]$Name)
     $result = Invoke-F5Delete -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$Name"
     return $result.Success
 }
 
+# Build REST URL objects from strings, setting glob-match for wildcards
 function ConvertTo-UrlObjects {
     param([string[]]$Urls)
     $objects = @()
@@ -809,6 +868,7 @@ function ConvertTo-UrlObjects {
 # PARTITION FUNCTIONS
 # =============================================================================
 
+# Test whether a partition exists (session-cached)
 function Test-PartitionExists {
     param([string]$Partition)
     
@@ -822,6 +882,7 @@ function Test-PartitionExists {
     return $exists
 }
 
+# Test whether the URL category database is provisioned (session-cached)
 function Test-UrlCategoryDbAvailable {
     if ($script:UrlCategoryDbCached -eq "yes") { return $true }
     if ($script:UrlCategoryDbCached -eq "no") { return $false }
@@ -835,6 +896,7 @@ function Test-UrlCategoryDbAvailable {
     return $false
 }
 
+# Prompt the operator to select a configured partition
 function Select-Partition {
     param([string]$Prompt = "Select partition")
     
@@ -864,6 +926,7 @@ function Select-Partition {
     return ""
 }
 
+# List datagroups across all configured partitions
 function Get-AllDatagroupList {
     $all = @()
     foreach ($partition in $script:PARTITIONS) {
@@ -874,6 +937,7 @@ function Get-AllDatagroupList {
     return @($all | Sort-Object { $_.Partition }, { $_.Name })
 }
 
+# Prompt the operator to select a datagroup by number or name
 function Select-Datagroup {
     param([string]$Partition, [string]$Prompt = "Enter datagroup name", [string]$Mode = "existing")
     # Modes: existing (must exist), any (accept new or existing), new (must not exist)
@@ -965,6 +1029,7 @@ function Select-Datagroup {
     }
 }
 
+# Prompt the operator to save the BIG-IP configuration
 function Invoke-PromptSaveConfig {
     Write-Host ""
     $saveChoice = Read-Host "  Save configuration? (yes/no) [yes]"
@@ -1044,6 +1109,8 @@ function Test-FleetHost {
     return ""
 }
 
+# Parse and validate fleet.conf; halts the tool on validation errors
+# Returns: $true if at least one fleet host was loaded
 function Import-FleetConfig {
     $script:FleetSites = @()
     $script:FleetHosts = @()
@@ -1062,12 +1129,26 @@ function Import-FleetConfig {
         if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#')) { continue }
         
         $parts = $line.Split('|')
-        if ($parts.Count -lt 2) { continue }
+        if ($parts.Count -lt 2) {
+            $errors += @{ Line = $lineNum; Content = $line; Message = "Missing '|' delimiter (expected format: SITE|HOST)" }
+            continue
+        }
+        if ($parts.Count -gt 2) {
+            $errors += @{ Line = $lineNum; Content = $line; Message = "Too many '|' delimiters (expected format: SITE|HOST)" }
+            continue
+        }
         
         $site = $parts[0].Trim()
         $host_ = $parts[1].Trim()
         
-        if ([string]::IsNullOrWhiteSpace($site) -or [string]::IsNullOrWhiteSpace($host_)) { continue }
+        if ([string]::IsNullOrWhiteSpace($site)) {
+            $errors += @{ Line = $lineNum; Content = $line; Message = "Empty site ID (expected format: SITE|HOST)" }
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($host_)) {
+            $errors += @{ Line = $lineNum; Content = $line; Message = "Empty host (expected format: SITE|HOST)" }
+            continue
+        }
         
         # Validate site ID
         if ($site -notmatch '^[a-zA-Z0-9_-]+$') {
@@ -1120,6 +1201,7 @@ function Test-FleetAvailable {
     return $script:FleetHosts.Count -gt 0
 }
 
+# Get all fleet hosts belonging to a site
 function Get-SiteHosts {
     param([string]$SiteId)
     $hosts = @()
@@ -1129,6 +1211,7 @@ function Get-SiteHosts {
     return $hosts
 }
 
+# Get the site ID for a fleet host (empty string if not in fleet)
 function Get-HostSite {
     param([string]$Hostname)
     for ($i = 0; $i -lt $script:FleetHosts.Count; $i++) {
@@ -1137,11 +1220,13 @@ function Get-HostSite {
     return ""
 }
 
+# Count fleet hosts in a site
 function Get-SiteHostCount {
     param([string]$SiteId)
     return @($script:FleetSites | Where-Object { $_ -eq $SiteId }).Count
 }
 
+# Create the per-site backup subdirectory if needed
 function Confirm-SiteLogDir {
     param([string]$SiteId)
     $dir = Join-Path $script:BACKUP_DIR $SiteId
@@ -1167,6 +1252,7 @@ function Get-ConnectedBackupDir {
 # DEPLOY VALIDATION FUNCTIONS
 # =============================================================================
 
+# Test REST connectivity to a fleet host
 function Test-HostConnection {
     param([string]$HostName)
     $origHost = $script:RemoteHost
@@ -1176,6 +1262,7 @@ function Test-HostConnection {
     return $result.Success
 }
 
+# Test whether a datagroup exists on a fleet host
 function Test-RemoteDatagroup {
     param([string]$HostName, [string]$Partition, [string]$Name)
     $origHost = $script:RemoteHost
@@ -1185,6 +1272,7 @@ function Test-RemoteDatagroup {
     return $exists
 }
 
+# Test whether a URL category exists on a fleet host
 function Test-RemoteUrlCategory {
     param([string]$HostName, [string]$Name)
     $origHost = $script:RemoteHost
@@ -1194,18 +1282,32 @@ function Test-RemoteUrlCategory {
     return $exists
 }
 
+# Back up a datagroup from a fleet host to its site subdirectory
+# Returns: backup file path, or empty string on failure
 function Backup-RemoteDatagroup {
     param([string]$HostName, [string]$Partition, [string]$Name, [string]$SiteId)
     $origHost = $script:RemoteHost
     $script:RemoteHost = $HostName
-    
+
+    # Verified single GET - a backup written from a failed read would look
+    # valid but contain zero records, worse than no backup at all
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
+    $script:RemoteHost = $origHost
+    if (-not $result.Success) { return "" }
+
+    $dgType = $result.Response.type
+    $records = @()
+    if ($result.Response.records) {
+        foreach ($rec in $result.Response.records) {
+            $records += @{ Key = $rec.name; Value = $(if ($rec.data) { $rec.data } else { "" }) }
+        }
+    }
+
     Confirm-SiteLogDir -SiteId $SiteId | Out-Null
     $safeHost = $HostName -replace '[^a-zA-Z0-9_-]', '_'
-    $backupFile = Join-Path $script:BACKUP_DIR "$SiteId\${safeHost}_${Partition}_${Name}_$($script:Timestamp).csv"
-    
-    $dgType = Get-DatagroupTypeRemote -Partition $Partition -Name $Name
-    $records = Get-DatagroupRecordsRemote -Partition $Partition -Name $Name
-    
+    $ts = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backupFile = Join-Path $script:BACKUP_DIR "$SiteId\${safeHost}_${Partition}_${Name}_${ts}.csv"
+
     $lines = @(
         "# Datagroup Backup: /${Partition}/${Name}",
         "# Host: $HostName",
@@ -1216,9 +1318,7 @@ function Backup-RemoteDatagroup {
         "#"
     )
     foreach ($rec in $records) { $lines += "$($rec.Key),$($rec.Value)" }
-    
-    $script:RemoteHost = $origHost
-    
+
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
         return $backupFile
@@ -1227,18 +1327,29 @@ function Backup-RemoteDatagroup {
     }
 }
 
+# Back up a URL category from a fleet host to its site subdirectory
+# Returns: backup file path, or empty string on failure
 function Backup-RemoteUrlCategory {
     param([string]$HostName, [string]$CatName, [string]$SiteId)
     $origHost = $script:RemoteHost
     $script:RemoteHost = $HostName
-    
+
+    # Verified single GET - see Backup-RemoteDatagroup
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$CatName"
+    $script:RemoteHost = $origHost
+    if (-not $result.Success) { return "" }
+
+    $entries = @()
+    if ($result.Response.urls) {
+        foreach ($url in $result.Response.urls) { $entries += $url.name }
+    }
+
     Confirm-SiteLogDir -SiteId $SiteId | Out-Null
     $safeHost = $HostName -replace '[^a-zA-Z0-9_-]', '_'
     $safeCat = $CatName -replace '[^a-zA-Z0-9_-]', '_'
-    $backupFile = Join-Path $script:BACKUP_DIR "$SiteId\${safeHost}_urlcat_${safeCat}_$($script:Timestamp).csv"
-    
-    $entries = Get-UrlCategoryEntriesRemote -Name $CatName
-    
+    $ts = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backupFile = Join-Path $script:BACKUP_DIR "$SiteId\${safeHost}_urlcat_${safeCat}_${ts}.csv"
+
     $lines = @(
         "# URL Category Backup: $CatName",
         "# Host: $HostName",
@@ -1248,9 +1359,7 @@ function Backup-RemoteUrlCategory {
         "#"
     )
     $lines += $entries
-    
-    $script:RemoteHost = $origHost
-    
+
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
         return $backupFile
@@ -1265,6 +1374,8 @@ function Backup-RemoteUrlCategory {
 
 $script:DeployErrorMsg = ""
 
+# Prompt for deployment scope (all fleet, by site, or by host)
+# Returns: array of target hostnames
 function Select-DeployScope {
     param([string]$ObjectType, [string]$ObjectName, [bool]$IncludeSelf = $false)
     
@@ -1348,6 +1459,7 @@ function Select-DeployScope {
     return $targets
 }
 
+# Apply datagroup changes to one fleet host and save its config
 function Deploy-DatagroupToHost {
     param(
         [string]$HostName, [string]$Partition, [string]$DgName, [string]$DgType,
@@ -1422,6 +1534,7 @@ function Deploy-DatagroupToHost {
     return $true
 }
 
+# Apply URL category changes to one fleet host and save its config
 function Deploy-UrlCategoryToHost {
     param(
         [string]$HostName, [string]$CatName, [array]$UrlsJson, [string]$SiteId,
@@ -1476,6 +1589,8 @@ function Deploy-UrlCategoryToHost {
     return $true
 }
 
+# Verify connectivity and object existence on each deploy target
+# Returns: array of @{ Host; Site; Status; Message }
 function Invoke-PreDeployValidation {
     param([string]$ObjectType, [string]$ObjectName, [string]$Partition, [string[]]$Targets)
     
@@ -1533,6 +1648,7 @@ function Invoke-PreDeployValidation {
     return $results
 }
 
+# Execute a deploy across validated targets with per-host backup and summary
 function Invoke-FleetDeploy {
     param(
         [string]$ObjectType, [string]$ObjectName, [string]$Partition,
@@ -1662,17 +1778,30 @@ function Invoke-FleetDeploy {
 # BACKUP FUNCTIONS
 # =============================================================================
 
+# Back up a datagroup from the connected host
+# Returns: backup file path, or empty string on failure
 function Backup-Datagroup {
     param([string]$Partition, [string]$Name)
-    
+
+    # Verified single GET - a backup written from a failed read would look
+    # valid but contain zero records, worse than no backup at all
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
+    if (-not $result.Success) { return "" }
+
+    $dgType = $result.Response.type
+    $records = @()
+    if ($result.Response.records) {
+        foreach ($rec in $result.Response.records) {
+            $records += @{ Key = $rec.name; Value = $(if ($rec.data) { $rec.data } else { "" }) }
+        }
+    }
+
     $safePartition = $Partition -replace '/', '_'
     $safeHostname = $script:RemoteHost -replace '[^a-zA-Z0-9_-]', '_'
     $backupPath = Get-ConnectedBackupDir
-    $backupFile = Join-Path $backupPath "${safeHostname}_${safePartition}_${Name}_internal_$($script:Timestamp).csv"
-    
-    $dgType = Get-DatagroupTypeRemote -Partition $Partition -Name $Name
-    $records = Get-DatagroupRecordsRemote -Partition $Partition -Name $Name
-    
+    $ts = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backupFile = Join-Path $backupPath "${safeHostname}_${safePartition}_${Name}_internal_${ts}.csv"
+
     $lines = @(
         "# Datagroup Backup: /${Partition}/${Name}",
         "# Partition: $Partition",
@@ -1683,26 +1812,36 @@ function Backup-Datagroup {
         "#"
     )
     foreach ($rec in $records) { $lines += "$($rec.Key),$($rec.Value)" }
-    
+
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
-        Remove-OldBackups -Pattern "${safePartition}_${Name}_internal"
+        Remove-OldBackups -Pattern "${safeHostname}_${safePartition}_${Name}_internal" -Directory $backupPath
         return $backupFile
     } catch {
         return ""
     }
 }
 
+# Back up a URL category from the connected host
+# Returns: backup file path, or empty string on failure
 function Backup-UrlCategory {
     param([string]$CatName)
-    
+
+    # Verified single GET - see Backup-Datagroup
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$CatName"
+    if (-not $result.Success) { return "" }
+
+    $entries = @()
+    if ($result.Response.urls) {
+        foreach ($url in $result.Response.urls) { $entries += $url.name }
+    }
+
     $safeName = $CatName -replace '[^a-zA-Z0-9_-]', '_'
     $safeHostname = $script:RemoteHost -replace '[^a-zA-Z0-9_-]', '_'
     $backupPath = Get-ConnectedBackupDir
-    $backupFile = Join-Path $backupPath "${safeHostname}_urlcat_${safeName}_$($script:Timestamp).csv"
-    
-    $entries = Get-UrlCategoryEntriesRemote -Name $CatName
-    
+    $ts = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backupFile = Join-Path $backupPath "${safeHostname}_urlcat_${safeName}_${ts}.csv"
+
     $lines = @(
         "# URL Category Backup: $CatName",
         "# Created: $(Get-Date)",
@@ -1710,9 +1849,10 @@ function Backup-UrlCategory {
         "#"
     )
     $lines += $entries
-    
+
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
+        Remove-OldBackups -Pattern "${safeHostname}_urlcat_${safeName}" -Directory $backupPath
         return $backupFile
     } catch {
         return ""
@@ -1723,6 +1863,8 @@ function Backup-UrlCategory {
 # CSV PARSING AND VALIDATION
 # =============================================================================
 
+# Parse a datagroup CSV into parallel key/value arrays
+# Returns: @{ Keys; Values }, or $null if no valid entries
 function Import-CsvDatagroup {
     param([string]$FilePath, [string]$Format)
     
@@ -1766,6 +1908,8 @@ function Import-CsvDatagroup {
     return @{ Keys = $keys; Values = $values }
 }
 
+# Classify CSV keys against the expected datagroup type (advisory)
+# Returns: @{ Count; Type; Percent } describing mismatches
 function Test-EntryTypes {
     param([string]$ExpectedType, [string[]]$Keys)
     
@@ -1795,6 +1939,7 @@ function Test-EntryTypes {
     return @{ Count = $mismatchCount; Type = $mismatchType; Percent = $pct }
 }
 
+# Display the first PREVIEW_LINES data rows of a CSV file
 function Show-CsvPreview {
     param([string]$FilePath)
     
@@ -1822,6 +1967,7 @@ function Show-CsvPreview {
 # PRE-FLIGHT CHECKS
 # =============================================================================
 
+# Validate configuration, load the fleet, connect, and verify the target
 function Invoke-PreFlightChecks {
     Write-LogSection "Pre-Flight Checks"
     
@@ -1924,12 +2070,13 @@ function Invoke-PreFlightChecks {
 # MENU FUNCTIONS
 # =============================================================================
 
+# Render the main menu
 function Show-MainMenu {
     Clear-Host
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.2                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.3                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -1990,7 +2137,7 @@ function Show-MainMenu {
     Write-Host ""
 }
 
-# Option 1: Create Datagroup or URL Category
+# Option 1: Create an empty datagroup or URL category
 function Invoke-CreateEmpty {
     Write-LogSection "Create Datagroup or URL Category"
     
@@ -2015,6 +2162,7 @@ function Invoke-CreateEmpty {
     }
 }
 
+# Create an empty datagroup interactively
 function Invoke-CreateEmptyDatagroup {
     Write-LogSection "Create Empty Datagroup"
     
@@ -2081,6 +2229,7 @@ function Invoke-CreateEmptyDatagroup {
     Press-EnterToContinue
 }
 
+# Create an empty URL category interactively
 function Invoke-CreateEmptyUrlCategory {
     Write-LogSection "Create Empty URL Category"
     
@@ -2161,7 +2310,7 @@ function Invoke-CreateEmptyUrlCategory {
     Press-EnterToContinue
 }
 
-# Option 3: Create/Update from CSV
+# Option 2: Create or update a datagroup or URL category from CSV
 function Invoke-CreateFromCsv {
     Write-LogSection "Create/Restore from CSV"
     
@@ -2186,6 +2335,7 @@ function Invoke-CreateFromCsv {
     }
 }
 
+# Create or update a datagroup from a CSV file
 function Invoke-CreateDatagroup {
     Write-LogSection "Create/Restore Datagroup from CSV"
     
@@ -2441,7 +2591,8 @@ function Invoke-CreateDatagroup {
     if ($restoreMode -eq "merge") {
         Write-LogStep "Reading existing entries for merge..."
         $existing = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName
-        $merged = @{}
+        # Ordinal: BIG-IP datagroup keys are case-sensitive
+        $merged = [System.Collections.Hashtable]::new()
         foreach ($rec in $existing) { $merged[$rec.Key] = $rec.Value }
         for ($i = 0; $i -lt $parsed.Keys.Count; $i++) { $merged[$parsed.Keys[$i]] = $parsed.Values[$i] }
         
@@ -2451,8 +2602,8 @@ function Invoke-CreateDatagroup {
         $finalKeys = @($merged.Keys)
         $finalValues = @($merged.Values)
     } else {
-        # Overwrite or new: Deduplicate CSV entries
-        $dedup = @{}
+        # Overwrite or new: Deduplicate CSV entries (ordinal: keys are case-sensitive)
+        $dedup = [System.Collections.Hashtable]::new()
         for ($i = 0; $i -lt $parsed.Keys.Count; $i++) {
             $dedup[$parsed.Keys[$i]] = $parsed.Values[$i]
         }
@@ -2495,6 +2646,7 @@ function Invoke-CreateDatagroup {
     Press-EnterToContinue
 }
 
+# Create or update a URL category from a CSV file
 function Invoke-CreateUrlCategory {
     Write-LogSection "Create URL Category from CSV"
     
@@ -2648,7 +2800,7 @@ function Invoke-CreateUrlCategory {
     if ($restoreMode -eq "merge") {
         Write-LogStep "Reading existing URLs for merge..."
         $existing = Get-UrlCategoryEntriesRemote -Name $catName
-        $existingSet = @{}
+        $existingSet = [System.Collections.Hashtable]::new()
         foreach ($url in $existing) { $existingSet[$url] = $true }
         
         $newUrls = @($convertedUrls | Where-Object { -not $existingSet.ContainsKey($_) })
@@ -2740,7 +2892,7 @@ function Invoke-CreateUrlCategory {
     Press-EnterToContinue
 }
 
-# Option 3: Delete Datagroup or URL Category
+# Option 3: Delete a datagroup or URL category
 function Invoke-DeleteMenu {
     Write-LogSection "Delete Datagroup or URL Category"
     
@@ -2762,6 +2914,7 @@ function Invoke-DeleteMenu {
     }
 }
 
+# Delete a datagroup with backup and typed confirmation
 function Invoke-DeleteDatagroup {
     Write-LogSection "Delete Datagroup"
     
@@ -2820,6 +2973,7 @@ function Invoke-DeleteDatagroup {
     Press-EnterToContinue
 }
 
+# Delete a URL category with backup and typed confirmation
 function Invoke-DeleteUrlCategory {
     Write-LogSection "Delete URL Category"
     
@@ -2917,7 +3071,7 @@ function Invoke-DeleteUrlCategory {
     Press-EnterToContinue
 }
 
-# Option 4: Export to CSV
+# Option 4: Export a datagroup or URL category to CSV
 function Invoke-ExportToCsv {
     Write-LogSection "Export to CSV"
     
@@ -2939,6 +3093,7 @@ function Invoke-ExportToCsv {
     }
 }
 
+# Export a datagroup to CSV
 function Invoke-ExportDatagroup {
     Write-LogSection "Export Datagroup to CSV"
     
@@ -2987,6 +3142,7 @@ function Invoke-ExportDatagroup {
     Press-EnterToContinue
 }
 
+# Export a URL category to CSV
 function Invoke-ExportUrlCategory {
     Write-LogSection "Export URL Category to CSV"
     
@@ -3108,6 +3264,7 @@ function Invoke-ExportUrlCategory {
 # OPTION 6: FLEET LOOKING GLASS
 # =============================================================================
 
+# Search and compare an object's entries across the fleet (read-only)
 function Invoke-FleetLookingGlass {
     Write-LogSection "DGCat-Admin Search"
     
@@ -3512,9 +3669,10 @@ function Invoke-FleetLookingGlass {
 }
 
 # =============================================================================
-# FLEET BACKUP
+# OPTION 7: FLEET BACKUP
 # =============================================================================
 
+# Back up an object from selected fleet hosts
 function Invoke-FleetBackup {
     Write-LogSection "Backup"
     
@@ -3708,9 +3866,10 @@ function Invoke-FleetBackup {
 }
 
 # =============================================================================
-# INTERACTIVE EDITOR
+# OPTION 5: INTERACTIVE EDITOR
 # =============================================================================
 
+# Select an object and open the interactive editor
 function Invoke-EditMenu {
     Write-LogSection "Edit a Datagroup or URL Category"
     
@@ -3802,6 +3961,7 @@ function Invoke-EditMenu {
     }
 }
 
+# Interactive editor: stage changes, apply to device, deploy to fleet
 function Invoke-EditorSubmenu {
     param(
         [string]$EditType,
@@ -3861,20 +4021,27 @@ function Invoke-EditorSubmenu {
     function Test-PendingChanges {
         if ($workingKeys.Count -ne $originalKeys.Count) { return $true }
         for ($i = 0; $i -lt $workingKeys.Count; $i++) {
-            if ($workingKeys[$i] -ne $originalKeys[$i] -or $workingValues[$i] -ne $originalValues[$i]) { return $true }
+            if ($workingKeys[$i] -cne $originalKeys[$i] -or $workingValues[$i] -cne $originalValues[$i]) { return $true }
         }
         return $false
     }
     
-    # Helper: compute additions and deletions
+    # Helper: compute additions, deletions, and value changes
+    # Ordinal maps: BIG-IP datagroup keys are case-sensitive
     function Get-ChangeAnalysis {
         $additions = @()
         $deletions = @()
-        $origSet = @{}; foreach ($k in $originalKeys) { $origSet[$k] = $true }
-        $workSet = @{}; foreach ($k in $workingKeys) { $workSet[$k] = $true }
-        foreach ($k in $originalKeys) { if (-not $workSet.ContainsKey($k)) { $deletions += $k } }
-        foreach ($k in $workingKeys) { if (-not $origSet.ContainsKey($k)) { $additions += $k } }
-        return @{ Additions = $additions; Deletions = $deletions }
+        $valueChanges = @()
+        $origMap = [System.Collections.Hashtable]::new()
+        for ($i = 0; $i -lt $originalKeys.Count; $i++) { $origMap[$originalKeys[$i]] = $originalValues[$i] }
+        $workMap = [System.Collections.Hashtable]::new()
+        for ($i = 0; $i -lt $workingKeys.Count; $i++) { $workMap[$workingKeys[$i]] = $workingValues[$i] }
+        foreach ($k in $originalKeys) { if (-not $workMap.ContainsKey($k)) { $deletions += $k } }
+        foreach ($k in $workingKeys) {
+            if (-not $origMap.ContainsKey($k)) { $additions += $k }
+            elseif ([string]$origMap[$k] -cne [string]$workMap[$k]) { $valueChanges += $k }
+        }
+        return @{ Additions = $additions; Deletions = $deletions; ValueChanges = $valueChanges }
     }
     
     # Main editor loop
@@ -4004,7 +4171,7 @@ function Invoke-EditorSubmenu {
                     Write-Host ""
                     $newKey = Read-Host "  Enter new entry"
                     if ([string]::IsNullOrWhiteSpace($newKey)) { Write-LogWarn "No entry provided."; Press-EnterToContinue; continue }
-                    if ($workingKeys -contains $newKey) { Write-LogWarn "Entry '$newKey' already exists."; Press-EnterToContinue; continue }
+                    if ($workingKeys -ccontains $newKey) { Write-LogWarn "Entry '$newKey' already exists."; Press-EnterToContinue; continue }
                     
                     # Validate entry format based on datagroup type
                     if ($dgType -eq "address" -or $dgType -eq "ip") {
@@ -4165,6 +4332,11 @@ function Invoke-EditorSubmenu {
                     Write-Host "  Deletions ($($changes.Deletions.Count)):" -ForegroundColor Red
                     foreach ($entry in $changes.Deletions) { Write-Host "    - $entry" -ForegroundColor Red }
                 }
+                if ($changes.ValueChanges.Count -gt 0) {
+                    if ($changes.Additions.Count -gt 0 -or $changes.Deletions.Count -gt 0) { Write-Host "" }
+                    Write-Host "  Value changes ($($changes.ValueChanges.Count)):" -ForegroundColor Yellow
+                    foreach ($entry in $changes.ValueChanges) { Write-Host "    ~ $entry" -ForegroundColor Yellow }
+                }
                 Write-Host "  ──────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
                 Write-Host "  Final count: $($workingKeys.Count) entries" -ForegroundColor White
                 Write-Host ""
@@ -4201,6 +4373,29 @@ function Invoke-EditorSubmenu {
                     
                     switch ($applyModeChoice) {
                         "1" {
+                            # Gate: tmsh records add/delete cannot change an existing record's value
+                            if ($changes.ValueChanges.Count -gt 0) {
+                                Write-LogError "tmsh Modify unavailable: $($changes.ValueChanges.Count) record(s) have changed values,"
+                                Write-LogError "which records add/delete cannot apply."
+                                Write-LogError "Use Full Replace mode for this change set. No changes have been made."
+                                Press-EnterToContinue
+                                continue
+                            }
+                            # Gate: tmsh passthrough embeds keys/values unquoted
+                            $tmshCheck = @()
+                            foreach ($addKey in $changes.Additions) {
+                                $tmshCheck += $addKey
+                                $idx = $workingKeys.IndexOf($addKey)
+                                if ($idx -ge 0 -and $workingValues[$idx]) { $tmshCheck += $workingValues[$idx] }
+                            }
+                            $tmshCheck += $changes.Deletions
+                            if (-not (Test-TmshSafeStrings -Strings $tmshCheck)) {
+                                Write-LogError "tmsh Modify unavailable: one or more keys or values contain characters"
+                                Write-LogError "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
+                                Write-LogError "Use Full Replace mode for this change set. No changes have been made."
+                                Press-EnterToContinue
+                                continue
+                            }
                             Write-LogStep "Applying changes to datagroup (tmsh modify)..."
                             $incErrors = 0
                             
@@ -4288,7 +4483,7 @@ function Invoke-EditorSubmenu {
                 if (-not (Test-FleetAvailable)) { Write-LogWarn "No fleet configured."; Press-EnterToContinue; continue }
                 
                 $hasPending = Test-PendingChanges
-                $changes = @{ Additions = @(); Deletions = @() }
+                $changes = @{ Additions = @(); Deletions = @(); ValueChanges = @() }
                 
                 if (-not $hasPending) {
                     Write-Host ""
@@ -4317,6 +4512,12 @@ function Invoke-EditorSubmenu {
                         $show = 0; foreach ($e in $changes.Deletions) { if ($show -lt 10) { Write-Host "    - $e" -ForegroundColor Red }; $show++ }
                         if ($changes.Deletions.Count -gt 10) { Write-Host "    ... and $($changes.Deletions.Count - 10) more" -ForegroundColor Red }
                     }
+                    if ($changes.ValueChanges.Count -gt 0) {
+                        if ($changes.Additions.Count -gt 0 -or $changes.Deletions.Count -gt 0) { Write-Host "" }
+                        Write-Host "  Value changes ($($changes.ValueChanges.Count)):" -ForegroundColor Yellow
+                        $show = 0; foreach ($e in $changes.ValueChanges) { if ($show -lt 10) { Write-Host "    ~ $e" -ForegroundColor Yellow }; $show++ }
+                        if ($changes.ValueChanges.Count -gt 10) { Write-Host "    ... and $($changes.ValueChanges.Count - 10) more" -ForegroundColor Yellow }
+                    }
                     Write-Host ""
                     Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
                     Write-Host "  Final entry count: $($workingKeys.Count)" -ForegroundColor White
@@ -4338,6 +4539,33 @@ function Invoke-EditorSubmenu {
                     $deployModeChoice = Read-Host "  Select [0-2]"
                     $deployMode = switch ($deployModeChoice) { "1" { "replace" }; "2" { "merge" }; default { "" } }
                     if ([string]::IsNullOrWhiteSpace($deployMode)) { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+
+                    # Gate: merge mode embeds keys/values unquoted in tmsh; reject
+                    # unsafe change sets before any device is modified
+                    if ($deployMode -eq "merge" -and $EditType -eq "datagroup") {
+                        # Gate: tmsh records add/delete cannot change an existing record's value
+                        if ($changes.ValueChanges.Count -gt 0) {
+                            Write-LogError "Merge mode unavailable: $($changes.ValueChanges.Count) record(s) have changed values,"
+                            Write-LogError "which tmsh records add/delete cannot apply."
+                            Write-LogError "Use Full Replace mode to deploy this change set. No changes have been made."
+                            Press-EnterToContinue
+                            continue
+                        }
+                        $tmshCheck = @()
+                        foreach ($addKey in $changes.Additions) {
+                            $tmshCheck += $addKey
+                            $idx = $workingKeys.IndexOf($addKey)
+                            if ($idx -ge 0 -and $workingValues[$idx]) { $tmshCheck += $workingValues[$idx] }
+                        }
+                        $tmshCheck += $changes.Deletions
+                        if (-not (Test-TmshSafeStrings -Strings $tmshCheck)) {
+                            Write-LogError "Merge mode unavailable: one or more keys or values contain characters"
+                            Write-LogError "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
+                            Write-LogError "Use Full Replace mode to deploy this change set. No changes have been made."
+                            Press-EnterToContinue
+                            continue
+                        }
+                    }
                 } else {
                     $deployMode = "replace"
                     Write-LogInfo "Deploying current state ($($workingKeys.Count) entries) as full replace."
@@ -4398,7 +4626,7 @@ function Invoke-EditorSubmenu {
                 
                 Clear-Host
                 
-                # ── Step 1: Pre-deploy validation ──
+                # Step 1: Pre-deploy validation
                 Write-Host ""
                 Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
                 Write-Host "    STEP 1: PRE-DEPLOY VALIDATION" -ForegroundColor White
@@ -4434,7 +4662,7 @@ function Invoke-EditorSubmenu {
                     }
                 }
                 
-                # ── Step 2: Apply to current device (only if pending changes) ──
+                # Step 2: Apply to current device (only if pending changes)
                 $currentStatus = "OK"
                 $currentMessage = "No changes needed"
                 
@@ -4510,7 +4738,7 @@ function Invoke-EditorSubmenu {
                     }
                 }
                 
-                # ── Deploy to fleet ──
+                # Final step: Deploy to fleet
                 $fleetStepNum = $(if ($hasPending) { 3 } else { 2 })
                 Write-Host ""
                 Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
@@ -4578,13 +4806,10 @@ function Invoke-EditorSubmenu {
 }
 
 # =============================================================================
-# MAIN
+# OPTION 8: BOOTSTRAP
 # =============================================================================
 
-# =============================================================================
-# BOOTSTRAP FUNCTIONS
-# =============================================================================
-
+# Bootstrap menu: create or import a fleet object-provisioning config
 function Invoke-Bootstrap {
     Write-LogSection "Bootstrap"
     
@@ -4609,6 +4834,7 @@ function Invoke-Bootstrap {
     }
 }
 
+# Write the bootstrap.conf template
 function Invoke-BootstrapCreate {
     $bootstrapFile = Join-Path $script:BACKUP_DIR "bootstrap.conf"
     
@@ -4656,6 +4882,7 @@ function Invoke-BootstrapCreate {
     }
 }
 
+# Parse, validate, and deploy bootstrap.conf across selected targets
 function Invoke-BootstrapImport {
     $bootstrapFile = Join-Path $script:BACKUP_DIR "bootstrap.conf"
     
@@ -4877,6 +5104,7 @@ function Invoke-BootstrapImport {
     Press-EnterToContinue
 }
 
+# Create the validated bootstrap objects on the connected host
 function Invoke-BootstrapCreateObjects {
     param(
         [string]$Partition,
@@ -4943,6 +5171,11 @@ function Invoke-BootstrapCreateObjects {
     return $failed
 }
 
+# =============================================================================
+# MAIN
+# =============================================================================
+
+# Entry point: banner, pre-flight checks, and the session/menu loops
 function Main {
     # Initialize SSL bypass for self-signed BIG-IP management certs
     Initialize-SslBypass
@@ -4952,7 +5185,7 @@ function Main {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.2                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.3                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -4991,7 +5224,7 @@ function Main {
     
     Start-Sleep -Seconds 2
     
-    # Session loop — option 0 returns here for new connection
+    # Session loop - option 0 returns here for new connection
     while ($true) {
         # Main menu loop
         $reconnect = $false
@@ -5069,5 +5302,4 @@ function Main {
     }
 }
 
-# Run
 Main
