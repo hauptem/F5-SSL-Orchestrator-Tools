@@ -12,8 +12,6 @@
 - ERROR-state failures include the block error detail in the output
 - Stuck-block cleanup during redeploy uses anchored name matching. The previous substring match could clear blocks of a topology whose name contains the selected one
 - Snapshots are verified after writing: round-trip parse and block count check. Import warns when metadata blockCount does not match contents
-- Typed replay confirmation changed from CONFIRM to REPLAY, case-sensitive
-- #Requires -Version 5.1 was inert due to a stray space. Now enforced
 
 ## vb4.3.15.0-devel (Beta 4 - June 1 2026)
 
