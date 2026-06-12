@@ -2,10 +2,14 @@
 # =============================================================================
 # SSL Orchestrator Tools - Clean Slate Script
 # =============================================================================
-# Version:  1.1 June 10 2026
+# Version:  1.2 June 11 2026
 # Created by: Eric Haupt
 # Based on: Kevin Stewart's original "sslo nuclear delete" script v7.0 from 
 #           https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete
+#
+# v1.2 Changes:
+#   - Excluded datagroups (ltm data-group) and custom URL categories
+#     (sys url-db url-category) from the tmsh deletion candidate list.
 #
 # v1.1 Changes:
 #   - Excluded the cm namespace from the tmsh deletion candidate list. The
@@ -366,12 +370,20 @@ delete_sslo_objects() {
     # contains "sslo" (e.g. a hostname like sslo1.lab.local). Deleting cm
     # objects can destroy device trust on an HA peer, so the entire cm
     # namespace is excluded from the candidate list.
+    #
+    # Datagroups and URL categories are excluded because they are operator-managed
+    # objects that may be named with "sslo" patterns. SSLO references these by
+    # name but does not create them. Any SSLO-generated datagroups inside .app/
+    # folders are already removed by delete_app_services (Step 3) before this
+    # step runs.
     local sslo_objects
     sslo_objects=$(tmsh list 2>/dev/null \
         | grep -v "^\s" \
         | grep sslo \
         | sed -e 's/{//g;s/}//g' \
         | grep -v "^cm " \
+        | grep -v "^ltm data-group " \
+        | grep -v "^sys url-db url-category " \
         | grep -v "apm profile access /Common/ssloDefault_accessProfile" \
         | grep -v "apm log-setting /Common/default-sslo-log-setting" \
         | grep -v "net dns-resolver /Common/ssloGS_global.app/ssloGS-net-resolver" \
@@ -510,7 +522,7 @@ print_summary() {
 # =============================================================================
 main() {
     # Initialise log
-    echo "SSL Orchestrator Clean Slate - v1.0" | tee "${LOGFILE}"
+    echo "SSL Orchestrator Clean Slate - v1.2" | tee "${LOGFILE}"
     echo "Started: $(date)" | tee -a "${LOGFILE}"
 
     RPM_BACKED_UP=false
