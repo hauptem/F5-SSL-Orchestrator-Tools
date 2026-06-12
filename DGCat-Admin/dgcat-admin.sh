@@ -70,7 +70,6 @@ declare -a PARTITION_LIST
 # CONNECTION SETTINGS
 # =============================================================================
 
-# Connection settings
 REMOTE_HOST=""
 REMOTE_USER=""
 REMOTE_PASS=""
@@ -627,7 +626,7 @@ setup_remote_connection() {
     fi
 }
 # Pre-flight checks
-# Validates dependencies and establishes connection
+# Validate dependencies and establish connection
 # Returns: 0 on success, exits on critical failure
 preflight_checks_rest_api() {
     log_section "Pre-Flight Checks"
@@ -1167,6 +1166,9 @@ delete_url_category() {
 # Returns: 0 if valid, 1 if invalid
 FLEET_VALIDATE_ERROR=""
 
+# Validate a fleet host entry (IPv4 address or FQDN)
+# Args: host
+# Returns: 0 if valid, 1 if invalid (reason in FLEET_VALIDATE_ERROR)
 validate_fleet_host() {
     local host="$1"
     FLEET_VALIDATE_ERROR=""
@@ -2715,7 +2717,7 @@ validate_integer_entries() {
 }
 
 # Validate URL category CSV entries are valid domains
-# Checks raw entries before format conversion
+# Check raw entries before format conversion
 # Args: keys_array_name
 # Outputs: error_count|entry (reason)|... (pipe-delimited, max 5 examples)
 validate_url_csv_entries() {
@@ -2857,6 +2859,7 @@ menu_create_empty() {
     esac
 }
 
+# Option 1a: Create empty datagroup
 menu_create_empty_datagroup() {
     log_section "Create Empty Datagroup"
     
@@ -2936,6 +2939,7 @@ menu_create_empty_datagroup() {
     press_enter_to_continue
 }
 
+# Option 1b: Create empty URL category
 menu_create_empty_url_category() {
     log_section "Create Empty URL Category"
     
@@ -3023,7 +3027,7 @@ menu_create_empty_url_category() {
     press_enter_to_continue
 }
 
-# Option 3: Create/Restore from CSV (Datagroup or URL Category)
+# Option 2: Create/Restore from CSV (Datagroup or URL Category)
 menu_create_from_csv() {
     log_section "Create/Restore from CSV"
     
@@ -3049,7 +3053,7 @@ menu_create_from_csv() {
     esac
 }
 
-# Option 3a: Create/Restore datagroup from CSV
+# Option 2a: Create/Restore datagroup from CSV
 menu_create_datagroup() {
     log_section "Create/Restore Datagroup from CSV"
     
@@ -3448,7 +3452,7 @@ menu_create_datagroup() {
     press_enter_to_continue
 }
 
-# Option 4: Delete Datagroup or URL Category
+# Option 3: Delete Datagroup or URL Category
 menu_delete_datagroup() {
     log_section "Delete Datagroup or URL Category"
     
@@ -3474,7 +3478,7 @@ menu_delete_datagroup() {
     esac
 }
 
-# Option 4a: Delete datagroup
+# Option 3a: Delete datagroup
 menu_delete_datagroup_only() {
     log_section "Delete Datagroup"
     
@@ -3566,7 +3570,7 @@ menu_delete_datagroup_only() {
     press_enter_to_continue
 }
 
-# Option 4b: Delete URL Category
+# Option 3b: Delete URL Category
 menu_delete_url_category() {
     log_section "Delete URL Category"
     
@@ -3709,7 +3713,7 @@ menu_delete_url_category() {
     press_enter_to_continue
 }
 
-# Option 5: Export to CSV (Datagroup or URL Category)
+# Option 4: Export to CSV (Datagroup or URL Category)
 menu_export_to_csv() {
     log_section "Export to CSV"
     
@@ -3735,7 +3739,7 @@ menu_export_to_csv() {
     esac
 }
 
-# Option 5a: Export datagroup to CSV
+# Option 4a: Export datagroup to CSV
 menu_export_datagroup() {
     log_section "Export Datagroup to CSV"
     
@@ -3806,7 +3810,7 @@ menu_export_datagroup() {
     press_enter_to_continue
 }
 
-# Option 5b: Export URL category to CSV
+# Option 4b: Export URL category to CSV
 menu_export_url_category() {
     log_section "Export URL Category to CSV"
     
@@ -4047,7 +4051,7 @@ format_domain_for_url_category() {
     # Add https:// prefix and trailing /
     echo "https://${domain}/"
 }
-# Option 3b: Create URL Category from CSV
+# Option 2b: Create URL Category from CSV
 menu_create_url_category() {
     log_section "Create URL Category from CSV"
     
@@ -5813,6 +5817,7 @@ editor_submenu() {
 # =============================================================================
 # OPTION 6: FLEET LOOKING GLASS
 # =============================================================================
+# Option 6: Search and compare an object's entries across the fleet (read-only)
 menu_fleet_looking_glass() {
     log_section "DGCat-Admin Search"
     
@@ -6565,6 +6570,7 @@ menu_edit_datagroup_or_category() {
 # OPTION 8: BOOTSTRAP
 # =============================================================================
 
+# Option 8: Bootstrap menu - create or import a fleet object-provisioning config
 menu_bootstrap() {
     log_section "Bootstrap"
     
@@ -6590,6 +6596,7 @@ menu_bootstrap() {
     done
 }
 
+# Write the bootstrap.conf template
 menu_bootstrap_create() {
     local bootstrap_file="${BACKUP_DIR}/bootstrap.conf"
     
@@ -6636,6 +6643,7 @@ BOOTSTRAP_TEMPLATE
     fi
 }
 
+# Parse, validate, and deploy bootstrap.conf across selected targets
 menu_bootstrap_import() {
     local bootstrap_file="${BACKUP_DIR}/bootstrap.conf"
     
@@ -6949,6 +6957,7 @@ bootstrap_create_objects() {
     return ${failed}
 }
 
+# Entry point: banner, pre-flight checks, and the session/menu loops
 main() {
     # Clear screen and show banner
     clear
