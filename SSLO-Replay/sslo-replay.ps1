@@ -70,8 +70,12 @@ $script:OUTPUT_DIR = Join-Path $PSScriptRoot "sslo-replay-snapshots"
 # API timeout (seconds)
 $script:API_TIMEOUT = 60
 
-# gc processor config timeout (from orchestratorConfigProcessor.js SSLO_CONFIG_PROCESSOR_TIMEOUT_SECS)
-$script:GC_PROCESSOR_TIMEOUT = 90
+# Block-level configProcessorTimeoutSeconds for operation blocks.
+# The gc processor's internal SSLO_CONFIG_PROCESSOR_TIMEOUT_SECS is 90, but the
+# F5 Ansible SSLO templates set the block-level budget to 120 on every
+# create_modify template. Match the reference: large policies (80+ APM objects)
+# need the headroom.
+$script:GC_PROCESSOR_TIMEOUT = 120
 
 # SSLO deployment types in dependency order (replay must follow this sequence)
 $script:DEPENDENCY_ORDER = @(
@@ -336,6 +340,7 @@ $script:RemoteHostname = ""
 $script:AuthHeader = ""
 $script:TMOSVersion = ""
 $script:SSLOVersion = ""
+$script:SSLOVersionNum = $null
 $script:PfIdRegenerated = 0
 $script:PassphraseCache = @{}
 
@@ -609,6 +614,19 @@ function Initialize-RemoteConnection {
         }
         if ($script:SSLOVersion) {
             Write-LogOk "SSLO version $($script:SSLOVersion)"
+            # Numeric major.minor for operation-context version fields, derived the
+            # same way as the Ansible collection (client.py sslo_version(): release
+            # split on '.', first two parts). InvariantCulture - never locale decimal
+            $verParts = $script:SSLOVersion -split "\."
+            if ($verParts.Count -ge 2) {
+                $parsedVer = 0.0
+                if ([double]::TryParse("$($verParts[0]).$($verParts[1])",
+                        [System.Globalization.NumberStyles]::Float,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [ref]$parsedVer)) {
+                    $script:SSLOVersionNum = $parsedVer
+                }
+            }
         } else {
             Write-LogWarn "SSLO package not detected"
         }
@@ -677,8 +695,10 @@ function Get-StateBlockType {
     }
     
     # Topology blocks use "sslo_" prefix without a type letter
-    # e.g. sslo_HTTPS_tcp443 (but NOT sslo_ob_* which are operation blocks)
-    if ($BlockName -match "^sslo_" -and $BlockName -notmatch "^sslo_ob_") {
+    # e.g. sslo_HTTPS_tcp443. Exclude operation blocks: this tool and the GUI
+    # use "sslo_ob_", the F5 Ansible collection uses "sslo_obj_" - match the
+    # common stem "sslo_ob" to cover both
+    if ($BlockName -match "^sslo_" -and $BlockName -notmatch "^sslo_ob") {
         return "TOPOLOGY"
     }
     
@@ -838,17 +858,23 @@ function Convert-StateBlockToCreate {
     $inputProps = @()
     
     # Operation context (always first)
+    # Ansible create_modify templates include a numeric "version" field; the gc
+    # uses it for schema gating. Omit only if the version could not be parsed
+    $opCtxValue = [ordered]@{
+        operationType = "CREATE"
+        deploymentType = $DeploymentType
+        deploymentName = $DeploymentName
+        deploymentReference = ""
+        partition = "Common"
+        strictness = $false
+    }
+    if ($null -ne $script:SSLOVersionNum) {
+        $opCtxValue["version"] = $script:SSLOVersionNum
+    }
     $inputProps += @{
         id = "f5-ssl-orchestrator-operation-context"
         type = "JSON"
-        value = [ordered]@{
-            operationType = "CREATE"
-            deploymentType = $DeploymentType
-            deploymentName = $DeploymentName
-            deploymentReference = ""
-            partition = "Common"
-            strictness = $false
-        }
+        value = $opCtxValue
     }
     
     # Type-specific properties - slot config data into the matching one
@@ -986,7 +1012,11 @@ function Convert-StateBlockToCreate {
                                     }
                                     
                                     $newPfId = "T_" + [string]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) + [string](Get-Random -Maximum 1000)
-                                    $entry.passphrase = $newPfId
+                                    if ($entry.PSObject.Properties["passphrase"]) {
+                                        $entry.passphrase = $newPfId
+                                    } else {
+                                        $entry | Add-Member -NotePropertyName "passphrase" -NotePropertyValue $newPfId
+                                    }
                                     $entry.pfId = $newPfId
                                     $restrictedProps += @{
                                         id = $newPfId
@@ -1343,6 +1373,26 @@ function Get-BlockDependencyRefs {
                         foreach ($entry in $opts.subnet) {
                             if ($entry.valueType -eq "datagroup" -and $entry.subnet -and $entry.subnet -match "^/Common/") {
                                 Add-Ref "datagroup" $entry.subnet "/mgmt/tm/ltm/data-group/internal/"
+                            }
+                        }
+                    }
+                    
+                    # Datagroups in port match conditions: options.port[].port where valueType=datagroup
+                    # (bigip_sslo_config_policy.py add_sslo_9x_support, ~line 1195)
+                    if ($opts.port) {
+                        foreach ($portEntry in $opts.port) {
+                            if ($portEntry.valueType -eq "datagroup" -and $portEntry.port -and $portEntry.port -match "^/Common/") {
+                                Add-Ref "datagroup" $portEntry.port "/mgmt/tm/ltm/data-group/internal/"
+                            }
+                        }
+                    }
+                    
+                    # Datagroups in IP geolocation conditions: options.geolocations[].value where valueType=datagroup
+                    # (bigip_sslo_config_policy.py geolocation condition handling, ~line 900)
+                    if ($opts.geolocations) {
+                        foreach ($geoEntry in $opts.geolocations) {
+                            if ($geoEntry.valueType -eq "datagroup" -and $geoEntry.value -and $geoEntry.value -match "^/Common/") {
+                                Add-Ref "datagroup" $geoEntry.value "/mgmt/tm/ltm/data-group/internal/"
                             }
                         }
                     }
@@ -1758,7 +1808,7 @@ function Invoke-SsloDump {
                 tmosVersion  = $script:TMOSVersion
                 ssloVersion  = $script:SSLOVersion
             }
-            timestamp        = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+            timestamp        = ([DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))
             blockCount       = $outputBlocks.Count
         }
         blocks = $outputBlocks
@@ -2083,6 +2133,29 @@ function Select-BackupFile {
 # OPTION 2: SSLO RESTORE
 # =============================================================================
 
+# Extract every service chain name a security policy references: rule actions
+# AND the default action (defaultActionOptions is a real top-level policy field
+# per the Ansible sslo_config_policy template). All policy walkers - replay
+# scoping, policy swap, and topology delete reference counting - MUST use this
+# single implementation. A walker that misses defaultActionOptions can delete a
+# chain a surviving policy still references
+function Get-PolicyServiceChainNames {
+    param([object]$PolicyConfig)
+    
+    $chains = @()
+    if ($PolicyConfig -and $PolicyConfig.rules) {
+        foreach ($rule in $PolicyConfig.rules) {
+            if ($rule.actionOptions -and $rule.actionOptions.serviceChain -and $rule.actionOptions.serviceChain -ne "") {
+                $chains += [string]$rule.actionOptions.serviceChain
+            }
+        }
+    }
+    if ($PolicyConfig -and $PolicyConfig.defaultActionOptions -and $PolicyConfig.defaultActionOptions.serviceChain -and $PolicyConfig.defaultActionOptions.serviceChain -ne "") {
+        $chains += [string]$PolicyConfig.defaultActionOptions.serviceChain
+    }
+    return @($chains | Sort-Object -Unique | Where-Object { $_ })
+}
+
 # Resolve the dependency tree for a security policy from a snapshot
 # Returns: ordered list of block entries (services -> chains -> the policy)
 function Get-PolicyDependencyTree {
@@ -2099,22 +2172,12 @@ function Get-PolicyDependencyTree {
     
     $requiredNames[$PolicyName] = $true
     
-    # Extract service chain references from policy rules
+    # Extract service chain references from policy rules and the default action
     $policyDataId = $script:TYPE_PROPERTY_MAP["SECURITY_POLICY"]
     foreach ($prop in $policyBlock.block.inputProperties) {
         if ($prop.id -eq $policyDataId) {
-            $policyConfig = $prop.value
-            # Walk rules[].actionOptions.serviceChain (from bigip_sslo_config_policy.py)
-            if ($policyConfig.rules) {
-                foreach ($rule in $policyConfig.rules) {
-                    if ($rule.actionOptions -and $rule.actionOptions.serviceChain -and $rule.actionOptions.serviceChain -ne "") {
-                        $requiredNames[$rule.actionOptions.serviceChain] = $true
-                    }
-                }
-            }
-            # Default action service chain
-            if ($policyConfig.defaultActionOptions -and $policyConfig.defaultActionOptions.serviceChain -and $policyConfig.defaultActionOptions.serviceChain -ne "") {
-                $requiredNames[$policyConfig.defaultActionOptions.serviceChain] = $true
+            foreach ($chainName in (Get-PolicyServiceChainNames -PolicyConfig $prop.value)) {
+                $requiredNames[$chainName] = $true
             }
             break
         }
@@ -2179,7 +2242,11 @@ function Convert-StateBlockToModify {
     
     # Strip generated fields and update the policy reference
     $configData = Remove-GeneratedFields -ConfigData $configData
-    $configData.securityPolicyReference = $NewPolicyName
+    if ($configData.PSObject.Properties["securityPolicyReference"]) {
+        $configData.securityPolicyReference = $NewPolicyName
+    } else {
+        $configData | Add-Member -NotePropertyName "securityPolicyReference" -NotePropertyValue $NewPolicyName
+    }
     
     # Add existingBlockId for MODIFY (from Ansible template line 165-166)
     if ($configData -is [PSCustomObject]) {
@@ -2193,18 +2260,23 @@ function Convert-StateBlockToModify {
     # Build inputProperties: MODIFY operation context + type-specific properties
     $inputProps = @()
     
-    # Operation context - MODIFY with deployment reference to existing block
+    # Operation context - MODIFY with deployment reference to existing block.
+    # Includes numeric "version" per the Ansible create_modify templates
+    $opCtxValue = [ordered]@{
+        operationType = "MODIFY"
+        deploymentType = "TOPOLOGY"
+        deploymentName = $TopologyName
+        deploymentReference = "https://localhost/mgmt/shared/iapp/blocks/$BlockId"
+        partition = "Common"
+        strictness = $false
+    }
+    if ($null -ne $script:SSLOVersionNum) {
+        $opCtxValue["version"] = $script:SSLOVersionNum
+    }
     $inputProps += @{
         id = "f5-ssl-orchestrator-operation-context"
         type = "JSON"
-        value = [ordered]@{
-            operationType = "MODIFY"
-            deploymentType = "TOPOLOGY"
-            deploymentName = $TopologyName
-            deploymentReference = "https://localhost/mgmt/shared/iapp/blocks/$BlockId"
-            partition = "Common"
-            strictness = $false
-        }
+        value = $opCtxValue
     }
     
     # Type-specific properties - same as CREATE, with dependent configs from target
@@ -2863,16 +2935,8 @@ function Invoke-SsloRestore {
                             $policyDataId = $script:TYPE_PROPERTY_MAP["SECURITY_POLICY"]
                             foreach ($prop in $policyBlock.block.inputProperties) {
                                 if ($prop.id -eq $policyDataId) {
-                                    $policyConfig = $prop.value
-                                    if ($policyConfig.rules) {
-                                        foreach ($rule in $policyConfig.rules) {
-                                            if ($rule.actionOptions -and $rule.actionOptions.serviceChain) {
-                                                $chainName = $rule.actionOptions.serviceChain
-                                                if ($chainName -ne "") {
-                                                    $requiredNames[$chainName] = $true
-                                                }
-                                            }
-                                        }
+                                    foreach ($chainName in (Get-PolicyServiceChainNames -PolicyConfig $prop.value)) {
+                                        $requiredNames[$chainName] = $true
                                     }
                                     break
                                 }
@@ -3038,6 +3102,34 @@ function Invoke-SsloRestore {
             Write-Host "    ${Label}: ${ObjPath}" -NoNewline -ForegroundColor White
             Write-Host " - MISSING" -ForegroundColor Red
             $script:missingPrereqs += @{ Label = $Label; Path = $ObjPath; RequiredBy = $RequiredBy }
+        }
+    }
+    
+    # Helper: check a datagroup exists on target, optionally asserting its type.
+    # Type is asserted only for subnet conditions (internal type "ip"); port and
+    # geolocation datagroups are checked for existence only
+    function Test-DatagroupPrereq {
+        param([string]$DgPath, [string]$RequiredBy, [string]$ExpectedType = "")
+        
+        $checkKey = "datagroup:${DgPath}"
+        if ($script:checkedPrereqs.ContainsKey($checkKey)) { return }
+        $script:checkedPrereqs[$checkKey] = $true
+        
+        $dgName = $DgPath -replace "^/Common/", ""
+        $dgResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
+        if ($dgResult.Success) {
+            $actualType = $dgResult.Response.type
+            if ($ExpectedType -and $actualType -ne $ExpectedType) {
+                Write-Host "    Datagroup: $DgPath" -NoNewline -ForegroundColor White
+                Write-Host " - WRONG TYPE (is $actualType, policy expects $ExpectedType)" -ForegroundColor Red
+                $script:missingPrereqs += @{ Label = "Datagroup (type mismatch)"; Path = $DgPath; RequiredBy = $RequiredBy }
+            } else {
+                Write-Host "    Datagroup: $DgPath ($actualType)" -ForegroundColor White
+            }
+        } else {
+            Write-Host "    Datagroup: $DgPath" -NoNewline -ForegroundColor White
+            Write-Host " - MISSING" -ForegroundColor Red
+            $script:missingPrereqs += @{ Label = "Datagroup"; Path = $DgPath; RequiredBy = $RequiredBy }
         }
     }
     
@@ -3238,39 +3330,37 @@ function Invoke-SsloRestore {
                 if ($configData.rules) { $allRules += $configData.rules }
                 
                 $checkedCategories = @{}
-                $checkedDatagroups = @{}
                 
                 foreach ($rule in $allRules) {
                     foreach ($condition in $rule.conditions) {
                         if (-not $condition.options) { continue }
                         $opts = $condition.options
                         
-                        # Datagroups in subnet match conditions
+                        # Datagroups in subnet match conditions - internal type must be "ip"
                         if ($opts.subnet) {
-                            foreach ($entry in $opts.subnet) {
-                                if ($entry.valueType -eq "datagroup" -and $entry.subnet -and $entry.subnet -match "^/Common/") {
-                                    $dgPath = $entry.subnet
-                                    if ($checkedDatagroups.ContainsKey($dgPath)) { continue }
-                                    $checkedDatagroups[$dgPath] = $true
-                                    
-                                    $dgName = $dgPath -replace "^/Common/", ""
-                                    $dgResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
-                                    if ($dgResult.Success) {
-                                        # Validate type matches condition
-                                        $expectedType = "ip"
-                                        $actualType = $dgResult.Response.type
-                                        if ($actualType -ne $expectedType) {
-                                            Write-Host "    Datagroup: $dgPath" -NoNewline -ForegroundColor White
-                                            Write-Host " - WRONG TYPE (is $actualType, policy expects $expectedType)" -ForegroundColor Red
-                                            $script:missingPrereqs += @{ Label = "Datagroup (type mismatch)"; Path = $dgPath; RequiredBy = $depName }
-                                        } else {
-                                            Write-Host "    Datagroup: $dgPath ($actualType)" -ForegroundColor White
-                                        }
-                                    } else {
-                                        Write-Host "    Datagroup: $dgPath" -NoNewline -ForegroundColor White
-                                        Write-Host " - MISSING" -ForegroundColor Red
-                                        $script:missingPrereqs += @{ Label = "Datagroup"; Path = $dgPath; RequiredBy = $depName }
-                                    }
+                            foreach ($subnetEntry in $opts.subnet) {
+                                if ($subnetEntry.valueType -eq "datagroup" -and $subnetEntry.subnet -and $subnetEntry.subnet -match "^/Common/") {
+                                    Test-DatagroupPrereq -DgPath $subnetEntry.subnet -RequiredBy $depName -ExpectedType "ip"
+                                }
+                            }
+                        }
+                        
+                        # Datagroups in port match conditions (existence only)
+                        # options.port[].port where valueType=datagroup (bigip_sslo_config_policy.py ~line 1195)
+                        if ($opts.port) {
+                            foreach ($portEntry in $opts.port) {
+                                if ($portEntry.valueType -eq "datagroup" -and $portEntry.port -and $portEntry.port -match "^/Common/") {
+                                    Test-DatagroupPrereq -DgPath $portEntry.port -RequiredBy $depName
+                                }
+                            }
+                        }
+                        
+                        # Datagroups in IP geolocation conditions (existence only)
+                        # options.geolocations[].value where valueType=datagroup (bigip_sslo_config_policy.py ~line 900)
+                        if ($opts.geolocations) {
+                            foreach ($geoEntry in $opts.geolocations) {
+                                if ($geoEntry.valueType -eq "datagroup" -and $geoEntry.value -and $geoEntry.value -match "^/Common/") {
+                                    Test-DatagroupPrereq -DgPath $geoEntry.value -RequiredBy $depName
                                 }
                             }
                         }
@@ -4009,11 +4099,16 @@ function Show-MainMenu {
     Write-Host "3" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Redeploy SSLO Topology                                 " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
+    Write-Host "  ║" -NoNewline -ForegroundColor Cyan
+    Write-Host "   " -NoNewline -ForegroundColor White
+    Write-Host "4" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+    Write-Host "  Delete SSLO Topology                                   " -NoNewline -ForegroundColor White
+    Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║                                                              ║" -ForegroundColor Cyan
     Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "   " -NoNewline -ForegroundColor White
-    Write-Host "4" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+    Write-Host "5" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
     Write-Host "  Connect to a different BIG-IP                          " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
@@ -4023,6 +4118,283 @@ function Show-MainMenu {
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
+}
+
+# =============================================================================
+# OPTION 4: TOPOLOGY DELETE
+# =============================================================================
+
+# Option 4: Delete a topology stack with live dependency reference counting
+# Deletes the topology and any SSL settings, policy, chains, and services that
+# no surviving object references. Shared objects are retained
+function Invoke-TopologyDelete {
+    Write-LogSection "Delete SSLO Topology"
+    
+    # Repoll - live state is the only valid input for a destructive operation.
+    # A failed read MUST abort: deleting against a stale or partial graph
+    # could remove objects another topology still depends on
+    Write-LogStep "Reading SSLO configuration from $($script:RemoteHostname)..."
+    $result = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks"
+    if (-not $result.Success) {
+        Write-LogError "Failed to retrieve blocks (HTTP $($result.StatusCode)). Delete aborted - no changes made."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Live inventory of SSLO state blocks: name, id, state, parsed config
+    $live = @()
+    foreach ($block in $result.Response.items) {
+        if (Test-IsFrameworkBlock -Block $block) { continue }
+        # Operation blocks are never state - skip any block carrying an
+        # operation context regardless of its name (covers GUI sslo_ob_,
+        # this tool's sslo_ob_, and Ansible's sslo_obj_ naming)
+        if (Get-DeploymentInfo -Block $block) { continue }
+        $type = Get-StateBlockType -BlockName $block.name
+        if (-not $type) { continue }
+        $cfg = $null
+        $dataId = $script:TYPE_PROPERTY_MAP[$type]
+        foreach ($prop in $block.inputProperties) {
+            if ($prop.id -eq $dataId) { $cfg = $prop.value; break }
+        }
+        $live += @{ Name = $block.name; Id = $block.id; State = $block.state; Type = $type; Config = $cfg }
+    }
+    
+    $topologies = @($live | Where-Object { $_.Type -eq "TOPOLOGY" })
+    if ($topologies.Count -eq 0) {
+        Write-LogWarn "No topologies found on this device."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Reference walks against live config only
+    function Get-TopoRefs($topo) {
+        $refs = @{ Ssl = @(); Policy = "" }
+        if ($topo.Config) {
+            $s = $topo.Config.sslSettingReference
+            if ($s) { $refs.Ssl = @(@($s) | Where-Object { $_ }) }
+            if ($topo.Config.securityPolicyReference) { $refs.Policy = [string]$topo.Config.securityPolicyReference }
+        }
+        return $refs
+    }
+    function Get-PolicyChains($pol) {
+        if ($pol -and $pol.Config) {
+            return @(Get-PolicyServiceChainNames -PolicyConfig $pol.Config)
+        }
+        return @()
+    }
+    function Get-ChainServices($chain) {
+        $svcs = @()
+        if ($chain -and $chain.Config -and $chain.Config.orderedServiceList) {
+            foreach ($svc in $chain.Config.orderedServiceList) {
+                if ($svc.name) { $svcs += [string]$svc.name }
+            }
+        }
+        return @($svcs | Sort-Object -Unique)
+    }
+    function Find-Live($name) { return ($live | Where-Object { $_.Name -eq $name } | Select-Object -First 1) }
+    
+    # Select topology
+    Write-Host ""
+    Write-Host "  Topologies:" -ForegroundColor White
+    Write-Host ""
+    for ($i = 0; $i -lt $topologies.Count; $i++) {
+        $num = $i + 1
+        Write-Host "     " -NoNewline
+        Write-Host "$num" -NoNewline -ForegroundColor Yellow; Write-Host ")" -NoNewline -ForegroundColor White
+        Write-Host "  $($topologies[$i].Name)" -ForegroundColor White
+    }
+    Write-Host ""
+    $rangeLabel = if ($topologies.Count -eq 1) { "[1]" } else { "[1-$($topologies.Count)]" }
+    $sel = Read-Host "  Select $rangeLabel (0 to cancel)"
+    if ($sel -eq "0") { return }
+    $selIdx = 0
+    if (-not ([int]::TryParse($sel, [ref]$selIdx) -and $selIdx -ge 1 -and $selIdx -le $topologies.Count)) {
+        Write-LogWarn "Invalid selection."
+        Press-EnterToContinue
+        return
+    }
+    $target = $topologies[$selIdx - 1]
+    
+    # Candidate stack from the target's live references
+    $tRefs = Get-TopoRefs $target
+    $tPolicy = if ($tRefs.Policy) { Find-Live $tRefs.Policy } else { $null }
+    $tChains = @()
+    foreach ($cn in (Get-PolicyChains $tPolicy)) { $c = Find-Live $cn; if ($c) { $tChains += $c } }
+    $tServices = @()
+    foreach ($ch in $tChains) {
+        foreach ($sn in (Get-ChainServices $ch)) { $s = Find-Live $sn; if ($s) { $tServices += $s } }
+    }
+    $tServices = @($tServices | Sort-Object -Property { $_.Name } -Unique)
+    $tSsl = @()
+    foreach ($sn in $tRefs.Ssl) { $s = Find-Live $sn; if ($s) { $tSsl += $s } }
+    
+    # Reference counting against survivors. Cascade order matters: chains are
+    # freed only if every referencing policy is itself being deleted, and
+    # services only if every referencing chain is deleted or was already free
+    $survivingTopos = @($topologies | Where-Object { $_.Name -ne $target.Name })
+    $deleteSet = @{ $target.Name = $true }
+    $retained = @()
+    
+    foreach ($s in $tSsl) {
+        $holders = @($survivingTopos | Where-Object { (Get-TopoRefs $_).Ssl -contains $s.Name })
+        if ($holders.Count -eq 0) { $deleteSet[$s.Name] = $true }
+        else { $retained += @{ Obj = $s; By = @($holders | ForEach-Object { $_.Name }) } }
+    }
+    
+    if ($tPolicy) {
+        $holders = @($survivingTopos | Where-Object { (Get-TopoRefs $_).Policy -eq $tPolicy.Name })
+        if ($holders.Count -eq 0) { $deleteSet[$tPolicy.Name] = $true }
+        else { $retained += @{ Obj = $tPolicy; By = @($holders | ForEach-Object { $_.Name }) } }
+    }
+    
+    $allPolicies = @($live | Where-Object { $_.Type -eq "SECURITY_POLICY" })
+    foreach ($c in $tChains) {
+        $holders = @($allPolicies | Where-Object { -not $deleteSet.ContainsKey($_.Name) -and (Get-PolicyChains $_) -contains $c.Name })
+        if ($holders.Count -eq 0) { $deleteSet[$c.Name] = $true }
+        else { $retained += @{ Obj = $c; By = @($holders | ForEach-Object { $_.Name }) } }
+    }
+    
+    $allChains = @($live | Where-Object { $_.Type -eq "SERVICE_CHAIN" })
+    foreach ($s in $tServices) {
+        $holders = @($allChains | Where-Object { -not $deleteSet.ContainsKey($_.Name) -and (Get-ChainServices $_) -contains $s.Name })
+        if ($holders.Count -eq 0) { $deleteSet[$s.Name] = $true }
+        else { $retained += @{ Obj = $s; By = @($holders | ForEach-Object { $_.Name }) } }
+    }
+    
+    # Teardown order: exact reverse of deployment order
+    $teardownOrder = @("TOPOLOGY", "SECURITY_POLICY", "SERVICE_CHAIN", "SERVICE", "SSL_SETTINGS")
+    $deleteList = @()
+    foreach ($type in $teardownOrder) {
+        foreach ($obj in @($live | Where-Object { $_.Type -eq $type -and $deleteSet.ContainsKey($_.Name) })) {
+            $deleteList += $obj
+        }
+    }
+    
+    # Plan
+    Write-Host ""
+    Write-Host "  Delete plan:" -ForegroundColor White
+    Write-Host ""
+    foreach ($obj in $deleteList) {
+        Write-Host "    DELETE  " -NoNewline -ForegroundColor Red
+        Write-Host "$($obj.Name)" -NoNewline -ForegroundColor White
+        Write-Host "  ($(Get-TypeLabel $obj.Type))" -ForegroundColor DarkGray
+    }
+    foreach ($r in $retained) {
+        Write-Host "    RETAIN  " -NoNewline -ForegroundColor Green
+        Write-Host "$($r.Obj.Name)" -NoNewline -ForegroundColor White
+        Write-Host "  (referenced by $($r.By -join ', '))" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+    Write-Host "  $($deleteList.Count) object(s) will be deleted, $($retained.Count) retained." -ForegroundColor White
+    Write-Host ""
+    
+    $confirm = Read-Host "  Type DELETE to proceed (anything else cancels)"
+    if ($confirm -cne "DELETE") {
+        Write-LogInfo "Cancelled. No changes made."
+        Press-EnterToContinue
+        return
+    }
+    
+    # Execute: DELETE operation block per object through the gc processor,
+    # fail-fast on first failure (destructive operations stop, never grind)
+    Write-Host ""
+    $completedActions = @()
+    $deleteFailed = $false
+    
+    foreach ($obj in $deleteList) {
+        # The operation block gets its own name (sslo_ob_{TYPE}_DELETE_{name}),
+        # matching this tool's CREATE/MODIFY convention and the Ansible
+        # collection's sslo_obj_{TYPE}_DELETE_{name}. Naming it after the state
+        # block would make the post-delete verification below match the
+        # operation block itself while it lingers in BOUND (up to its 120s
+        # self-destruct) and false-positive as "still present"
+        $opCtxValue = [ordered]@{
+            operationType = "DELETE"
+            deploymentType = $obj.Type
+            deploymentName = $obj.Name
+            deploymentReference = "https://localhost/mgmt/shared/iapp/blocks/$($obj.Id)"
+            partition = "Common"
+            strictness = $false
+        }
+        $valueBody = [ordered]@{
+            existingBlockId = $obj.Id
+            name = $obj.Name
+            partition = "Common"
+        }
+        # Ansible delete templates carry version/previousVersion in both the
+        # operation context and the value body
+        if ($null -ne $script:SSLOVersionNum) {
+            $opCtxValue["version"] = $script:SSLOVersionNum
+            $valueBody["previousVersion"] = $script:SSLOVersionNum
+            $valueBody["version"] = $script:SSLOVersionNum
+        }
+        
+        $deleteBlock = [ordered]@{
+            name = "sslo_ob_$($obj.Type)_DELETE_$($obj.Name)"
+            inputProperties = @(
+                [ordered]@{
+                    id = "f5-ssl-orchestrator-operation-context"
+                    type = "JSON"
+                    value = $opCtxValue
+                }
+                [ordered]@{
+                    id = $script:TYPE_PROPERTY_MAP[$obj.Type]
+                    type = "JSON"
+                    value = $valueBody
+                }
+            )
+            dataProperties = @()
+            configurationProcessorReference = @{
+                link = "https://localhost/mgmt/shared/iapp/processors/f5-iappslx-ssl-orchestrator-gc"
+            }
+            state = "BINDING"
+        }
+        
+        $pollMax = if ($obj.Type -eq "TOPOLOGY") { 180 } else { 90 }
+        if (-not (Invoke-BlockPost -Block $deleteBlock -Label "delete $(Get-TypeLabel $obj.Type) $($obj.Name)" -PollMax $pollMax)) {
+            $deleteFailed = $true
+            break
+        }
+        
+        # Verify the state block is actually gone
+        $check = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$($obj.Name)'"
+        if ($check.Success -and $check.Response.items -and @($check.Response.items).Count -gt 0) {
+            Write-LogWarn "$($obj.Name) operation completed but the block is still present. Stopping."
+            $deleteFailed = $true
+            break
+        }
+        
+        $completedActions += "$(Get-TypeLabel $obj.Type) $($obj.Name) deleted"
+        Start-Sleep -Seconds 3
+    }
+    
+    if ($deleteFailed) {
+        Write-Host ""
+        Write-LogError "Delete failed. Review the error above."
+        if ($completedActions.Count -gt 0) {
+            Write-Host ""
+            Write-LogWarn "Completed before the failure - these objects are gone from the target:"
+            foreach ($a in $completedActions) { Write-Host "    $a" -ForegroundColor Yellow }
+        }
+        Press-EnterToContinue
+        return
+    }
+    
+    Write-Host ""
+    Write-LogOk "Deleted $($deleteList.Count) object(s). $($retained.Count) shared object(s) retained."
+    
+    # Save configuration
+    Write-Host ""
+    $saveChoice = Read-Host "  Save BIG-IP configuration? (yes/no) [yes]"
+    if ($saveChoice -ne "no") {
+        if (Save-F5Config) {
+            Write-LogOk "Configuration saved."
+        } else {
+            Write-LogWarn "Configuration save failed. Save manually with: tmsh save sys config"
+        }
+    }
+    
+    Press-EnterToContinue
 }
 
 # =============================================================================
@@ -4059,13 +4431,14 @@ function Main {
         while ($true) {
             Show-MainMenu
             
-            $choice = Read-Host "  Select [0-4]"
+            $choice = Read-Host "  Select [0-5]"
             
             switch ($choice) {
                 "1" { Invoke-SsloDump }
                 "2" { Invoke-SsloRestore }
                 "3" { Invoke-TopologyRedeploy }
-                "4" { break }
+                "4" { Invoke-TopologyDelete }
+                "5" { break }
                 "0" {
                     Write-Host ""
                     Write-Host "  Exiting." -ForegroundColor White
@@ -4080,7 +4453,7 @@ function Main {
                 }
             }
             
-            if ($choice -eq "4") { break }
+            if ($choice -eq "5") { break }
         }
         
         # Clear host-specific state, keep credentials
@@ -4089,6 +4462,7 @@ function Main {
         $script:RemoteHostname = ""
         $script:TMOSVersion = ""
         $script:SSLOVersion = ""
+        $script:SSLOVersionNum = $null
         
         while ($true) {
             if (Initialize-RemoteConnection -HostOnly) { break }
