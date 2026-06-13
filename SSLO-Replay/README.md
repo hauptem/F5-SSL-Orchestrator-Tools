@@ -5,7 +5,7 @@
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
 
-### Note that this is presented as a proof-of-concept beta version. Development and testing is currently underway for a final release to ensure better dependency and exception handling. Do not use this tool for production purposes at this time.
+### Note that this is presented as a proof-of-concept beta version. Development and testing is currently underway for a final release to ensure better dependency and exception handling. 
 
 A menu-driven tool used for capturing F5 SSL Orchestrator configuration as a portable JSON STATE snapshot and replaying it to the same or different BIG-IP via the iControl REST API. Designed for disaster recovery, migration, and policy management in environments where Ansible is not available.
 
