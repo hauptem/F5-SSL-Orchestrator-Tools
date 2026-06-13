@@ -4,7 +4,6 @@
 
 - Replay aborts when the target inventory cannot be read. A failed read previously disabled collision detection and the full snapshot would deploy onto a populated device
 - Key passphrase prompt for SSL settings replay. Passphrases are not recoverable from state blocks and were restored blank. 
-- Gateway pool prerequisite check read egressNetwork.gatewayPool, which does not exist. Correct field is outboundGateways.referredObj per the F5 Ansible module source. Gateway pools were never validated
 - Existing objects in ERROR or stuck state are flagged in the replay plan with a warning to remove them before re-replay
 - Policy swap failures list the changes completed before the failure, including policy content already live on the target
 - Replay halts for confirmation after 3 consecutive object failures
