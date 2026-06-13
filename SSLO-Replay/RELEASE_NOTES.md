@@ -11,8 +11,7 @@
 - ERROR-state failures include the block error detail in the output
 - Stuck-block cleanup during redeploy uses anchored name matching. The previous substring match could clear blocks of a topology whose name contains the selected one
 - Snapshots are verified after writing: round-trip parse and block count check. Import warns when metadata blockCount does not match contents
-- Dynamic naming on scoped topology replay. The detected base name can be replaced at replay time. Renaming applies to the topology, its SSL settings, and its security policy
-- New base names can contain 1-20 characters, letters, numbers, underscores. 
+- Dynamic naming on scoped topology replay. The detected base name can be replaced at replay time. Renaming applies to the topology, its SSL settings, and its security policy. New base names can contain 1-20 characters, letters, numbers, underscores. 
 
 ## b4.3.15.0-devel (Beta 4 - June 1 2026)
 
