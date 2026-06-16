@@ -81,11 +81,11 @@ The tool validates all of this before touching the blocks API. If something is m
 
 1. Snapshot file selection (lists all `sslo-snapshot_*.json` files in current directory)
 2. Snapshot validation and summary display
-3. Target compatibility check (hostname, TMOS version, SSLO version — warns on mismatch, does not block)
+3. Target compatibility check (hostname, TMOS version, SSLO version)
 4. Scope selection (full or single topology)
 5. Prerequisite validation walks every block and checks all external references on the target
 6. Pre-replay analysis checks which objects already exist on the target and skips them, displays a plan of what will be deployed
-7. Confirmation prompt
+7. Confirmation prompt to continue
 8. Block deployment each block is POSTed to `/mgmt/shared/iapp/blocks` as a CREATE operation with fresh passphrase tokens. The tool waits for each block to reach BOUND state before proceeding to the next
 9. Configuration save; tmsh save and mcpBlockIO block database save
 
