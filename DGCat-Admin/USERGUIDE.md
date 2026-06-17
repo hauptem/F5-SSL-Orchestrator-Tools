@@ -579,8 +579,6 @@ When exporting, the tool includes a comment header with metadata about the sourc
 .windowsupdate.com,
 ```
 
-These comment headers are preserved during reimport, making export files directly usable as import files.
-
 ---
 
 ## Backup System
