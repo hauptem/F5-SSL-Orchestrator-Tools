@@ -57,7 +57,7 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 
 ## Requirements
 
-- PowerShell 5.1 or later
+- PowerShell 5.1
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later with SSLO 12.x or later
 
