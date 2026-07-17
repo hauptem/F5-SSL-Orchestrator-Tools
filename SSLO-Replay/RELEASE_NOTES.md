@@ -9,7 +9,7 @@
 - Replay circuit breaker consolidated into a single function. The 3-consecutive-failure prompt appeared four times inline in the replay loop; behavior is unchanged
 - Terminology aligned across functions, prompts, and output: record/snapshot/replay replaces dump/backup/restore
 
-## SSLO Replay Snapshot Format v1.0 (updated for beta 6)
+## SSLO Replay Snapshot Format v1.0 (updated in beta 6)
 
 ```
 {
