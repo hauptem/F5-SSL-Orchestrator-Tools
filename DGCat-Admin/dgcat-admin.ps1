@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.3
+# Version: 5.4
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -36,6 +36,14 @@ $script:LOGGING_ENABLED = 0
 # API timeout (seconds)
 # Max time for any single API request including connection
 $script:API_TIMEOUT = 60
+
+# WebException statuses thrown when BIG-IP closes TCP after a config save POST
+# Locale-invariant enum values - the exception message text is localized
+$script:CONNECTION_DROP_STATUSES = @(
+    "ConnectionClosed"
+    "ReceiveFailure"
+    "KeepAliveFailure"
+)
 
 # Partitions to manage (array)
 # Add additional partitions as needed
@@ -89,6 +97,19 @@ $script:LogFile = ""
 # =============================================================================
 
 function Initialize-SslBypass {
+    # ServicePointManager.CertificatePolicy is ignored by PowerShell 7+ (Core),
+    # so the bypass would silently not apply and every connection would fail
+    # with opaque TLS errors. Exit with the correct invocation instead
+    if ($PSVersionTable.PSEdition -and $PSVersionTable.PSEdition -ne "Desktop") {
+        Write-Host ""
+        Write-LogError "DGCat-Admin requires Windows PowerShell 5.1 (Desktop edition)."
+        Write-LogError "This session is PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))."
+        Write-Host ""
+        Write-Host "  Run with:  powershell.exe -File .\dgcat-admin.ps1" -ForegroundColor Cyan
+        Write-Host ""
+        exit 1
+    }
+    
     if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
         Add-Type @"
 using System.Net;
@@ -164,7 +185,7 @@ function Write-LogStep {
 # UTILITY FUNCTIONS
 # =============================================================================
 
-function Press-EnterToContinue {
+function Wait-EnterKey {
     Write-Host ""
     Read-Host "  Press Enter to continue"
 }
@@ -391,7 +412,7 @@ function Format-DomainForUrlCategory {
 # -----------------------------------------------------------------------------
 
 # Send a REST request to the connected BIG-IP
-# Returns: @{ Success; Response; StatusCode; Error }
+# Returns: @{ Success; Response; StatusCode; Error; WebStatus }
 function Invoke-F5Api {
     param(
         [string]$Method,
@@ -426,10 +447,16 @@ function Invoke-F5Api {
         return @{ Success = $true; Response = $response; StatusCode = 200 }
     } catch {
         $statusCode = 0
+        # WebException.Status is a locale-invariant enum - unlike the exception
+        # message, which .NET Framework localizes per Windows display language
+        $webStatus = ""
+        if ($_.Exception -is [System.Net.WebException]) {
+            $webStatus = [string]$_.Exception.Status
+        }
         if ($_.Exception.Response) {
             $statusCode = [int]$_.Exception.Response.StatusCode
         }
-        return @{ Success = $false; Response = $null; StatusCode = $statusCode; Error = $_.Exception.Message }
+        return @{ Success = $false; Response = $null; StatusCode = $statusCode; Error = $_.Exception.Message; WebStatus = $webStatus }
     }
 }
 
@@ -544,12 +571,12 @@ function Initialize-RemoteConnection {
                 $version = $entry.Value.nestedStats.entries.Version.description
                 break
             }
-        } catch {}
+        } catch { <# non-critical #> }
         
         # Retrieve system hostname for operator validation
         $hostnameResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/global-settings"
         if ($hostnameResult.Success) {
-            try { $script:RemoteHostname = $hostnameResult.Response.hostname } catch {}
+            try { $script:RemoteHostname = $hostnameResult.Response.hostname } catch { <# non-critical #> }
         }
         if ([string]::IsNullOrWhiteSpace($script:RemoteHostname)) {
             $script:RemoteHostname = $script:RemoteHost
@@ -580,9 +607,23 @@ function Initialize-RemoteConnection {
 function Save-F5Config {
     $result = Invoke-F5Post -Endpoint "/mgmt/tm/sys/config" -Body @{ command = "save" }
     if ($result.Success) { return $true }
-    # BIG-IP closes TCP after a successful save config POST.
-    # Invoke-RestMethod treats this as a failure even though the save completed.
-    if ($result.Error -match "underlying connection was closed") { return $true }
+    
+    # BIG-IP closes TCP after a successful save config POST, and Invoke-RestMethod
+    # surfaces that as a failure even though the save completed. A genuine network
+    # drop mid-exchange throws the SAME status, so do not take the quirk on faith:
+    # confirm the management plane is reachable, then re-issue the save (idempotent).
+    # A clean retry proves the save ran; if the retry hits the drop signature again
+    # while the box is reachable, that is the quirk, not a dead network
+    if ($result.WebStatus -in $script:CONNECTION_DROP_STATUSES) {
+        Start-Sleep -Seconds 2
+        $reach = Invoke-F5Get -Endpoint "/mgmt/tm/sys/version"
+        if ($reach.Success) {
+            $retry = Invoke-F5Post -Endpoint "/mgmt/tm/sys/config" -Body @{ command = "save" }
+            if ($retry.Success -or $retry.WebStatus -in $script:CONNECTION_DROP_STATUSES) {
+                return $true
+            }
+        }
+    }
     return $false
 }
 
@@ -1306,7 +1347,10 @@ function Backup-RemoteDatagroup {
     Confirm-SiteLogDir -SiteId $SiteId | Out-Null
     $safeHost = $HostName -replace '[^a-zA-Z0-9_-]', '_'
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
-    $backupFile = Join-Path $script:BACKUP_DIR "$SiteId\${safeHost}_${Partition}_${Name}_${ts}.csv"
+    # Same name shape as connected-host backups (including the internal class
+    # segment) so both paths share one rotation pool per host and object
+    $backupDir = Join-Path $script:BACKUP_DIR $SiteId
+    $backupFile = Join-Path $backupDir "${safeHost}_${Partition}_${Name}_internal_${ts}.csv"
 
     $lines = @(
         "# Datagroup Backup: /${Partition}/${Name}",
@@ -1321,6 +1365,7 @@ function Backup-RemoteDatagroup {
 
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
+        Remove-OldBackups -Pattern "${safeHost}_${Partition}_${Name}_internal" -Directory $backupDir
         return $backupFile
     } catch {
         return ""
@@ -1348,7 +1393,8 @@ function Backup-RemoteUrlCategory {
     $safeHost = $HostName -replace '[^a-zA-Z0-9_-]', '_'
     $safeCat = $CatName -replace '[^a-zA-Z0-9_-]', '_'
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
-    $backupFile = Join-Path $script:BACKUP_DIR "$SiteId\${safeHost}_urlcat_${safeCat}_${ts}.csv"
+    $backupDir = Join-Path $script:BACKUP_DIR $SiteId
+    $backupFile = Join-Path $backupDir "${safeHost}_urlcat_${safeCat}_${ts}.csv"
 
     $lines = @(
         "# URL Category Backup: $CatName",
@@ -1362,6 +1408,7 @@ function Backup-RemoteUrlCategory {
 
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
+        Remove-OldBackups -Pattern "${safeHost}_urlcat_${safeCat}" -Directory $backupDir
         return $backupFile
     } catch {
         return ""
@@ -1462,7 +1509,7 @@ function Select-DeployScope {
 # Apply datagroup changes to one fleet host and save its config
 function Deploy-DatagroupToHost {
     param(
-        [string]$HostName, [string]$Partition, [string]$DgName, [string]$DgType,
+        [string]$HostName, [string]$Partition, [string]$DgName,
         [array]$RecordsJson, [string]$SiteId,
         [string]$DeployMode = "replace", [array]$AdditionsJson = @(), [string[]]$DeletionsList = @()
     )
@@ -2076,7 +2123,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.3                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.4                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -2157,7 +2204,7 @@ function Invoke-CreateEmpty {
         "2" { Invoke-CreateEmptyUrlCategory }
         default {
             Write-LogInfo "Cancelled."
-            Press-EnterToContinue
+            Wait-EnterKey
         }
     }
 }
@@ -2169,18 +2216,18 @@ function Invoke-CreateEmptyDatagroup {
     $partition = Select-Partition -Prompt "Select partition"
     if ([string]::IsNullOrWhiteSpace($partition)) {
         Write-LogInfo "Cancelled."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
     $selection = Select-Datagroup -Partition $partition -Prompt "Enter new datagroup name" -Mode "new"
-    if ($null -eq $selection) { Press-EnterToContinue; return }
+    if ($null -eq $selection) { Wait-EnterKey; return }
     
     $dgName = $selection.Name
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "The name '$dgName' is reserved for a BIG-IP system datagroup."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2199,7 +2246,7 @@ function Invoke-CreateEmptyDatagroup {
     $dgType = switch ($typeChoice) { "1" { "string" }; "2" { "ip" }; "3" { "integer" }; default { "" } }
     if ([string]::IsNullOrWhiteSpace($dgType)) {
         Write-LogWarn "Invalid selection."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2214,7 +2261,7 @@ function Invoke-CreateEmptyDatagroup {
     Write-Host "  Create this datagroup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirm = Read-Host
     if ($confirm -ne "yes") {
         Write-LogInfo "Cancelled."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2226,7 +2273,7 @@ function Invoke-CreateEmptyDatagroup {
         Write-LogError "Failed to create datagroup."
     }
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # Create an empty URL category interactively
@@ -2236,7 +2283,7 @@ function Invoke-CreateEmptyUrlCategory {
     if (-not (Test-UrlCategoryDbAvailable)) {
         Write-LogError "URL database not available or accessible."
         Write-LogInfo "This feature requires the URL filtering module."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2244,14 +2291,14 @@ function Invoke-CreateEmptyUrlCategory {
     $catName = Read-Host "  Enter URL category name (or 'q' to cancel)"
     if ([string]::IsNullOrWhiteSpace($catName) -or $catName -eq 'q') {
         Write-LogInfo "Cancelled."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
     # Validate TMOS naming rules
     if ($catName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') {
         Write-LogError "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2259,7 +2306,7 @@ function Invoke-CreateEmptyUrlCategory {
     if (Test-UrlCategoryExistsRemote -Name $catName) {
         Write-LogError "URL category '$catName' already exists."
         Write-LogInfo "Use the editor (option 5) to modify existing URL categories."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2268,7 +2315,7 @@ function Invoke-CreateEmptyUrlCategory {
     if (Test-UrlCategoryExistsRemote -Name $ssloName) {
         Write-LogError "URL category '$catName' exists as SSLO category '$ssloName'."
         Write-LogInfo "Use the editor (option 5) to modify existing URL categories."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2295,7 +2342,7 @@ function Invoke-CreateEmptyUrlCategory {
     Write-Host "  Create this URL category? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirm = Read-Host
     if ($confirm -ne "yes") {
         Write-LogInfo "Cancelled."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2307,7 +2354,7 @@ function Invoke-CreateEmptyUrlCategory {
         Write-LogError "Failed to create URL category."
     }
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # Option 2: Create or update a datagroup or URL category from CSV
@@ -2330,7 +2377,7 @@ function Invoke-CreateFromCsv {
         "2" { Invoke-CreateUrlCategory }
         default {
             Write-LogInfo "Cancelled."
-            Press-EnterToContinue
+            Wait-EnterKey
         }
     }
 }
@@ -2342,18 +2389,18 @@ function Invoke-CreateDatagroup {
     $partition = Select-Partition -Prompt "Select partition"
     if ([string]::IsNullOrWhiteSpace($partition)) {
         Write-LogInfo "Cancelled."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
     $selection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name" -Mode "any"
-    if ($null -eq $selection) { Press-EnterToContinue; return }
+    if ($null -eq $selection) { Wait-EnterKey; return }
     
     $dgName = $selection.Name
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "The name '$dgName' is reserved for a BIG-IP system datagroup."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2385,7 +2432,7 @@ function Invoke-CreateDatagroup {
             "2" { $restoreMode = "merge" }
             default {
                 Write-LogInfo "Cancelled."
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
         }
@@ -2401,7 +2448,7 @@ function Invoke-CreateDatagroup {
                 Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
                 if ($cont -ne "yes") {
                     Write-LogInfo "Aborted."
-                    Press-EnterToContinue
+                    Wait-EnterKey
                     return
                 }
             }
@@ -2425,7 +2472,7 @@ function Invoke-CreateDatagroup {
             "3" { $dgType = "integer" }
             default {
                 Write-LogWarn "Invalid selection."
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
         }
@@ -2441,7 +2488,7 @@ function Invoke-CreateDatagroup {
         }
         if ($csvPath -eq 'q') {
             Write-LogInfo "Cancelled."
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
         if (-not (Test-Path $csvPath)) {
@@ -2466,7 +2513,7 @@ function Invoke-CreateDatagroup {
     $parsed = Import-CsvDatagroup -FilePath $csvPath -Format "keys_values"
     if ($null -eq $parsed) {
         if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     Write-LogOk "Parsed $($parsed.Keys.Count) entries"
@@ -2489,7 +2536,7 @@ function Invoke-CreateDatagroup {
             Write-Host ""
             Write-LogError "Correct these entries in your CSV and reimport."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     }
@@ -2512,7 +2559,7 @@ function Invoke-CreateDatagroup {
             Write-Host ""
             Write-LogError "Correct these entries in your CSV and reimport."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     }
@@ -2535,7 +2582,7 @@ function Invoke-CreateDatagroup {
             Write-Host ""
             Write-LogError "Correct these entries in your CSV and reimport."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     }
@@ -2563,7 +2610,7 @@ function Invoke-CreateDatagroup {
         default {
             Write-LogWarn "Invalid selection."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     }
@@ -2581,7 +2628,7 @@ function Invoke-CreateDatagroup {
             if ($cont -ne "yes") {
                 Write-LogInfo "Aborted by user."
                 if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
         }
@@ -2625,7 +2672,7 @@ function Invoke-CreateDatagroup {
         if (-not (New-DatagroupRemote -Partition $partition -Name $dgName -Type $apiType)) {
             Write-LogError "Failed to create datagroup."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     }
@@ -2635,7 +2682,7 @@ function Invoke-CreateDatagroup {
     if (-not $result.Success) {
         Write-LogError "Failed to apply records. HTTP $($result.StatusCode)"
         if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2643,7 +2690,7 @@ function Invoke-CreateDatagroup {
     Invoke-PromptSaveConfig
     
     if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # Create or update a URL category from a CSV file
@@ -2653,7 +2700,7 @@ function Invoke-CreateUrlCategory {
     if (-not (Test-UrlCategoryDbAvailable)) {
         Write-LogError "URL database not available or accessible."
         Write-LogInfo "This feature requires the URL filtering module."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2661,14 +2708,14 @@ function Invoke-CreateUrlCategory {
     $catName = Read-Host "  Enter URL category name (or 'q' to cancel)"
     if ([string]::IsNullOrWhiteSpace($catName) -or $catName -eq 'q') {
         Write-LogInfo "Cancelled."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
     # Validate TMOS naming rules
     if ($catName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') {
         Write-LogError "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2692,7 +2739,7 @@ function Invoke-CreateUrlCategory {
             "2" { $restoreMode = "merge" }
             default {
                 Write-LogInfo "Cancelled."
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
         }
@@ -2719,7 +2766,7 @@ function Invoke-CreateUrlCategory {
                 "2" { $restoreMode = "merge" }
                 default {
                     Write-LogInfo "Cancelled."
-                    Press-EnterToContinue
+                    Wait-EnterKey
                     return
                 }
             }
@@ -2731,7 +2778,7 @@ function Invoke-CreateUrlCategory {
         Write-Host ""
         $csvPath = Read-Host "  Enter path to CSV file (or 'q' to cancel)"
         if ([string]::IsNullOrWhiteSpace($csvPath)) { Write-LogWarn "No file path provided."; continue }
-        if ($csvPath -eq 'q') { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+        if ($csvPath -eq 'q') { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
         if (-not (Test-Path $csvPath)) { Write-LogError "File not found: $csvPath"; continue }
         break
     }
@@ -2751,7 +2798,7 @@ function Invoke-CreateUrlCategory {
     $parsed = Import-CsvDatagroup -FilePath $csvPath -Format "keys_only"
     if ($null -eq $parsed) {
         if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     Write-LogOk "Parsed $($parsed.Keys.Count) entries"
@@ -2773,7 +2820,7 @@ function Invoke-CreateUrlCategory {
         Write-Host ""
         Write-LogError "Correct these entries in your CSV and reimport."
         if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2808,7 +2855,7 @@ function Invoke-CreateUrlCategory {
         if ($newUrls.Count -eq 0) {
             Write-LogInfo "No new URLs to add - all entries already exist."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
         
@@ -2845,7 +2892,7 @@ function Invoke-CreateUrlCategory {
     if ($confirm -ne "yes") {
         Write-LogInfo "Aborted."
         if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2855,7 +2902,7 @@ function Invoke-CreateUrlCategory {
         if (-not (Set-UrlCategoryEntriesRemote -Name $catName -Urls $urlObjects)) {
             Write-LogError "Failed to update URL category."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     } elseif ([string]::IsNullOrWhiteSpace($restoreMode)) {
@@ -2864,7 +2911,7 @@ function Invoke-CreateUrlCategory {
         if (-not (New-UrlCategoryRemote -Name $catName -DefaultAction $defaultAction -Urls @())) {
             Write-LogError "Failed to create URL category."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
         Write-LogOk "URL category created"
@@ -2873,7 +2920,7 @@ function Invoke-CreateUrlCategory {
             Write-LogError "Failed to populate URL category."
             Write-LogWarn "Category '$catName' exists but is empty. Retry with overwrite."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     } else {
@@ -2881,7 +2928,7 @@ function Invoke-CreateUrlCategory {
         if (-not (Add-UrlCategoryEntriesRemote -Name $catName -NewUrls $urlObjects)) {
             Write-LogError "Failed to update URL category."
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     }
@@ -2889,7 +2936,7 @@ function Invoke-CreateUrlCategory {
     Write-LogOk "URL category '$catName' created successfully with $($urlObjects.Count) URLs."
     Invoke-PromptSaveConfig
     if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # Option 3: Delete a datagroup or URL category
@@ -2910,7 +2957,7 @@ function Invoke-DeleteMenu {
     switch ($choice) {
         "1" { Invoke-DeleteDatagroup }
         "2" { Invoke-DeleteUrlCategory }
-        default { Write-LogInfo "Cancelled."; Press-EnterToContinue }
+        default { Write-LogInfo "Cancelled."; Wait-EnterKey }
     }
 }
 
@@ -2919,17 +2966,17 @@ function Invoke-DeleteDatagroup {
     Write-LogSection "Delete Datagroup"
     
     $partition = Select-Partition -Prompt "Select partition containing datagroup to delete"
-    if ([string]::IsNullOrWhiteSpace($partition)) { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+    if ([string]::IsNullOrWhiteSpace($partition)) { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
     
     $selection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name to delete"
-    if ($null -eq $selection) { Press-EnterToContinue; return }
+    if ($null -eq $selection) { Wait-EnterKey; return }
     
     $dgName = $selection.Name
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "Datagroup '$dgName' is a protected BIG-IP system datagroup."
         Write-LogError "This operation is blocked for safety."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2951,26 +2998,26 @@ function Invoke-DeleteDatagroup {
         } else {
             Write-LogWarn "Could not create backup."
             Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-            if ($cont -ne "yes") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
+            if ($cont -ne "yes") { Write-LogInfo "Aborted."; Wait-EnterKey; return }
         }
     }
     
     Write-Host ""
     Write-Host "  Type DELETE to confirm: " -NoNewline -ForegroundColor Red
     $confirm = Read-Host
-    if ($confirm -cne "DELETE") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
+    if ($confirm -cne "DELETE") { Write-LogInfo "Aborted."; Wait-EnterKey; return }
     
     Write-LogStep "Deleting datagroup '/${partition}/${dgName}'..."
     if (Remove-DatagroupRemote -Partition $partition -Name $dgName) {
         Write-LogOk "Datagroup '/${partition}/${dgName}' deleted successfully."
     } else {
         Write-LogError "Failed to delete datagroup."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
     Invoke-PromptSaveConfig
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # Delete a URL category with backup and typed confirmation
@@ -2979,7 +3026,7 @@ function Invoke-DeleteUrlCategory {
     
     if (-not (Test-UrlCategoryDbAvailable)) {
         Write-LogError "URL database not available or accessible."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2992,12 +3039,12 @@ function Invoke-DeleteUrlCategory {
     $selectedCategory = ""
     
     switch ($catInput) {
-        "0" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
-        "" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+        "0" { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
+        "" { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
         "1" {
             Write-LogStep "Retrieving URL categories..."
             $categories = Get-UrlCategoryListRemote
-            if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Press-EnterToContinue; return }
+            if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Wait-EnterKey; return }
             
             Write-Host ""
             Write-Host "  Available URL Categories:" -ForegroundColor White
@@ -3012,11 +3059,11 @@ function Invoke-DeleteUrlCategory {
             Write-Host ""
             
             $catChoice = Read-Host "  Select URL category [0-$($categories.Count)]"
-            if ($catChoice -eq "0" -or [string]::IsNullOrWhiteSpace($catChoice)) { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+            if ($catChoice -eq "0" -or [string]::IsNullOrWhiteSpace($catChoice)) { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
             $num = 0
             if ([int]::TryParse($catChoice, [ref]$num) -and $num -ge 1 -and $num -le $categories.Count) {
                 $selectedCategory = $categories[$num - 1]
-            } else { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
+            } else { Write-LogWarn "Invalid selection."; Wait-EnterKey; return }
         }
         default {
             $selectedCategory = $catInput
@@ -3027,7 +3074,7 @@ function Invoke-DeleteUrlCategory {
                     $selectedCategory = $ssloName
                 } else {
                     Write-LogError "Category '$selectedCategory' not found."
-                    Press-EnterToContinue
+                    Wait-EnterKey
                     return
                 }
             }
@@ -3049,26 +3096,26 @@ function Invoke-DeleteUrlCategory {
         else {
             Write-LogWarn "Could not create backup."
             Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-            if ($cont -ne "yes") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
+            if ($cont -ne "yes") { Write-LogInfo "Aborted."; Wait-EnterKey; return }
         }
     }
     
     Write-Host ""
     Write-Host "  Type DELETE to confirm: " -NoNewline -ForegroundColor Red
     $confirm = Read-Host
-    if ($confirm -cne "DELETE") { Write-LogInfo "Aborted."; Press-EnterToContinue; return }
+    if ($confirm -cne "DELETE") { Write-LogInfo "Aborted."; Wait-EnterKey; return }
     
     Write-LogStep "Deleting URL category '$selectedCategory'..."
     if (Remove-UrlCategoryRemote -Name $selectedCategory) {
         Write-LogOk "URL category '$selectedCategory' deleted successfully."
     } else {
         Write-LogError "Failed to delete URL category."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
     Invoke-PromptSaveConfig
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # Option 4: Export a datagroup or URL category to CSV
@@ -3089,7 +3136,7 @@ function Invoke-ExportToCsv {
     switch ($choice) {
         "1" { Invoke-ExportDatagroup }
         "2" { Invoke-ExportUrlCategory }
-        default { Write-LogInfo "Cancelled."; Press-EnterToContinue }
+        default { Write-LogInfo "Cancelled."; Wait-EnterKey }
     }
 }
 
@@ -3098,10 +3145,10 @@ function Invoke-ExportDatagroup {
     Write-LogSection "Export Datagroup to CSV"
     
     $partition = Select-Partition -Prompt "Select partition containing datagroup to export"
-    if ([string]::IsNullOrWhiteSpace($partition)) { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+    if ([string]::IsNullOrWhiteSpace($partition)) { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
     
     $selection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name to export"
-    if ($null -eq $selection) { Press-EnterToContinue; return }
+    if ($null -eq $selection) { Wait-EnterKey; return }
     
     $dgName = $selection.Name
     $safePartition = $partition -replace '/', '_'
@@ -3114,7 +3161,7 @@ function Invoke-ExportDatagroup {
     $exportDir = Split-Path $exportPath -Parent
     if ($exportDir -and -not (Test-Path $exportDir)) {
         try { New-Item -Path $exportDir -ItemType Directory -Force | Out-Null }
-        catch { Write-LogError "Could not create directory: $exportDir"; Press-EnterToContinue; return }
+        catch { Write-LogError "Could not create directory: $exportDir"; Wait-EnterKey; return }
     }
     
     Write-LogStep "Exporting datagroup..."
@@ -3139,7 +3186,7 @@ function Invoke-ExportDatagroup {
         Write-LogError "Export failed."
     }
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # Export a URL category to CSV
@@ -3148,7 +3195,7 @@ function Invoke-ExportUrlCategory {
     
     if (-not (Test-UrlCategoryDbAvailable)) {
         Write-LogError "URL database not available or accessible."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3161,12 +3208,12 @@ function Invoke-ExportUrlCategory {
     
     $selectedCategory = ""
     switch ($catInput) {
-        "0" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
-        "" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+        "0" { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
+        "" { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
         "1" {
             Write-LogStep "Retrieving URL categories..."
             $categories = Get-UrlCategoryListRemote
-            if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Press-EnterToContinue; return }
+            if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Wait-EnterKey; return }
             
             Write-Host ""
             Write-Host "  Available URL Categories:" -ForegroundColor White
@@ -3180,11 +3227,11 @@ function Invoke-ExportUrlCategory {
             Write-Host "Cancel" -ForegroundColor White
             Write-Host ""
             $catChoice = Read-Host "  Select [0-$($categories.Count)]"
-            if ($catChoice -eq "0" -or [string]::IsNullOrWhiteSpace($catChoice)) { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+            if ($catChoice -eq "0" -or [string]::IsNullOrWhiteSpace($catChoice)) { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
             $num = 0
             if ([int]::TryParse($catChoice, [ref]$num) -and $num -ge 1 -and $num -le $categories.Count) {
                 $selectedCategory = $categories[$num - 1]
-            } else { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
+            } else { Write-LogWarn "Invalid selection."; Wait-EnterKey; return }
         }
         default {
             $selectedCategory = $catInput
@@ -3195,7 +3242,7 @@ function Invoke-ExportUrlCategory {
                     $selectedCategory = $ssloName
                 } else {
                     Write-LogError "Category '$selectedCategory' not found."
-                    Press-EnterToContinue
+                    Wait-EnterKey
                     return
                 }
             }
@@ -3204,7 +3251,7 @@ function Invoke-ExportUrlCategory {
     
     Write-LogInfo "Selected category: $selectedCategory"
     $urlCount = Get-UrlCategoryCountRemote -Name $selectedCategory
-    if ($urlCount -eq 0) { Write-LogWarn "Category '$selectedCategory' has no URLs."; Press-EnterToContinue; return }
+    if ($urlCount -eq 0) { Write-LogWarn "Category '$selectedCategory' has no URLs."; Wait-EnterKey; return }
     Write-LogInfo "URLs in category: $urlCount"
     
     $safeName = $selectedCategory -replace '[^a-zA-Z0-9_-]', '_'
@@ -3227,7 +3274,7 @@ function Invoke-ExportUrlCategory {
     $exportDir = Split-Path $exportPath -Parent
     if ($exportDir -and -not (Test-Path $exportDir)) {
         try { New-Item -Path $exportDir -ItemType Directory -Force | Out-Null }
-        catch { Write-LogError "Could not create directory: $exportDir"; Press-EnterToContinue; return }
+        catch { Write-LogError "Could not create directory: $exportDir"; Wait-EnterKey; return }
     }
     
     Write-LogStep "Exporting URL category..."
@@ -3257,7 +3304,7 @@ function Invoke-ExportUrlCategory {
         Write-LogError "Export failed."
     }
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # =============================================================================
@@ -3270,7 +3317,7 @@ function Invoke-FleetLookingGlass {
     
     if ($script:FleetHosts.Count -eq 0) {
         Write-LogError "No fleet configuration loaded. Configure fleet.conf to use this feature."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3388,7 +3435,7 @@ function Invoke-FleetLookingGlass {
     
     if ($targetHosts.Count -eq 0) {
         Write-LogWarn "No valid scope selected."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3481,7 +3528,7 @@ function Invoke-FleetLookingGlass {
     
     if ($totalPulled -eq 0) {
         Write-LogError "No hosts returned data."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3519,13 +3566,13 @@ function Invoke-FleetLookingGlass {
         Write-Host -NoNewline "d" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host -NoNewline " Diff      " -ForegroundColor White
         Write-Host -NoNewline "q" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Quit" -ForegroundColor White
         Write-Host ""
-        $input = Read-Host "  Select option"
+        $viewerChoice = Read-Host "  Select option"
         
-        if ([string]::IsNullOrWhiteSpace($input)) { continue }
+        if ([string]::IsNullOrWhiteSpace($viewerChoice)) { continue }
         
-        if ($input -eq "q" -or $input -eq "Q") { break }
+        if ($viewerChoice -eq "q" -or $viewerChoice -eq "Q") { break }
         
-        if ($input -eq "d" -or $input -eq "D") {
+        if ($viewerChoice -eq "d" -or $viewerChoice -eq "D") {
             Clear-Host
             Write-Host ""
             Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
@@ -3578,11 +3625,11 @@ function Invoke-FleetLookingGlass {
                 Write-Host "  $driftCount inconsistent | $consistentCount consistent across all hosts" -ForegroundColor White
             }
             Write-Host ""
-            Press-EnterToContinue
+            Wait-EnterKey
             continue
         }
         
-        if ($input -eq "s" -or $input -eq "S") {
+        if ($viewerChoice -eq "s" -or $viewerChoice -eq "S") {
             Write-Host ""
             $searchTerm = Read-Host "  Enter search pattern"
             if ([string]::IsNullOrWhiteSpace($searchTerm)) { continue }
@@ -3659,12 +3706,12 @@ function Invoke-FleetLookingGlass {
                 Write-Host "$($inconsistentMatches.Count) inconsistent" -ForegroundColor Yellow
             }
             Write-Host ""
-            Press-EnterToContinue
+            Wait-EnterKey
             continue
         }
         
         Write-LogWarn "Invalid selection."
-        Press-EnterToContinue
+        Wait-EnterKey
     }
 }
 
@@ -3678,7 +3725,7 @@ function Invoke-FleetBackup {
     
     if ($script:FleetHosts.Count -eq 0) {
         Write-LogError "No fleet configuration loaded. Configure fleet.conf to use this feature."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3794,7 +3841,7 @@ function Invoke-FleetBackup {
     
     if ($targetHosts.Count -eq 0) {
         Write-LogWarn "No valid scope selected."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3862,7 +3909,7 @@ function Invoke-FleetBackup {
         Write-LogInfo "Backups saved to: $($script:BACKUP_DIR)\"
     }
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # =============================================================================
@@ -3887,14 +3934,14 @@ function Invoke-EditMenu {
     switch ($choice) {
         "1" {
             $partition = Select-Partition -Prompt "Select partition"
-            if ([string]::IsNullOrWhiteSpace($partition)) { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+            if ([string]::IsNullOrWhiteSpace($partition)) { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
             
             $selection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name to edit"
-            if ($null -eq $selection) { Press-EnterToContinue; return }
+            if ($null -eq $selection) { Wait-EnterKey; return }
             
             if (Test-ProtectedDatagroup -Name $selection.Name) {
                 Write-LogError "The datagroup '$($selection.Name)' is a protected BIG-IP system datagroup."
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
             
@@ -3903,7 +3950,7 @@ function Invoke-EditMenu {
         "2" {
             if (-not (Test-UrlCategoryDbAvailable)) {
                 Write-LogError "URL database not available or accessible."
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
             
@@ -3916,12 +3963,12 @@ function Invoke-EditMenu {
             
             $selectedCategory = ""
             switch ($catInput) {
-                "0" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
-                "" { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+                "0" { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
+                "" { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
                 "1" {
                     Write-LogStep "Retrieving URL categories..."
                     $categories = Get-UrlCategoryListRemote
-                    if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Press-EnterToContinue; return }
+                    if ($categories.Count -eq 0) { Write-LogError "No URL categories found."; Wait-EnterKey; return }
                     Write-Host ""
                     Write-Host "  Available URL Categories:" -ForegroundColor White
                     Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor Cyan
@@ -3933,11 +3980,11 @@ function Invoke-EditMenu {
                     Write-Host "      " -NoNewline; Write-Host "0" -NoNewline -ForegroundColor Yellow; Write-Host ") Cancel" -ForegroundColor White
                     Write-Host ""
                     $catChoice = Read-Host "  Select [0-$($categories.Count)]"
-                    if ($catChoice -eq "0" -or [string]::IsNullOrWhiteSpace($catChoice)) { Write-LogInfo "Cancelled."; Press-EnterToContinue; return }
+                    if ($catChoice -eq "0" -or [string]::IsNullOrWhiteSpace($catChoice)) { Write-LogInfo "Cancelled."; Wait-EnterKey; return }
                     $num = 0
                     if ([int]::TryParse($catChoice, [ref]$num) -and $num -ge 1 -and $num -le $categories.Count) {
                         $selectedCategory = $categories[$num - 1]
-                    } else { Write-LogWarn "Invalid selection."; Press-EnterToContinue; return }
+                    } else { Write-LogWarn "Invalid selection."; Wait-EnterKey; return }
                 }
                 default {
                     $selectedCategory = $catInput
@@ -3948,7 +3995,7 @@ function Invoke-EditMenu {
                             $selectedCategory = $ssloName
                         } else {
                             Write-LogError "Category '$selectedCategory' not found."
-                            Press-EnterToContinue
+                            Wait-EnterKey
                             return
                         }
                     }
@@ -3957,7 +4004,7 @@ function Invoke-EditMenu {
             
             Invoke-EditorSubmenu -EditType "urlcat" -CatName $selectedCategory
         }
-        default { Write-LogInfo "Cancelled."; Press-EnterToContinue }
+        default { Write-LogInfo "Cancelled."; Wait-EnterKey }
     }
 }
 
@@ -4147,7 +4194,7 @@ function Invoke-EditorSubmenu {
                 $gotoPage = Read-Host "  Enter page number (1-$totalPages)"
                 $num = 0
                 if ([int]::TryParse($gotoPage, [ref]$num) -and $num -ge 1 -and $num -le $totalPages) { $currentPage = $num }
-                else { Write-LogWarn "Invalid page number."; Press-EnterToContinue }
+                else { Write-LogWarn "Invalid page number."; Wait-EnterKey }
             }
             "f" {
                 Write-Host ""
@@ -4170,14 +4217,14 @@ function Invoke-EditorSubmenu {
                 if ($EditType -eq "datagroup") {
                     Write-Host ""
                     $newKey = Read-Host "  Enter new entry"
-                    if ([string]::IsNullOrWhiteSpace($newKey)) { Write-LogWarn "No entry provided."; Press-EnterToContinue; continue }
-                    if ($workingKeys -ccontains $newKey) { Write-LogWarn "Entry '$newKey' already exists."; Press-EnterToContinue; continue }
+                    if ([string]::IsNullOrWhiteSpace($newKey)) { Write-LogWarn "No entry provided."; Wait-EnterKey; continue }
+                    if ($workingKeys -ccontains $newKey) { Write-LogWarn "Entry '$newKey' already exists."; Wait-EnterKey; continue }
                     
                     # Validate entry format based on datagroup type
                     if ($dgType -eq "address" -or $dgType -eq "ip") {
                         if ($newKey.Contains(':')) {
                             Write-LogError "IPv6 is not supported. Use an IPv4 address or CIDR."
-                            Press-EnterToContinue; continue
+                            Wait-EnterKey; continue
                         }
                         if ($newKey -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(/(\d{1,2}))?$') {
                             $octets = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
@@ -4185,21 +4232,21 @@ function Invoke-EditorSubmenu {
                             foreach ($o in $octets) {
                                 if ($o -gt 255) { Write-LogError "Invalid IPv4 address: octet exceeds 255."; $badOctet = $true; break }
                             }
-                            if ($badOctet) { Press-EnterToContinue; continue }
+                            if ($badOctet) { Wait-EnterKey; continue }
                             if ($Matches[6] -and [int]$Matches[6] -gt 32) {
                                 Write-LogError "Invalid CIDR: prefix exceeds /32."
-                                Press-EnterToContinue; continue
+                                Wait-EnterKey; continue
                             }
                         } else {
                             Write-LogError "Invalid entry. Expected IPv4 address (N.N.N.N) or CIDR (N.N.N.N/M)."
-                            Press-EnterToContinue; continue
+                            Wait-EnterKey; continue
                         }
                     }
                     
                     if ($dgType -eq "integer") {
                         if ($newKey -notmatch '^-?[0-9]+$') {
                             Write-LogError "Invalid entry. Expected an integer value."
-                            Press-EnterToContinue; continue
+                            Wait-EnterKey; continue
                         }
                     }
                     
@@ -4210,45 +4257,45 @@ function Invoke-EditorSubmenu {
                 } else {
                     Write-Host ""
                     $newUrl = Read-Host "  Enter domain or URL to add"
-                    if ([string]::IsNullOrWhiteSpace($newUrl)) { Write-LogWarn "No URL provided."; Press-EnterToContinue; continue }
+                    if ([string]::IsNullOrWhiteSpace($newUrl)) { Write-LogWarn "No URL provided."; Wait-EnterKey; continue }
                     
                     # Validate domain format before conversion
                     $checkDomain = $newUrl -replace '^https?://', ''
                     $checkDomain = $checkDomain -replace '/.*$', ''
                     if ([string]::IsNullOrWhiteSpace($checkDomain)) {
                         Write-LogError "Invalid entry: empty after removing protocol/path."
-                        Press-EnterToContinue; continue
+                        Wait-EnterKey; continue
                     }
                     if ($checkDomain -match '\s') {
                         Write-LogError "Invalid entry: contains spaces."
-                        Press-EnterToContinue; continue
+                        Wait-EnterKey; continue
                     }
                     if ($checkDomain -notmatch '^[a-zA-Z0-9.*_-]+$') {
                         Write-LogError "Invalid entry: contains invalid characters."
-                        Press-EnterToContinue; continue
+                        Wait-EnterKey; continue
                     }
                     if ($checkDomain.Contains('..')) {
                         Write-LogError "Invalid entry: consecutive dots."
-                        Press-EnterToContinue; continue
+                        Wait-EnterKey; continue
                     }
                     
                     $formattedUrl = Format-DomainForUrlCategory -Domain $newUrl
-                    if ($workingKeys -contains $formattedUrl) { Write-LogWarn "URL '$formattedUrl' already exists."; Press-EnterToContinue; continue }
+                    if ($workingKeys -contains $formattedUrl) { Write-LogWarn "URL '$formattedUrl' already exists."; Wait-EnterKey; continue }
                     Write-LogInfo "Will add: $formattedUrl"
                     $confirmAdd = Read-Host "  Confirm? (yes/no) [yes]"
                     if ([string]::IsNullOrWhiteSpace($confirmAdd)) { $confirmAdd = "yes" }
-                    if ($confirmAdd -ne "yes") { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
+                    if ($confirmAdd -ne "yes") { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
                     $workingKeys.Add($formattedUrl) | Out-Null
                     $workingValues.Add("") | Out-Null
                     Write-LogOk "URL staged for addition: $formattedUrl"
                 }
-                Press-EnterToContinue
+                Wait-EnterKey
             }
             "d" {
                 # Delete single entry
                 Write-Host ""
                 $delInput = Read-Host "  Enter entry number or key to delete (or 'q' to cancel)"
-                if ([string]::IsNullOrWhiteSpace($delInput) -or $delInput -eq 'q') { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
+                if ([string]::IsNullOrWhiteSpace($delInput) -or $delInput -eq 'q') { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
                 
                 $delKey = ""
                 $num = 0
@@ -4262,33 +4309,33 @@ function Invoke-EditorSubmenu {
                     $delKey = $delInput
                 }
                 
-                if ([string]::IsNullOrWhiteSpace($delKey)) { Write-LogError "Entry not found."; Press-EnterToContinue; continue }
+                if ([string]::IsNullOrWhiteSpace($delKey)) { Write-LogError "Entry not found."; Wait-EnterKey; continue }
                 
                 $foundIdx = $workingKeys.IndexOf($delKey)
-                if ($foundIdx -eq -1) { Write-LogError "Entry not found: $delKey"; Press-EnterToContinue; continue }
+                if ($foundIdx -eq -1) { Write-LogError "Entry not found: $delKey"; Wait-EnterKey; continue }
                 
                 Write-Host ""
                 Write-LogWarn "Delete entry: $delKey"
                 Write-Host "  Confirm? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirmDel = Read-Host
-                if ($confirmDel -ne "yes") { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
+                if ($confirmDel -ne "yes") { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
                 
                 $workingKeys.RemoveAt($foundIdx)
                 $workingValues.RemoveAt($foundIdx)
                 Write-LogOk "Entry staged for deletion: $delKey"
-                Press-EnterToContinue
+                Wait-EnterKey
             }
             "x" {
                 # Delete by pattern
                 Write-Host ""
                 $delPattern = Read-Host "  Enter pattern to match entries for deletion"
-                if ([string]::IsNullOrWhiteSpace($delPattern)) { Write-LogWarn "No pattern provided."; Press-EnterToContinue; continue }
+                if ([string]::IsNullOrWhiteSpace($delPattern)) { Write-LogWarn "No pattern provided."; Wait-EnterKey; continue }
                 
                 $matchIndices = @()
                 for ($i = 0; $i -lt $workingKeys.Count; $i++) {
                     if ($workingKeys[$i] -match [regex]::Escape($delPattern)) { $matchIndices += $i }
                 }
                 
-                if ($matchIndices.Count -eq 0) { Write-LogInfo "No entries match pattern '$delPattern'."; Press-EnterToContinue; continue }
+                if ($matchIndices.Count -eq 0) { Write-LogInfo "No entries match pattern '$delPattern'."; Wait-EnterKey; continue }
                 
                 Write-Host ""
                 Write-LogWarn "Found $($matchIndices.Count) entries matching '$delPattern':"
@@ -4303,7 +4350,7 @@ function Invoke-EditorSubmenu {
                 
                 Write-Host ""
                 Write-Host "  Delete all $($matchIndices.Count) matching entries? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirmDel = Read-Host
-                if ($confirmDel -ne "yes") { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
+                if ($confirmDel -ne "yes") { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
                 
                 # Remove in reverse order to preserve indices
                 $matchIndices | Sort-Object -Descending | ForEach-Object {
@@ -4311,11 +4358,11 @@ function Invoke-EditorSubmenu {
                     $workingValues.RemoveAt($_)
                 }
                 Write-LogOk "$($matchIndices.Count) entries staged for deletion."
-                Press-EnterToContinue
+                Wait-EnterKey
             }
             "w" {
                 # Apply changes to current device
-                if (-not (Test-PendingChanges)) { Write-LogInfo "No changes to apply."; Press-EnterToContinue; continue }
+                if (-not (Test-PendingChanges)) { Write-LogInfo "No changes to apply."; Wait-EnterKey; continue }
                 
                 $changes = Get-ChangeAnalysis
                 
@@ -4341,7 +4388,7 @@ function Invoke-EditorSubmenu {
                 Write-Host "  Final count: $($workingKeys.Count) entries" -ForegroundColor White
                 Write-Host ""
                 Write-Host "  Apply these changes? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirmApply = Read-Host
-                if ($confirmApply -ne "yes") { Write-LogInfo "Cancelled."; Press-EnterToContinue; continue }
+                if ($confirmApply -ne "yes") { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
                 
                 # Create backup
                 if ($script:BACKUPS_ENABLED -eq 1) {
@@ -4378,7 +4425,7 @@ function Invoke-EditorSubmenu {
                                 Write-LogError "tmsh Modify unavailable: $($changes.ValueChanges.Count) record(s) have changed values,"
                                 Write-LogError "which records add/delete cannot apply."
                                 Write-LogError "Use Full Replace mode for this change set. No changes have been made."
-                                Press-EnterToContinue
+                                Wait-EnterKey
                                 continue
                             }
                             # Gate: tmsh passthrough embeds keys/values unquoted
@@ -4393,7 +4440,7 @@ function Invoke-EditorSubmenu {
                                 Write-LogError "tmsh Modify unavailable: one or more keys or values contain characters"
                                 Write-LogError "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
                                 Write-LogError "Use Full Replace mode for this change set. No changes have been made."
-                                Press-EnterToContinue
+                                Wait-EnterKey
                                 continue
                             }
                             Write-LogStep "Applying changes to datagroup (tmsh modify)..."
@@ -4430,7 +4477,7 @@ function Invoke-EditorSubmenu {
                             
                             if ($incErrors -gt 0) {
                                 Write-LogError "tmsh modify completed with errors."
-                                Press-EnterToContinue
+                                Wait-EnterKey
                                 continue
                             }
                             Write-LogOk "Changes applied successfully."
@@ -4443,13 +4490,13 @@ function Invoke-EditorSubmenu {
                                 Write-LogOk "Changes applied successfully."
                             } else {
                                 Write-LogError "Failed to apply changes. HTTP $($result.StatusCode)"
-                                Press-EnterToContinue
+                                Wait-EnterKey
                                 continue
                             }
                         }
                         default {
                             Write-LogInfo "Cancelled."
-                            Press-EnterToContinue
+                            Wait-EnterKey
                             continue
                         }
                     }
@@ -4476,11 +4523,11 @@ function Invoke-EditorSubmenu {
                 foreach ($v in $workingValues) { $originalValues.Add($v) | Out-Null }
                 
                 Invoke-PromptSaveConfig
-                Press-EnterToContinue
+                Wait-EnterKey
             }
             "D" {
                 # Deploy to fleet
-                if (-not (Test-FleetAvailable)) { Write-LogWarn "No fleet configured."; Press-EnterToContinue; continue }
+                if (-not (Test-FleetAvailable)) { Write-LogWarn "No fleet configured."; Wait-EnterKey; continue }
                 
                 $hasPending = Test-PendingChanges
                 $changes = @{ Additions = @(); Deletions = @(); ValueChanges = @() }
@@ -4489,7 +4536,7 @@ function Invoke-EditorSubmenu {
                     Write-Host ""
                     Write-LogInfo "No pending changes detected."
                     Write-Host "  Deploy current state to fleet anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $deployAnyway = Read-Host
-                    if ($deployAnyway -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+                    if ($deployAnyway -ne "yes") { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
                 }
                 
                 if ($hasPending) {
@@ -4524,7 +4571,7 @@ function Invoke-EditorSubmenu {
                     Write-Host ""
                     
                     Write-Host "  Continue to deployment options? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $contDeploy = Read-Host
-                    if ($contDeploy -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+                    if ($contDeploy -ne "yes") { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
                     
                     # Select deploy mode
                     Write-Host ""
@@ -4538,7 +4585,7 @@ function Invoke-EditorSubmenu {
                     Write-Host ""
                     $deployModeChoice = Read-Host "  Select [0-2]"
                     $deployMode = switch ($deployModeChoice) { "1" { "replace" }; "2" { "merge" }; default { "" } }
-                    if ([string]::IsNullOrWhiteSpace($deployMode)) { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+                    if ([string]::IsNullOrWhiteSpace($deployMode)) { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
 
                     # Gate: merge mode embeds keys/values unquoted in tmsh; reject
                     # unsafe change sets before any device is modified
@@ -4548,7 +4595,7 @@ function Invoke-EditorSubmenu {
                             Write-LogError "Merge mode unavailable: $($changes.ValueChanges.Count) record(s) have changed values,"
                             Write-LogError "which tmsh records add/delete cannot apply."
                             Write-LogError "Use Full Replace mode to deploy this change set. No changes have been made."
-                            Press-EnterToContinue
+                            Wait-EnterKey
                             continue
                         }
                         $tmshCheck = @()
@@ -4562,7 +4609,7 @@ function Invoke-EditorSubmenu {
                             Write-LogError "Merge mode unavailable: one or more keys or values contain characters"
                             Write-LogError "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
                             Write-LogError "Use Full Replace mode to deploy this change set. No changes have been made."
-                            Press-EnterToContinue
+                            Wait-EnterKey
                             continue
                         }
                     }
@@ -4578,7 +4625,7 @@ function Invoke-EditorSubmenu {
                 } else {
                     $deployTargets = Select-DeployScope -ObjectType "urlcat" -ObjectName $CatName
                 }
-                if ($deployTargets.Count -eq 0) { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+                if ($deployTargets.Count -eq 0) { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
                 
                 $targetCount = $deployTargets.Count
                 
@@ -4622,7 +4669,7 @@ function Invoke-EditorSubmenu {
                 Write-Host $warningText -ForegroundColor Red
                 Write-Host ""
                 $confirmDeploy = Read-Host "  Type DEPLOY to confirm"
-                if ($confirmDeploy -cne "DEPLOY") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+                if ($confirmDeploy -cne "DEPLOY") { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
                 
                 Clear-Host
                 
@@ -4641,7 +4688,7 @@ function Invoke-EditorSubmenu {
                 $readyCount = @($validationResults | Where-Object { $_.Status -eq "OK" }).Count
                 if ($readyCount -eq 0) {
                     Write-LogWarn "No fleet hosts passed validation. No changes have been made."
-                    Press-EnterToContinue
+                    Wait-EnterKey
                     continue
                 }
                 
@@ -4657,7 +4704,7 @@ function Invoke-EditorSubmenu {
                     $proceedDeploy = Read-Host
                     if ($proceedDeploy -ne "yes") {
                         Write-LogInfo "Deploy cancelled. No changes have been made."
-                        Press-EnterToContinue
+                        Wait-EnterKey
                         continue
                     }
                 }
@@ -4687,7 +4734,7 @@ function Invoke-EditorSubmenu {
                         } else {
                             Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
                             Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-                            if ($cont -ne "yes") { Write-LogInfo "Deploy cancelled."; Press-EnterToContinue; continue }
+                            if ($cont -ne "yes") { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
                         }
                     }
                     
@@ -4726,7 +4773,7 @@ function Invoke-EditorSubmenu {
                         Write-Host ""
                         Write-LogError "Failed to apply changes to current device."
                         Write-Host "  Continue deploying to fleet anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $contFleet = Read-Host
-                        if ($contFleet -ne "yes") { Write-LogInfo "Deploy aborted."; Press-EnterToContinue; continue }
+                        if ($contFleet -ne "yes") { Write-LogInfo "Deploy aborted."; Wait-EnterKey; continue }
                     }
                     
                     $currentStatus = $(if ($currentSuccess) { "OK" } else { "FAIL" })
@@ -4766,21 +4813,26 @@ function Invoke-EditorSubmenu {
                 }
                 
                 # Build deploy action scriptblock
+                # GetNewClosure binds the editor's variables ($Partition, $DgName,
+                # $deployMode, $records, ...) into the scriptblock at creation.
+                # Without it, resolution falls through the dynamic call stack at
+                # invocation inside Invoke-FleetDeploy - which works only by the
+                # accident that its own parameter names carry the same values
                 if ($EditType -eq "datagroup") {
                     $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
                     $deployAction = {
                         param($h, $s)
-                        Deploy-DatagroupToHost -HostName $h -Partition $Partition -DgName $DgName -DgType $dgType `
+                        Deploy-DatagroupToHost -HostName $h -Partition $Partition -DgName $DgName `
                             -RecordsJson $records -SiteId $s -DeployMode $deployMode `
                             -AdditionsJson $additionsJson -DeletionsList $deletionsList
-                    }
+                    }.GetNewClosure()
                 } else {
                     $urlObjects = ConvertTo-UrlObjects -Urls @($workingKeys)
                     $deployAction = {
                         param($h, $s)
                         Deploy-UrlCategoryToHost -HostName $h -CatName $CatName -UrlsJson $urlObjects -SiteId $s `
                             -DeployMode $deployMode -AdditionsJson $additionsJson -DeletionsList $deletionsList
-                    }
+                    }.GetNewClosure()
                 }
                 
                 $objectName = $(if ($EditType -eq "datagroup") { $DgName } else { $CatName })
@@ -4789,7 +4841,7 @@ function Invoke-EditorSubmenu {
                     -DeployAction $deployAction -CurrentHost $script:RemoteHost `
                     -CurrentStatus $currentStatus -CurrentMessage $currentMessage
                 
-                Press-EnterToContinue
+                Wait-EnterKey
             }
             "q" {
                 if (Test-PendingChanges) {
@@ -4827,7 +4879,7 @@ function Invoke-Bootstrap {
             "2" { Invoke-BootstrapImport; return }
             default {
                 Write-LogInfo "Cancelled."
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
         }
@@ -4889,7 +4941,7 @@ function Invoke-BootstrapImport {
     if (-not (Test-Path $bootstrapFile)) {
         Write-LogError "Bootstrap config not found: $bootstrapFile"
         Write-LogInfo "Use 'Create Bootstrap config' to generate a template."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -4982,14 +5034,14 @@ function Invoke-BootstrapImport {
     if ($errors -gt 0) {
         Write-Host ""
         Write-LogError "$errors validation error(s) found. Fix bootstrap.conf and try again."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
     $totalObjects = $dgNames.Count + $catNames.Count
     if ($totalObjects -eq 0) {
         Write-LogWarn "No entries found in bootstrap.conf."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -5029,7 +5081,7 @@ function Invoke-BootstrapImport {
             $partition = Select-Partition -Prompt "Select partition for datagroups"
             if ([string]::IsNullOrWhiteSpace($partition)) {
                 Write-LogInfo "Cancelled."
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
         } else {
@@ -5043,7 +5095,7 @@ function Invoke-BootstrapImport {
         $scopeResult = Select-DeployScope -ObjectType "bootstrap" -ObjectName "bootstrap.conf" -IncludeSelf $true
         if ($scopeResult.Count -eq 0) {
             Write-LogInfo "Cancelled."
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
         $deployTargets = @($scopeResult)
@@ -5061,7 +5113,7 @@ function Invoke-BootstrapImport {
     Write-Host "  Proceed? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirm = Read-Host
     if ($confirm -ne "yes") {
         Write-LogInfo "Cancelled."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -5084,8 +5136,13 @@ function Invoke-BootstrapImport {
         # Create objects
         $rc = Invoke-BootstrapCreateObjects -Partition $partition -DgNames $dgNames -DgTypes $dgTypes -CatNames $catNames -CatActions $catActions
         
-        # Save on target
-        Save-F5Config | Out-Null
+        # Save on target - a failed save means the objects exist in the running
+        # config but are lost on reboot, so it counts as a host failure
+        if (-not (Save-F5Config)) {
+            Write-LogWarn "$host_ ($hostSite) - Objects created but configuration save failed. Save manually."
+            $totalFail++
+            continue
+        }
         
         if ($rc -eq 0) {
             $totalOk++
@@ -5101,7 +5158,7 @@ function Invoke-BootstrapImport {
     Write-LogInfo "Bootstrap: $totalOk succeeded, $totalFail failed, $totalSkip skipped"
     Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # Create the validated bootstrap objects on the connected host
@@ -5185,7 +5242,7 @@ function Main {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.3                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.4                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -5209,7 +5266,7 @@ function Main {
                 "Started: $(Get-Date)",
                 "Mode: REST API"
             ) | Out-File -FilePath $script:LogFile -Encoding UTF8
-        } catch {}
+        } catch { <# non-critical #> }
     } else {
         $script:LogFile = ""
     }
@@ -5219,7 +5276,7 @@ function Main {
     
     # Update log with target
     if ($script:LogFile) {
-        try { "Target: $($script:RemoteHost)" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 } catch {}
+        try { "Target: $($script:RemoteHost)" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 } catch { <# non-critical #> }
     }
     
     Start-Sleep -Seconds 2
@@ -5248,7 +5305,7 @@ function Main {
                 }
                 default {
                     Write-LogWarn "Invalid selection."
-                    Press-EnterToContinue
+                    Wait-EnterKey
                 }
             }
             

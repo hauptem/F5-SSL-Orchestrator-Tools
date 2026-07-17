@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.3
+# Version: 5.4
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -1515,7 +1515,9 @@ backup_remote_internal_datagroup() {
     safe_hostname=$(echo "${host}" | sed 's/[^a-zA-Z0-9_-]/_/g')
     local backup_ts
     backup_ts=$(date +%Y%m%d_%H%M%S)
-    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_${partition}_${dg_name}_${backup_ts}.csv"
+    # Same name shape as connected-host backups (including the internal class
+    # segment) so both paths share one rotation pool per host and object
+    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_${partition}_${dg_name}_internal_${backup_ts}.csv"
     
     {
         echo "# Datagroup Backup: /${partition}/${dg_name}"
@@ -1530,6 +1532,7 @@ backup_remote_internal_datagroup() {
         fi
     } > "${backup_file}" 2>/dev/null || return 0
     
+    cleanup_old_backups "${safe_hostname}_${partition}_${dg_name}_internal" "${BACKUP_DIR}/${site_id}"
     echo "${backup_file}"
     return 0
 }
@@ -1579,6 +1582,7 @@ backup_remote_url_category() {
         fi
     } > "${backup_file}" 2>/dev/null || return 0
     
+    cleanup_old_backups "${safe_hostname}_urlcat_${safe_catname}" "${BACKUP_DIR}/${site_id}"
     echo "${backup_file}"
     return 0
 }
@@ -2815,7 +2819,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.3                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.4                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -6867,8 +6871,13 @@ menu_bootstrap_import() {
         bootstrap_create_objects "${partition}" dg_names dg_types cat_names cat_actions
         local rc=$?
         
-        # Save on target
-        save_config >/dev/null 2>&1
+        # Save on target - a failed save means the objects exist in the running
+        # config but are lost on reboot, so it counts as a host failure
+        if ! save_config >/dev/null 2>&1; then
+            log_warn "${host} (${host_site}) - Objects created but configuration save failed. Save manually."
+            total_fail=$((total_fail + 1))
+            continue
+        fi
         
         if [ ${rc} -eq 0 ]; then
             total_ok=$((total_ok + 1))
@@ -6963,7 +6972,7 @@ main() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.3                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.4                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
