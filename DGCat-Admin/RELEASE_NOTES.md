@@ -1,3 +1,14 @@
+# DGCat-Admin v5.4 Release Notes 
+
+- Bootstrap no longer discards per-host save results. Objects created but not saved to disk now count as a host failure with a warning to save manually
+- Fleet backups now rotate under MAX_BACKUPS like connected-host backups. Fleet datagroup backup filenames gain the internal class segment so both paths share one rotation pool per host and object; fleet backups from earlier versions use the old name shape and are not managed - remove manually if desired
+- PowerShell: config save verification is locale-independent and no longer takes the BIG-IP close-after-save quirk on faith. A connection drop is confirmed with a reachability check and an idempotent save retry, so a genuine network failure during save is reported as a failure; the previous detection matched localized .NET exception text and never fired on non-English Windows. The bash version never had this defect - curl accepts a post-response connection close
+- PowerShell: requires Windows PowerShell 5.1. PowerShell 7 ignores the certificate policy used for self-signed management certs; the script now exits immediately with the correct invocation instead of failing later with TLS errors
+- PowerShell: fleet deploy scriptblocks are bound as closures at creation. They previously resolved editor variables through the dynamic call stack at invocation, which worked only because Invoke-FleetDeploy's parameter names carried the same values - a latent break on any parameter rename
+- PowerShell: search viewer no longer assigns to the $input automatic variable
+- PowerShell housekeeping: Wait-EnterKey replaces Press-EnterToContinue (approved PowerShell verb), unused DgType parameter removed from Deploy-DatagroupToHost, bare catch blocks normalized
+- The bash version number now tracks the suite for consistency; per the v5.3 policy it remains feature-complete and receives targeted bugfixes only (both fixes above)
+
 # DGCat-Admin v5.3 Release Notes 
 
 - tmsh Modify and fleet merge deploys now reject keys/values containing whitespace, braces, quotes, backslash, ';', or '#' since these are embedded unquoted in the tmsh options string and can corrupt the parse or delete unintended records; Full Replace is unaffected
