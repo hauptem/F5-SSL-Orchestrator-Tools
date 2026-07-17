@@ -1,6 +1,6 @@
 # Release Notes
 
-## b6.3.15.0-devel (Beta 5 - July 17 2026)
+## b6.3.15.0-devel (Beta 6 - July 17 2026)
 
 - Snapshot block field backupType renamed to captureType. SSLO Snapshots recorded by Beta 5 and earlier will fail import validation using Beta 6 - re-record your SSLO's using Beta 6. The updated snapshot format version remains at 1.0 since we are still in beta.
 - Windows PowerShell 5.1 is enforced at startup. PowerShell 7+ ignores the ServicePointManager certificate bypass, so every connection would fail with opaque TLS errors. The tool now exits with the correct powershell.exe invocation instead
