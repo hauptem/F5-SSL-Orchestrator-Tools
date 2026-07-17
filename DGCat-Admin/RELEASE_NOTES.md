@@ -6,8 +6,8 @@
 - PowerShell: requires Windows PowerShell 5.1. ... PowerShell 7 ignores the certificate policy used for self-signed management certs; the script now exits immediately with the correct invocation instead of failing later with TLS errors
 - PowerShell: fleet deploy scriptblocks are bound as closures at creation. They previously resolved editor variables through the dynamic call stack at invocation, which worked only because Invoke-FleetDeploy's parameter names carried the same values - a latent break on any parameter rename
 - PowerShell: search viewer no longer assigns to the $input automatic variable
-- PowerShell housekeeping: Wait-EnterKey replaces Press-EnterToContinue (approved PowerShell verb), unused DgType parameter removed from Deploy-DatagroupToHost, bare catch blocks normalized
-- The bash version number now tracks the suite for consistency; per the v5.3 policy it remains feature-complete and receives targeted bugfixes only (both fixes above)
+- PowerShell housekeeping: Wait-EnterKey replaces Press-EnterToContinue, unused DgType parameter removed from Deploy-DatagroupToHost, bare catch blocks normalized
+- The bash version number now tracks the suite for consistency and receives targeted bugfixes only (both fixes above)
 
 # DGCat-Admin v5.3 Release Notes 
 
