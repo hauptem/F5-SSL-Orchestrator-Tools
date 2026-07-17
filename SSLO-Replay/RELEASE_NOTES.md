@@ -32,7 +32,17 @@
     block               cleaned iAppsLX block (inputProperties only, runtime fields stripped)
 
 }
-``` 
+```
+
+### Block fields stripped at capture
+
+id, existingBlockId, selfLink, generation, lastUpdateMicros, restrictedId, restrictedHash, obRestrictedAttribute, state, dataProperties, audit
+
+### File naming
+
+sslo-snapshot_{hostname}_{yyyyMMdd-HHmmss}.json
+
+sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
 
 ## b5.3.15.0-devel (Beta 5 - June 12 2026)
 
@@ -66,16 +76,6 @@
 - Dependencies sorted by type group (PKI, network, monitors, profiles, crypto, data, categories), then alphabetically
 - Dedup key changed from path to type:path. Certs and keys with the same name no longer collide
 - Version-lock removed. Snapshots are rejected only for snapshot format incompatibility, not tool version mismatch
-
-### Block fields stripped at capture
-
-id, existingBlockId, selfLink, generation, lastUpdateMicros, restrictedId, restrictedHash, obRestrictedAttribute, state, dataProperties, audit
-
-### File naming
-
-sslo-snapshot_{hostname}_{yyyyMMdd-HHmmss}.json
-
-sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
 
 ## b2.3.15.0-devel (Beta 2 - May 29 2026)
 
