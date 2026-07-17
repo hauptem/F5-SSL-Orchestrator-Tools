@@ -1,12 +1,13 @@
 ﻿# =============================================================================
-# SSLO-Replay - F5 SSL Orchestrator Snapshot and Restore Tool
+# SSLO-Replay - F5 SSL Orchestrator Snapshot and Replay Tool
 # =============================================================================
-# Version: vb5.3.15-devel (Beta 5 June 12 2026)
+# Version: vb6.3.15-devel (Beta 6 July 1 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
-# Requirements: PowerShell 5.1+, BIG-IP TMOS 17.x+ with SSLO 12.x+
+# Requirements: Windows PowerShell 5.1 (Desktop edition only - pwsh 7+ is
+#               not supported), BIG-IP TMOS 17.x+ with SSLO 12.x+
 #
 # REFERENCE:
 #   State-to-CREATE transformation logic, per-type inputProperty templates,
@@ -69,6 +70,14 @@ $script:OUTPUT_DIR = Join-Path $PSScriptRoot "sslo-replay-snapshots"
 
 # API timeout (seconds)
 $script:API_TIMEOUT = 60
+
+# WebException statuses thrown when BIG-IP closes TCP after a config save POST
+# Locale-invariant enum values - the exception message text is localized
+$script:CONNECTION_DROP_STATUSES = @(
+    "ConnectionClosed"
+    "ReceiveFailure"
+    "KeepAliveFailure"
+)
 
 # Block-level configProcessorTimeoutSeconds for operation blocks.
 # The gc processor's internal SSLO_CONFIG_PROCESSOR_TIMEOUT_SECS is 90, but the
@@ -343,12 +352,26 @@ $script:SSLOVersion = ""
 $script:SSLOVersionNum = $null
 $script:PfIdRegenerated = 0
 $script:PassphraseCache = @{}
+$script:ConsecutiveFailures = 0
 
 # =============================================================================
 # SSL BYPASS (self-signed BIG-IP management certs)
 # =============================================================================
 
 function Initialize-SslBypass {
+    # ServicePointManager.CertificatePolicy is ignored by PowerShell 7+ (Core),
+    # so the bypass would silently not apply and every connection would fail
+    # with opaque TLS errors. Exit with the correct invocation instead
+    if ($PSVersionTable.PSEdition -and $PSVersionTable.PSEdition -ne "Desktop") {
+        Write-Host ""
+        Write-LogError "SSLO-Replay requires Windows PowerShell 5.1 (Desktop edition)."
+        Write-LogError "This session is PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))."
+        Write-Host ""
+        Write-Host "  Run with:  powershell.exe -File .\sslo-replay.ps1" -ForegroundColor Cyan
+        Write-Host ""
+        exit 1
+    }
+    
     if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
         Add-Type @"
 using System.Net;
@@ -410,7 +433,7 @@ function Write-LogStep {
 # UTILITY FUNCTIONS
 # =============================================================================
 
-function Press-EnterToContinue {
+function Wait-EnterKey {
     Write-Host ""
     Read-Host "  Press Enter to continue"
 }
@@ -446,7 +469,7 @@ function Get-TypeLabel {
 # =============================================================================
 
 # Send a REST request to the connected BIG-IP
-# Returns: @{ Success; Response; StatusCode; Error }
+# Returns: @{ Success; Response; StatusCode; Error; WebStatus }
 function Invoke-F5Api {
     param(
         [string]$Method = "GET",
@@ -481,10 +504,16 @@ function Invoke-F5Api {
         return @{ Success = $true; Response = $response; StatusCode = 200 }
     } catch {
         $statusCode = 0
+        # WebException.Status is a locale-invariant enum - unlike the exception
+        # message, which .NET Framework localizes per Windows display language
+        $webStatus = ""
+        if ($_.Exception -is [System.Net.WebException]) {
+            $webStatus = [string]$_.Exception.Status
+        }
         if ($_.Exception.Response) {
             $statusCode = [int]$_.Exception.Response.StatusCode
         }
-        return @{ Success = $false; Response = $null; StatusCode = $statusCode; Error = $_.Exception.Message }
+        return @{ Success = $false; Response = $null; StatusCode = $statusCode; Error = $_.Exception.Message; WebStatus = $webStatus }
     }
 }
 
@@ -513,9 +542,23 @@ function Save-F5Config {
     # Save TMOS configuration
     $result = Invoke-F5Post -Endpoint "/mgmt/tm/sys/config" -Body @{ command = "save" }
     $tmshOk = $result.Success
-    # BIG-IP closes TCP after a successful save config POST.
-    # Invoke-RestMethod treats this as a failure even though the save completed.
-    if ($result.Error -match "underlying connection was closed") { $tmshOk = $true }
+    
+    # BIG-IP closes TCP after a successful save config POST, and Invoke-RestMethod
+    # surfaces that as a failure even though the save completed. A genuine network
+    # drop mid-exchange throws the SAME status, so do not take the quirk on faith:
+    # confirm the management plane is reachable, then re-issue the save (idempotent).
+    # A clean retry proves the save ran; if the retry hits the drop signature again
+    # while the box is reachable, that is the quirk, not a dead network
+    if (-not $tmshOk -and $result.WebStatus -in $script:CONNECTION_DROP_STATUSES) {
+        Start-Sleep -Seconds 2
+        $reach = Invoke-F5Get -Endpoint "/mgmt/tm/sys/version"
+        if ($reach.Success) {
+            $retry = Invoke-F5Post -Endpoint "/mgmt/tm/sys/config" -Body @{ command = "save" }
+            if ($retry.Success -or $retry.WebStatus -in $script:CONNECTION_DROP_STATUSES) {
+                $tmshOk = $true
+            }
+        }
+    }
     
     # Save iAppsLX block database - undocumented endpoint from F5 sslofix utility
     # Non-fatal: if this fails, the tmsh save above is sufficient
@@ -695,10 +738,14 @@ function Get-StateBlockType {
     }
     
     # Topology blocks use "sslo_" prefix without a type letter
-    # e.g. sslo_HTTPS_tcp443. Exclude operation blocks: this tool and the GUI
-    # use "sslo_ob_", the F5 Ansible collection uses "sslo_obj_" - match the
-    # common stem "sslo_ob" to cover both
-    if ($BlockName -match "^sslo_" -and $BlockName -notmatch "^sslo_ob") {
+    # e.g. sslo_HTTPS_tcp443. Exclude operation blocks by their EXACT prefixes:
+    # this tool and the GUI use "sslo_ob_", the F5 Ansible collection uses
+    # "sslo_obj_". Match the full prefixes, not the bare "sslo_ob" stem - the
+    # stem would also swallow legitimate topology names like sslo_observability,
+    # silently dropping them from snapshots, redeploy, and delete accounting.
+    # (A topology literally named inside the sslo_ob_/sslo_obj_ namespace is
+    # still indistinguishable by name - that floor is inherent to the scheme)
+    if ($BlockName -match "^sslo_" -and $BlockName -notmatch "^sslo_ob_" -and $BlockName -notmatch "^sslo_obj_") {
         return "TOPOLOGY"
     }
     
@@ -1133,7 +1180,7 @@ function Get-MonitorDependency {
     
     $objName = $MonitorPath -replace "^/Common/", ""
     
-    # Probe each monitor type endpoint until we get a hit
+    # Probe each monitor type endpoint until one succeeds
     foreach ($probe in $script:MONITOR_PROBE_ORDER) {
         $fullEndpoint = "$($probe.Endpoint)~Common~${objName}"
         $result = Invoke-F5Get -Endpoint $fullEndpoint
@@ -1184,8 +1231,8 @@ function Get-BlockDependencyRefs {
         
         "SSL_SETTINGS" {
             # Certificates and keys - name only, no content, no secrets
-            # These bypass Add-Ref (which filters cert/key endpoints) because we want
-            # name-only references in the manifest so the snapshot is self-documenting.
+            # These bypass Add-Ref (which filters cert/key endpoints) to keep
+            # name-only references in the manifest so the snapshot is self-documenting
             $certSeen = @{}
             foreach ($section in @("certKeyChain", "caCertKeyChain")) {
                 if ($ConfigData.clientSettings -and $ConfigData.clientSettings.$section) {
@@ -1624,11 +1671,11 @@ function Get-DepDisplayType {
 }
 
 # =============================================================================
-# OPTION 1: SSLO CONFIGURATION DUMP
+# OPTION 1: SNAPSHOT RECORD
 # =============================================================================
 
 # Option 1: Record an SSLO snapshot with paired dependency manifest
-function Invoke-SsloDump {
+function Invoke-SsloRecord {
     Clear-Host
     Write-LogSection "Record SSLO Snapshot"
     Write-Host ""
@@ -1695,7 +1742,7 @@ function Invoke-SsloDump {
     }
     
     # -------------------------------------------------------------------------
-    # Step 3: Select blocks for backup
+    # Step 3: Select blocks for the snapshot
     # -------------------------------------------------------------------------
     $ssloBlocks = @()
     
@@ -1709,7 +1756,7 @@ function Invoke-SsloDump {
                     DeploymentType = $item.DeploymentType
                     DeploymentName = $item.DeploymentName
                     Generation     = $item.Generation
-                    BackupType     = $script:CAT_REPLAYABLE
+                    CaptureType     = $script:CAT_REPLAYABLE
                 }
             }
         } elseif ($item.Category -eq "state") {
@@ -1719,7 +1766,7 @@ function Invoke-SsloDump {
                     DeploymentType = $item.DeploymentType
                     DeploymentName = $item.DeploymentName
                     Generation     = $item.Generation
-                    BackupType     = $script:CAT_STATE
+                    CaptureType     = $script:CAT_STATE
                 }
             }
         }
@@ -1744,9 +1791,9 @@ function Invoke-SsloDump {
             $dedupMap[$name] = $item
         } else {
             $existing = $dedupMap[$name]
-            if ($item.BackupType -eq $script:CAT_REPLAYABLE -and $existing.BackupType -eq $script:CAT_STATE) {
+            if ($item.CaptureType -eq $script:CAT_REPLAYABLE -and $existing.CaptureType -eq $script:CAT_STATE) {
                 $dedupMap[$name] = $item
-            } elseif ($item.BackupType -eq $existing.BackupType) {
+            } elseif ($item.CaptureType -eq $existing.CaptureType) {
                 $existingGen = 0
                 try { $existingGen = [int]$existing.Generation } catch { <# non-critical #> }
                 if ($gen -gt $existingGen) {
@@ -1779,7 +1826,7 @@ function Invoke-SsloDump {
         $outputBlocks += [ordered]@{
             deploymentType = $item.DeploymentType
             deploymentName = $item.DeploymentName
-            backupType     = $item.BackupType
+            captureType     = $item.CaptureType
             block          = $clean
         }
     }
@@ -1791,13 +1838,13 @@ function Invoke-SsloDump {
     $dependencies = Invoke-DependencyCapture -OutputBlocks $outputBlocks
     
     # -------------------------------------------------------------------------
-    # Step 8: Write backup file
+    # Step 8: Write snapshot file
     # -------------------------------------------------------------------------
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $safeName = $script:RemoteHostname -replace '[^a-zA-Z0-9\-\.]', '_'
     $filename = "sslo-snapshot_${safeName}_${timestamp}.json"
     
-    $backup = [ordered]@{
+    $snapshot = [ordered]@{
         metadata = [ordered]@{
             snapshotVersion  = $script:SNAPSHOT_FORMAT_VERSION
             tool             = "sslo-replay"
@@ -1820,7 +1867,7 @@ function Invoke-SsloDump {
     }
     
     $outputPath = Join-Path $script:OUTPUT_DIR $filename
-    $backup | ConvertTo-Json -Depth 30 | Out-File -FilePath $outputPath -Encoding UTF8
+    $snapshot | ConvertTo-Json -Depth 30 | Out-File -FilePath $outputPath -Encoding UTF8
     
     # Verify the written file round-trips. ConvertTo-Json silently truncates
     # beyond -Depth in PS 5.1, leaving parseable JSON with stringified objects
@@ -1840,7 +1887,7 @@ function Invoke-SsloDump {
         Write-Host ""
         Write-LogError "Snapshot verification failed - the written file did not round-trip cleanly."
         Write-LogError "Do not use this snapshot for replay: $outputPath"
-        Press-EnterToContinue
+        Wait-EnterKey
         return $false
     }
     
@@ -1983,17 +2030,17 @@ function Invoke-SsloDump {
     }
     Write-Host ""
     
-    Press-EnterToContinue
+    Wait-EnterKey
     return $true
 }
 
 # =============================================================================
-# BACKUP FILE IMPORT AND VALIDATION
+# SNAPSHOT IMPORT AND VALIDATION
 # =============================================================================
 
 # Parse and validate a snapshot file
-# Returns: backup object, or $null on validation failure
-function Import-SsloBackup {
+# Returns: snapshot object, or $null on validation failure
+function Import-SsloSnapshot {
     param([string]$FilePath)
     
     if (-not (Test-Path $FilePath)) {
@@ -2004,40 +2051,40 @@ function Import-SsloBackup {
     Write-LogStep "Reading snapshot file..."
     try {
         $raw = Get-Content -Path $FilePath -Raw -Encoding UTF8
-        $backup = $raw | ConvertFrom-Json
+        $snapshot = $raw | ConvertFrom-Json
     } catch {
         Write-LogError "Failed to parse JSON: $($_.Exception.Message)"
         return $null
     }
     
     # Validate metadata
-    if (-not $backup.metadata) {
+    if (-not $snapshot.metadata) {
         Write-LogError "Missing metadata section."
         return $null
     }
     
     $requiredMeta = @("snapshotVersion", "tool", "toolVersion", "source", "timestamp", "blockCount")
     foreach ($field in $requiredMeta) {
-        if (-not $backup.metadata.PSObject.Properties[$field]) {
+        if (-not $snapshot.metadata.PSObject.Properties[$field]) {
             Write-LogError "Missing metadata field: $field"
             return $null
         }
     }
     
-    if ($backup.metadata.tool -ne "sslo-replay") {
-        Write-LogError "Snapshot was not created by SSLO-Replay (tool: $($backup.metadata.tool))."
+    if ($snapshot.metadata.tool -ne "sslo-replay") {
+        Write-LogError "Snapshot was not created by SSLO-Replay (tool: $($snapshot.metadata.tool))."
         return $null
     }
     
-    if ([version]$backup.metadata.snapshotVersion -gt [version]$script:SNAPSHOT_FORMAT_VERSION) {
-        Write-LogWarn "Snapshot format v$($backup.metadata.snapshotVersion) is newer than this tool supports (v$($script:SNAPSHOT_FORMAT_VERSION))."
+    if ([version]$snapshot.metadata.snapshotVersion -gt [version]$script:SNAPSHOT_FORMAT_VERSION) {
+        Write-LogWarn "Snapshot format v$($snapshot.metadata.snapshotVersion) is newer than this tool supports (v$($script:SNAPSHOT_FORMAT_VERSION))."
         Write-LogWarn "Update SSLO-Replay to the latest version."
         Write-Host "  https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
         return $null
     }
     
     # Validate blocks array
-    if (-not $backup.blocks -or $backup.blocks.Count -eq 0) {
+    if (-not $snapshot.blocks -or $snapshot.blocks.Count -eq 0) {
         Write-LogError "Snapshot contains no blocks."
         return $null
     }
@@ -2045,12 +2092,12 @@ function Import-SsloBackup {
     # Validate each block entry
     $validCount = 0
     $invalidCount = 0
-    foreach ($entry in $backup.blocks) {
+    foreach ($entry in $snapshot.blocks) {
         $valid = $true
         
         if (-not $entry.deploymentType) { $valid = $false }
         if (-not $entry.deploymentName) { $valid = $false }
-        if (-not $entry.backupType) { $valid = $false }
+        if (-not $entry.captureType) { $valid = $false }
         if (-not $entry.block) { $valid = $false }
         if ($entry.block -and -not $entry.block.inputProperties) { $valid = $false }
         
@@ -2067,35 +2114,35 @@ function Import-SsloBackup {
         return $null
     }
     
-    if ([int]$backup.metadata.blockCount -ne @($backup.blocks).Count) {
-        Write-LogWarn "Snapshot blockCount metadata ($($backup.metadata.blockCount)) does not match actual blocks ($(@($backup.blocks).Count))."
+    if ([int]$snapshot.metadata.blockCount -ne @($snapshot.blocks).Count) {
+        Write-LogWarn "Snapshot blockCount metadata ($($snapshot.metadata.blockCount)) does not match actual blocks ($(@($snapshot.blocks).Count))."
         Write-LogWarn "The file may have been modified or truncated since it was recorded."
     }
     
     Write-LogOk "Snapshot validated: $validCount blocks ($invalidCount invalid)"
     
-    return $backup
+    return $snapshot
 }
 
 # Prompt the operator to select a snapshot file
 # Returns: full path, or $null if cancelled
-function Select-BackupFile {
+function Select-SnapshotFile {
     Clear-Host
     Write-LogSection "Select Snapshot"
     Write-Host ""
     
     # List available snapshots
-    $backupFiles = @()
+    $snapshotFiles = @()
     if (Test-Path $script:OUTPUT_DIR) {
-        $backupFiles = Get-ChildItem -Path $script:OUTPUT_DIR -Filter "sslo-snapshot_*.json" | Sort-Object LastWriteTime -Descending
+        $snapshotFiles = Get-ChildItem -Path $script:OUTPUT_DIR -Filter "sslo-snapshot_*.json" | Sort-Object LastWriteTime -Descending
     }
     
-    if ($backupFiles.Count -gt 0) {
+    if ($snapshotFiles.Count -gt 0) {
         Write-LogInfo "Available snapshots:"
         Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-        for ($i = 0; $i -lt $backupFiles.Count; $i++) {
+        for ($i = 0; $i -lt $snapshotFiles.Count; $i++) {
             $num = $i + 1
-            $file = $backupFiles[$i]
+            $file = $snapshotFiles[$i]
             $size = [math]::Round($file.Length / 1024, 1)
             Write-Host "    " -NoNewline
             Write-Host $num.ToString().PadLeft(2) -NoNewline -ForegroundColor Yellow
@@ -2104,7 +2151,7 @@ function Select-BackupFile {
         }
         Write-Host "  ────────────────────────────────────────────────────────────" -ForegroundColor Cyan
         Write-Host ""
-        $rangeLabel = if ($backupFiles.Count -eq 1) { "[1]" } else { "[1-$($backupFiles.Count)]" }
+        $rangeLabel = if ($snapshotFiles.Count -eq 1) { "[1]" } else { "[1-$($snapshotFiles.Count)]" }
         $selection = Read-Host "  Select $rangeLabel or enter full path (0 to cancel)"
     } else {
         Write-LogInfo "No snapshots found in $($script:OUTPUT_DIR)"
@@ -2116,8 +2163,8 @@ function Select-BackupFile {
     
     # Check if numeric selection
     $num = 0
-    if ([int]::TryParse($selection, [ref]$num) -and $num -ge 1 -and $num -le $backupFiles.Count) {
-        return $backupFiles[$num - 1].FullName
+    if ([int]::TryParse($selection, [ref]$num) -and $num -ge 1 -and $num -le $snapshotFiles.Count) {
+        return $snapshotFiles[$num - 1].FullName
     }
     
     # Treat as file path
@@ -2130,7 +2177,7 @@ function Select-BackupFile {
 }
 
 # =============================================================================
-# OPTION 2: SSLO RESTORE
+# OPTION 2: SNAPSHOT REPLAY
 # =============================================================================
 
 # Extract every service chain name a security policy references: rule actions
@@ -2160,14 +2207,14 @@ function Get-PolicyServiceChainNames {
 # Returns: ordered list of block entries (services -> chains -> the policy)
 function Get-PolicyDependencyTree {
     param(
-        [object]$Backup,
+        [object]$Snapshot,
         [string]$PolicyName
     )
     
     $requiredNames = [ordered]@{}
     
     # Find the policy block
-    $policyBlock = $Backup.blocks | Where-Object { $_.deploymentName -eq $PolicyName -and $_.deploymentType -eq "SECURITY_POLICY" } | Select-Object -First 1
+    $policyBlock = $Snapshot.blocks | Where-Object { $_.deploymentName -eq $PolicyName -and $_.deploymentType -eq "SECURITY_POLICY" } | Select-Object -First 1
     if (-not $policyBlock) { return @() }
     
     $requiredNames[$PolicyName] = $true
@@ -2185,7 +2232,7 @@ function Get-PolicyDependencyTree {
     
     # Walk each chain's orderedServiceList[].name (from bigip_sslo_config_service_chain.py)
     foreach ($chainName in @($requiredNames.Keys)) {
-        $chainBlock = $Backup.blocks | Where-Object { $_.deploymentName -eq $chainName -and $_.deploymentType -eq "SERVICE_CHAIN" } | Select-Object -First 1
+        $chainBlock = $Snapshot.blocks | Where-Object { $_.deploymentName -eq $chainName -and $_.deploymentType -eq "SERVICE_CHAIN" } | Select-Object -First 1
         if ($chainBlock) {
             $chainDataId = $script:TYPE_PROPERTY_MAP["SERVICE_CHAIN"]
             foreach ($prop in $chainBlock.block.inputProperties) {
@@ -2205,7 +2252,7 @@ function Get-PolicyDependencyTree {
     $result = @()
     foreach ($type in $script:DEPENDENCY_ORDER) {
         foreach ($name in $requiredNames.Keys) {
-            $block = $Backup.blocks | Where-Object { $_.deploymentName -eq $name -and $_.deploymentType -eq $type } | Select-Object -First 1
+            $block = $Snapshot.blocks | Where-Object { $_.deploymentName -eq $name -and $_.deploymentType -eq $type } | Select-Object -First 1
             if ($block) { $result += $block }
         }
     }
@@ -2421,12 +2468,12 @@ function Invoke-BlockPost {
 
 # Apply a security policy from a snapshot to an existing topology on the target
 function Invoke-PolicySwap {
-    param([object]$Backup)
+    param([object]$Snapshot)
     
     # -------------------------------------------------------------------------
     # Select policy from snapshot
     # -------------------------------------------------------------------------
-    $policies = @($Backup.blocks | Where-Object { $_.deploymentType -eq "SECURITY_POLICY" })
+    $policies = @($Snapshot.blocks | Where-Object { $_.deploymentType -eq "SECURITY_POLICY" })
     
     Clear-Host
     Write-LogSection "Select Security Policy"
@@ -2450,7 +2497,7 @@ function Invoke-PolicySwap {
     $polIdx = 0
     if (-not ([int]::TryParse($polChoice, [ref]$polIdx)) -or $polIdx -lt 1 -or $polIdx -gt $policies.Count) {
         Write-LogWarn "Invalid selection."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2494,7 +2541,7 @@ function Invoke-PolicySwap {
     
     if ($targetTopos.Count -eq 0) {
         Write-LogWarn "No existing topologies found on target."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2511,7 +2558,7 @@ function Invoke-PolicySwap {
         if ($topo.CurrentPolicy) {
             Write-Host "      policy: $($topo.CurrentPolicy)" -ForegroundColor DarkGray
         } else {
-            Write-Host "" -ForegroundColor White
+            Write-Host ""
         }
     }
     
@@ -2524,7 +2571,7 @@ function Invoke-PolicySwap {
     $topoIdx = 0
     if (-not ([int]::TryParse($topoChoice, [ref]$topoIdx)) -or $topoIdx -lt 1 -or $topoIdx -gt $targetTopos.Count) {
         Write-LogWarn "Invalid selection."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2571,7 +2618,7 @@ function Invoke-PolicySwap {
     Write-LogSection "Policy Swap Plan"
     Write-Host ""
     
-    $depTree = Get-PolicyDependencyTree -Backup $Backup -PolicyName $policyName
+    $depTree = Get-PolicyDependencyTree -Snapshot $Snapshot -PolicyName $policyName
     $planItems = @()
     $blockers = @()
     
@@ -2596,7 +2643,7 @@ function Invoke-PolicySwap {
                 # Policy exists - will be overwritten
                 Write-Host "  [WARN]" -NoNewline -ForegroundColor Yellow
                 Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
-                Write-Host " (exists — will be overwritten)" -ForegroundColor Yellow
+                Write-Host " (exists - will be overwritten)" -ForegroundColor Yellow
                 $planItems += @{ Entry = $entry; CreateName = $createName; Action = "modify"; BlockId = $existingBlockId }
             } else {
                 Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green
@@ -2604,17 +2651,17 @@ function Invoke-PolicySwap {
                 Write-Host " (exists)" -ForegroundColor DarkGray
             }
         } else {
-            # Missing - can we create it?
+            # Missing - determine whether it can be created here
             if ($entry.deploymentType -eq "SERVICE") {
                 Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red
                 Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
                 Write-Host " - does not exist on target" -ForegroundColor Red
-                $blockers += "$typeLabel $createName — create on target first or use a full replay"
+                $blockers += "$typeLabel $createName - create on target first or use a full replay"
             } elseif ($entry.deploymentType -eq "SSL_SETTINGS") {
                 Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red
                 Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
                 Write-Host " - does not exist on target" -ForegroundColor Red
-                $blockers += "$typeLabel $createName — create on target first or use a full replay"
+                $blockers += "$typeLabel $createName - create on target first or use a full replay"
             } else {
                 Write-Host "  [WARN]" -NoNewline -ForegroundColor Yellow
                 Write-Host "  $typeLabel $createName" -NoNewline -ForegroundColor White
@@ -2638,7 +2685,7 @@ function Invoke-PolicySwap {
             Write-Host "    $b" -ForegroundColor Red
         }
         Write-Host ""
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2742,7 +2789,7 @@ function Invoke-PolicySwap {
             Write-LogWarn "Completed before the failure - these changes are live on the target:"
             foreach ($a in $completedActions) { Write-Host "    $a" -ForegroundColor Yellow }
         }
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2762,7 +2809,7 @@ function Invoke-PolicySwap {
     
     if (-not $modifyBlock) {
         Write-LogError "Could not prepare MODIFY block."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2773,7 +2820,7 @@ function Invoke-PolicySwap {
             Write-LogWarn "Completed before the failure - these changes are live on the target:"
             foreach ($a in $completedActions) { Write-Host "    $a" -ForegroundColor Yellow }
         }
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -2795,35 +2842,55 @@ function Invoke-PolicySwap {
     Write-LogOk "Policy $newPolicyName applied to $($selectedTopo.Name)"
     Write-Host ""
     
-    Press-EnterToContinue
+    Wait-EnterKey
+}
+
+# Replay circuit breaker - called at every failure site in the replay loop.
+# On the 3rd consecutive failure, prompts the operator to continue or stop.
+# Loop control (break, continue, fall-through) stays at the call site; success
+# paths reset $script:ConsecutiveFailures to 0 directly
+# Returns: $true to continue the replay loop, $false to stop
+function Test-ReplayCircuitBreaker {
+    $script:ConsecutiveFailures++
+    if ($script:ConsecutiveFailures -ge 3) {
+        Write-Host ""
+        Write-LogWarn "Systemic failure detected: 3 consecutive objects failed."
+        $contChoice = Read-Host "  Continue replaying remaining objects? (yes/no) [no]"
+        if ($contChoice -ne "yes") {
+            Write-LogInfo "Replay stopped."
+            return $false
+        }
+        $script:ConsecutiveFailures = 0
+    }
+    return $true
 }
 
 # Option 2: Replay a snapshot to the connected target
-function Invoke-SsloRestore {
+function Invoke-SsloReplay {
     # -------------------------------------------------------------------------
-    # Step 1: Select and import backup file
+    # Step 1: Select and import snapshot file
     # -------------------------------------------------------------------------
-    $filePath = Select-BackupFile
+    $filePath = Select-SnapshotFile
     if (-not $filePath) { return }
     
     Write-Host ""
-    $backup = Import-SsloBackup -FilePath $filePath
-    if (-not $backup) {
-        Press-EnterToContinue
+    $snapshot = Import-SsloSnapshot -FilePath $filePath
+    if (-not $snapshot) {
+        Wait-EnterKey
         return
     }
     
     # -------------------------------------------------------------------------
-    # Step 2: Display backup metadata
+    # Step 2: Display snapshot metadata
     # -------------------------------------------------------------------------
     Clear-Host
     Write-LogSection "Snapshot Details"
     Write-Host ""
-    Write-LogInfo "Source host:     $($backup.metadata.source.hostname)"
-    Write-LogInfo "TMOS version:    $($backup.metadata.source.tmosVersion)"
-    Write-LogInfo "SSLO version:    $($backup.metadata.source.ssloVersion)"
-    Write-LogInfo "Snapshot date:   $($backup.metadata.timestamp)"
-    Write-LogInfo "Block count:     $($backup.metadata.blockCount)"
+    Write-LogInfo "Source host:     $($snapshot.metadata.source.hostname)"
+    Write-LogInfo "TMOS version:    $($snapshot.metadata.source.tmosVersion)"
+    Write-LogInfo "SSLO version:    $($snapshot.metadata.source.ssloVersion)"
+    Write-LogInfo "Snapshot date:   $($snapshot.metadata.timestamp)"
+    Write-LogInfo "Block count:     $($snapshot.metadata.blockCount)"
     
     # -------------------------------------------------------------------------
     # Step 3: Target compatibility check
@@ -2831,25 +2898,25 @@ function Invoke-SsloRestore {
     Write-Host ""
     $mismatches = @()
     
-    if ($backup.metadata.source.hostname -ne $script:RemoteHostname) {
-        $mismatches += @{ Label = "Hostname"; Backup = $backup.metadata.source.hostname; Target = $script:RemoteHostname }
+    if ($snapshot.metadata.source.hostname -ne $script:RemoteHostname) {
+        $mismatches += @{ Label = "Hostname"; Snapshot = $snapshot.metadata.source.hostname; Target = $script:RemoteHostname }
     }
-    if ($backup.metadata.source.tmosVersion -ne $script:TMOSVersion) {
-        $mismatches += @{ Label = "TMOS"; Backup = $backup.metadata.source.tmosVersion; Target = $script:TMOSVersion }
+    if ($snapshot.metadata.source.tmosVersion -ne $script:TMOSVersion) {
+        $mismatches += @{ Label = "TMOS"; Snapshot = $snapshot.metadata.source.tmosVersion; Target = $script:TMOSVersion }
     }
-    if ($backup.metadata.source.ssloVersion -and $backup.metadata.source.ssloVersion -ne $script:SSLOVersion) {
-        $mismatches += @{ Label = "SSLO"; Backup = $backup.metadata.source.ssloVersion; Target = $script:SSLOVersion }
+    if ($snapshot.metadata.source.ssloVersion -and $snapshot.metadata.source.ssloVersion -ne $script:SSLOVersion) {
+        $mismatches += @{ Label = "SSLO"; Snapshot = $snapshot.metadata.source.ssloVersion; Target = $script:SSLOVersion }
     }
     
     if ($mismatches.Count -gt 0) {
         foreach ($m in $mismatches) {
-            Write-LogWarn "$($m.Label) differs - snapshot: $($m.Backup) / target: $($m.Target)"
+            Write-LogWarn "$($m.Label) differs - snapshot: $($m.Snapshot) / target: $($m.Target)"
         }
         Write-Host ""
         $confirm = Read-Host "  Proceed with replay to $($script:RemoteHostname)? [y/N]"
         if ($confirm -notin @("y", "Y", "yes", "YES")) {
             Write-LogInfo "Replay cancelled."
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     } else {
@@ -2859,8 +2926,8 @@ function Invoke-SsloRestore {
     # -------------------------------------------------------------------------
     # Step 4: Replay scope selection
     # -------------------------------------------------------------------------
-    $topologies = @($backup.blocks | Where-Object { $_.deploymentType -eq "TOPOLOGY" })
-    $policies = @($backup.blocks | Where-Object { $_.deploymentType -eq "SECURITY_POLICY" })
+    $topologies = @($snapshot.blocks | Where-Object { $_.deploymentType -eq "TOPOLOGY" })
+    $policies = @($snapshot.blocks | Where-Object { $_.deploymentType -eq "SECURITY_POLICY" })
     
     # Show scope menu when there are multiple topologies or policies available for swap
     if ($topologies.Count -gt 1 -or $policies.Count -gt 0) {
@@ -2885,7 +2952,7 @@ function Invoke-SsloRestore {
         
         # Policy swap - branches to its own flow and returns
         if ($scopeChoice -eq "3" -and $policies.Count -gt 0) {
-            Invoke-PolicySwap -Backup $backup
+            Invoke-PolicySwap -Snapshot $snapshot
             return
         }
         
@@ -2930,7 +2997,7 @@ function Invoke-SsloRestore {
                         $policyName = $topoConfig.securityPolicyReference
                         $requiredNames[$policyName] = $true
                         
-                        $policyBlock = $backup.blocks | Where-Object { $_.deploymentName -eq $policyName } | Select-Object -First 1
+                        $policyBlock = $snapshot.blocks | Where-Object { $_.deploymentName -eq $policyName } | Select-Object -First 1
                         if ($policyBlock) {
                             $policyDataId = $script:TYPE_PROPERTY_MAP["SECURITY_POLICY"]
                             foreach ($prop in $policyBlock.block.inputProperties) {
@@ -2944,7 +3011,7 @@ function Invoke-SsloRestore {
                         }
                         
                         foreach ($chainName in @($requiredNames.Keys)) {
-                            $chainBlock = $backup.blocks | Where-Object { $_.deploymentName -eq $chainName -and $_.deploymentType -eq "SERVICE_CHAIN" } | Select-Object -First 1
+                            $chainBlock = $snapshot.blocks | Where-Object { $_.deploymentName -eq $chainName -and $_.deploymentType -eq "SERVICE_CHAIN" } | Select-Object -First 1
                             if ($chainBlock) {
                                 $chainDataId = $script:TYPE_PROPERTY_MAP["SERVICE_CHAIN"]
                                 foreach ($prop in $chainBlock.block.inputProperties) {
@@ -2963,8 +3030,8 @@ function Invoke-SsloRestore {
                     }
                 }
                 
-                $backup.blocks = @($backup.blocks | Where-Object { $requiredNames.ContainsKey($_.deploymentName) })
-                Write-LogOk "Scoped to topology $($selectedTopo.deploymentName) ($($backup.blocks.Count) objects)"
+                $snapshot.blocks = @($snapshot.blocks | Where-Object { $requiredNames.ContainsKey($_.deploymentName) })
+                Write-LogOk "Scoped to topology $($selectedTopo.deploymentName) ($($snapshot.blocks.Count) objects)"
                 
                 # ---------------------------------------------------------
                 # Dynamic naming (optional): rename the topology stack to a
@@ -2977,7 +3044,7 @@ function Invoke-SsloRestore {
                 
                 # Detect the common base name across the renameable stack
                 $stems = @{}
-                $renameable = @($backup.blocks | Where-Object { $renameTypes.ContainsKey($_.deploymentType) })
+                $renameable = @($snapshot.blocks | Where-Object { $renameTypes.ContainsKey($_.deploymentType) })
                 foreach ($rb in $renameable) {
                     $pfx = $renameTypes[$rb.deploymentType]
                     if ($rb.deploymentName.StartsWith($pfx)) {
@@ -3001,7 +3068,7 @@ function Invoke-SsloRestore {
                         # Names cascade into TMOS and APM object names downstream - keep them short and clean
                         if ($newBase -notmatch '^[A-Za-z0-9_]{1,20}$') {
                             Write-LogError "Base name must be 1-20 characters: letters, numbers, underscores."
-                            Press-EnterToContinue
+                            Wait-EnterKey
                             return
                         }
                         
@@ -3020,8 +3087,8 @@ function Invoke-SsloRestore {
                         # Pass 1: rename and verify every block before committing any
                         $renamedBlocks = @{}
                         $renameOk = $true
-                        for ($bi = 0; $bi -lt $backup.blocks.Count; $bi++) {
-                            $origJson = $backup.blocks[$bi].block | ConvertTo-Json -Depth 30
+                        for ($bi = 0; $bi -lt $snapshot.blocks.Count; $bi++) {
+                            $origJson = $snapshot.blocks[$bi].block | ConvertTo-Json -Depth 30
                             $newJson = $origJson
                             foreach ($oldName in $renameMap.Keys) {
                                 $newJson = $newJson.Replace($oldName, $renameMap[$oldName])
@@ -3044,15 +3111,15 @@ function Invoke-SsloRestore {
                         if (-not $renameOk) {
                             Write-LogError "Rename verification failed - the new base name conflicts with existing content."
                             Write-LogError "Replay aborted, no changes made."
-                            Press-EnterToContinue
+                            Wait-EnterKey
                             return
                         }
                         
                         # Pass 2: commit
-                        for ($bi = 0; $bi -lt $backup.blocks.Count; $bi++) {
-                            $backup.blocks[$bi].block = $renamedBlocks[$bi] | ConvertFrom-Json
-                            if ($renameMap.ContainsKey($backup.blocks[$bi].deploymentName)) {
-                                $backup.blocks[$bi].deploymentName = $renameMap[$backup.blocks[$bi].deploymentName]
+                        for ($bi = 0; $bi -lt $snapshot.blocks.Count; $bi++) {
+                            $snapshot.blocks[$bi].block = $renamedBlocks[$bi] | ConvertFrom-Json
+                            if ($renameMap.ContainsKey($snapshot.blocks[$bi].deploymentName)) {
+                                $snapshot.blocks[$bi].deploymentName = $renameMap[$snapshot.blocks[$bi].deploymentName]
                             }
                         }
                         
@@ -3061,12 +3128,12 @@ function Invoke-SsloRestore {
                 }
             } else {
                 Write-LogWarn "Invalid selection."
-                Press-EnterToContinue
+                Wait-EnterKey
                 return
             }
         } elseif ($scopeChoice -ne "1") {
             Write-LogWarn "Invalid selection."
-            Press-EnterToContinue
+            Wait-EnterKey
             return
         }
     }
@@ -3140,11 +3207,11 @@ function Invoke-SsloRestore {
         Write-Host ""
         Write-LogError "SSLO General Settings (ssloGS_global) not found on target."
         Write-LogError "Configure General Settings via the SSLO GUI before replay."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
-    foreach ($entry in $backup.blocks) {
+    foreach ($entry in $snapshot.blocks) {
         if ($entry.deploymentType -eq "GENERAL_SETTINGS") { continue }
         $depName = $entry.deploymentName
         $block = $entry.block
@@ -3407,7 +3474,7 @@ function Invoke-SsloRestore {
         Write-Host ""
         Write-Host "    See the dependency manifest file for configs and reference." -ForegroundColor Yellow
         Write-Host ""
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3423,7 +3490,7 @@ function Invoke-SsloRestore {
     Write-Host ""
     Write-LogStep "Checking for existing SSLO objects on target..."
     
-    $restorePlan = @()
+    $replayPlan = @()
     
     # Build target inventory with block IDs and states.
     # A failed GET here MUST abort: an empty inventory disables collision
@@ -3433,7 +3500,7 @@ function Invoke-SsloRestore {
     if (-not $targetResult.Success) {
         Write-LogError "Failed to retrieve target inventory (HTTP $($targetResult.StatusCode))."
         Write-LogError "Cannot verify existing objects on the target. Replay aborted - no changes made."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     if ($targetResult.Response.items) {
@@ -3447,7 +3514,7 @@ function Invoke-SsloRestore {
         }
     }
     
-    foreach ($entry in $backup.blocks) {
+    foreach ($entry in $snapshot.blocks) {
         $status = "pending"
         $reason = ""
         
@@ -3468,10 +3535,10 @@ function Invoke-SsloRestore {
             }
         }
         
-        $restorePlan += @{
+        $replayPlan += @{
             DeploymentType = $entry.deploymentType
             DeploymentName = $entry.deploymentName
-            BackupType     = $entry.backupType
+            CaptureType     = $entry.captureType
             Block          = $entry.block
             Status         = $status
             Reason         = $reason
@@ -3480,13 +3547,13 @@ function Invoke-SsloRestore {
     }
     
     # Display replay plan
-    $pendingCount = ($restorePlan | Where-Object { $_.Status -eq "pending" }).Count
-    $skipExistCount = ($restorePlan | Where-Object { $_.Status -eq "skip_exists" }).Count
+    $pendingCount = ($replayPlan | Where-Object { $_.Status -eq "pending" }).Count
+    $skipExistCount = ($replayPlan | Where-Object { $_.Status -eq "skip_exists" }).Count
     $actionCount = $pendingCount
     
     Write-Host ""
     $lastType = ""
-    foreach ($item in $restorePlan) {
+    foreach ($item in $replayPlan) {
         if ($item.DeploymentType -ne $lastType) {
             $lastType = $item.DeploymentType
             Write-Host ""
@@ -3510,7 +3577,7 @@ function Invoke-SsloRestore {
     Write-Host ""
     Write-Host "  $actionCount to replay, $skipExistCount already exist" -ForegroundColor White
     
-    $stuckExisting = @($restorePlan | Where-Object { $_.Status -eq "skip_exists" -and $_.TargetState -and $_.TargetState -notin @("BOUND", "UNBOUND") })
+    $stuckExisting = @($replayPlan | Where-Object { $_.Status -eq "skip_exists" -and $_.TargetState -and $_.TargetState -notin @("BOUND", "UNBOUND") })
     if ($stuckExisting.Count -gt 0) {
         Write-Host ""
         Write-LogWarn "$($stuckExisting.Count) existing object(s) are in a failed or stuck state and will be skipped."
@@ -3519,7 +3586,7 @@ function Invoke-SsloRestore {
     
     if ($actionCount -eq 0) {
         Write-LogWarn "Nothing to replay."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3530,7 +3597,7 @@ function Invoke-SsloRestore {
     $confirm = Read-Host "  Type REPLAY to proceed (anything else cancels)"
     if ($confirm -cne "REPLAY") {
         Write-LogInfo "Replay cancelled. No changes were made."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3542,16 +3609,16 @@ function Invoke-SsloRestore {
     Write-LogSection "Replaying Snapshot - $progressText"
     Write-Host ""
     
-    $restored = @()
+    $replayed = @()
     $failed = @()
     $skipped = @()
     $unverified = @()
-    $consecutiveFailures = 0
+    $script:ConsecutiveFailures = 0
     $script:PfIdRegenerated = 0
     $script:PassphraseCache = @{}
     $lastDeploymentType = ""
     
-    foreach ($item in $restorePlan) {
+    foreach ($item in $replayPlan) {
         if ($item.Status -ne "pending") {
             $skipped += "$($item.DeploymentName) ($($item.Reason))"
             continue
@@ -3563,7 +3630,7 @@ function Invoke-SsloRestore {
                 Start-Sleep -Seconds 10
             }
             Clear-Host
-            $progressText = "Progress: $($restored.Count) objects installed, $($failed.Count) failed"
+            $progressText = "Progress: $($replayed.Count) objects installed, $($failed.Count) failed"
             Write-LogSection "Replaying Snapshot - $progressText"
             Write-Host ""
             Write-Host "  $(Get-TypeDisplayName $item.DeploymentType)" -ForegroundColor White
@@ -3577,11 +3644,11 @@ function Invoke-SsloRestore {
         # Prepare the block for POST
         $postBlock = $null
         
-        # Topology blocks always go through CREATE conversion regardless of backupType.
+        # Topology blocks always go through CREATE conversion regardless of captureType.
         # Replayable topology blocks contain embedded dependent objects (policy, service
         # chains, SSL settings) that would cause the gc processor to create duplicate
         # component blocks when standalone blocks for those objects already exist.
-        if ($item.BackupType -eq $script:CAT_STATE -or $item.DeploymentType -eq "TOPOLOGY") {
+        if ($item.CaptureType -eq $script:CAT_STATE -or $item.DeploymentType -eq "TOPOLOGY") {
             $postBlock = Convert-StateBlockToCreate `
                 -StateBlock $item.Block `
                 -DeploymentType $item.DeploymentType `
@@ -3590,17 +3657,7 @@ function Invoke-SsloRestore {
             if (-not $postBlock) {
                 Write-LogError "$($item.DeploymentName) failed - could not prepare block"
                 $failed += $item.DeploymentName
-            $consecutiveFailures++
-            if ($consecutiveFailures -ge 3) {
-                Write-Host ""
-                Write-LogWarn "Systemic failure detected: 3 consecutive objects failed."
-                $contChoice = Read-Host "  Continue replaying remaining objects? (yes/no) [no]"
-                if ($contChoice -ne "yes") {
-                    Write-LogInfo "Replay stopped."
-                    break
-                }
-                $consecutiveFailures = 0
-            }
+                if (-not (Test-ReplayCircuitBreaker)) { break }
                 continue
             }
         } else {
@@ -3630,17 +3687,7 @@ function Invoke-SsloRestore {
         if (-not $result.Success) {
             Write-LogError "$($item.DeploymentName) failed (HTTP $($result.StatusCode))"
             $failed += $item.DeploymentName
-            $consecutiveFailures++
-            if ($consecutiveFailures -ge 3) {
-                Write-Host ""
-                Write-LogWarn "Systemic failure detected: 3 consecutive objects failed."
-                $contChoice = Read-Host "  Continue replaying remaining objects? (yes/no) [no]"
-                if ($contChoice -ne "yes") {
-                    Write-LogInfo "Replay stopped."
-                    break
-                }
-                $consecutiveFailures = 0
-            }
+            if (-not (Test-ReplayCircuitBreaker)) { break }
             continue
         }
         
@@ -3670,8 +3717,8 @@ function Invoke-SsloRestore {
             
             if ($finalState -eq "BOUND") {
                 Write-LogOk "$($item.DeploymentName)"
-                $restored += $item.DeploymentName
-                $consecutiveFailures = 0
+                $replayed += $item.DeploymentName
+                $script:ConsecutiveFailures = 0
             } elseif ($finalState -eq "ERROR") {
                 Write-LogError "$($item.DeploymentName) failed (ERROR state)"
                 $errDetail = ""
@@ -3681,36 +3728,18 @@ function Invoke-SsloRestore {
                     Write-LogError "  $errDetail"
                 }
                 $failed += $item.DeploymentName
-            $consecutiveFailures++
-            if ($consecutiveFailures -ge 3) {
-                Write-Host ""
-                Write-LogWarn "Systemic failure detected: 3 consecutive objects failed."
-                $contChoice = Read-Host "  Continue replaying remaining objects? (yes/no) [no]"
-                if ($contChoice -ne "yes") {
-                    Write-LogInfo "Replay stopped."
-                    break
-                }
-                $consecutiveFailures = 0
-            }
+                if (-not (Test-ReplayCircuitBreaker)) { break }
+                # No continue - fall through to the inter-object mcpd settle delay
             } else {
                 Write-LogWarn "$($item.DeploymentName) timed out (state: $finalState)"
                 $failed += $item.DeploymentName
-            $consecutiveFailures++
-            if ($consecutiveFailures -ge 3) {
-                Write-Host ""
-                Write-LogWarn "Systemic failure detected: 3 consecutive objects failed."
-                $contChoice = Read-Host "  Continue replaying remaining objects? (yes/no) [no]"
-                if ($contChoice -ne "yes") {
-                    Write-LogInfo "Replay stopped."
-                    break
-                }
-                $consecutiveFailures = 0
-            }
+                if (-not (Test-ReplayCircuitBreaker)) { break }
+                # No continue - fall through to the inter-object mcpd settle delay
             }
         } else {
             Write-LogWarn "$($item.DeploymentName) - posted but no block ID returned; state not verified"
             $unverified += $item.DeploymentName
-            $consecutiveFailures = 0
+            $script:ConsecutiveFailures = 0
         }
         
         Write-Host ""
@@ -3725,7 +3754,7 @@ function Invoke-SsloRestore {
     # -------------------------------------------------------------------------
     # Step 9: Save configuration
     # -------------------------------------------------------------------------
-    if ($restored.Count -gt 0) {
+    if ($replayed.Count -gt 0) {
         Write-Host ""
         Write-LogStep "Saving BIG-IP configuration..."
         if (Save-F5Config) {
@@ -3741,11 +3770,11 @@ function Invoke-SsloRestore {
     Clear-Host
     Write-LogSection "Replay Summary"
     
-    if ($restored.Count -gt 0) {
+    if ($replayed.Count -gt 0) {
         Write-Host ""
-        Write-Host "  Replayed $($restored.Count) objects:" -ForegroundColor Green
+        Write-Host "  Replayed $($replayed.Count) objects:" -ForegroundColor Green
         Write-Host ""
-        foreach ($name in $restored) {
+        foreach ($name in $replayed) {
             Write-Host "    $name" -ForegroundColor White
         }
     }
@@ -3784,7 +3813,7 @@ function Invoke-SsloRestore {
     }
     
     Write-Host ""
-    if ($failed.Count -eq 0 -and $unverified.Count -eq 0 -and $restored.Count -gt 0) {
+    if ($failed.Count -eq 0 -and $unverified.Count -eq 0 -and $replayed.Count -gt 0) {
         Write-LogOk "Replay complete."
         Write-Host ""
         Write-Host "  NOTE: The SSLO GUI may show a 'not initialized' warning after" -ForegroundColor Yellow
@@ -3798,7 +3827,7 @@ function Invoke-SsloRestore {
         Write-LogInfo "No objects were replayed."
     }
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # =============================================================================
@@ -3821,14 +3850,14 @@ function Invoke-TopologyRedeploy {
     $result = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks"
     if (-not $result.Success) {
         Write-LogError "Failed to retrieve iAppsLX blocks."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
     $allBlocks = $result.Response.items
     if (-not $allBlocks -or $allBlocks.Count -eq 0) {
         Write-LogWarn "No iAppsLX blocks found on this device."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3881,7 +3910,7 @@ function Invoke-TopologyRedeploy {
     
     if ($topologies.Count -eq 0) {
         Write-LogWarn "No topologies found on this device."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -3917,7 +3946,7 @@ function Invoke-TopologyRedeploy {
         $selectedTopos = @($topologies[$topoIdx - 1])
     } else {
         Write-LogWarn "Invalid selection."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -4037,7 +4066,7 @@ function Invoke-TopologyRedeploy {
     }
     
     if ($redeployFailed) {
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -4058,7 +4087,7 @@ function Invoke-TopologyRedeploy {
         Write-LogOk "$($selectedTopos.Count) topologies redeployed"
     }
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # =============================================================================
@@ -4077,7 +4106,7 @@ function Show-MainMenu {
     Write-Host $verPad -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "            SSL Orchestrator Snapshot and Restore             " -NoNewline -ForegroundColor White
+    Write-Host "            SSL Orchestrator Snapshot and Replay              " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ╠══════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
     Write-Host "    Connected: " -NoNewline -ForegroundColor White
@@ -4137,7 +4166,7 @@ function Invoke-TopologyDelete {
     $result = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks"
     if (-not $result.Success) {
         Write-LogError "Failed to retrieve blocks (HTTP $($result.StatusCode)). Delete aborted - no changes made."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -4162,7 +4191,7 @@ function Invoke-TopologyDelete {
     $topologies = @($live | Where-Object { $_.Type -eq "TOPOLOGY" })
     if ($topologies.Count -eq 0) {
         Write-LogWarn "No topologies found on this device."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -4210,7 +4239,7 @@ function Invoke-TopologyDelete {
     $selIdx = 0
     if (-not ([int]::TryParse($sel, [ref]$selIdx) -and $selIdx -ge 1 -and $selIdx -le $topologies.Count)) {
         Write-LogWarn "Invalid selection."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     $target = $topologies[$selIdx - 1]
@@ -4291,7 +4320,7 @@ function Invoke-TopologyDelete {
     $confirm = Read-Host "  Type DELETE to proceed (anything else cancels)"
     if ($confirm -cne "DELETE") {
         Write-LogInfo "Cancelled. No changes made."
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -4376,7 +4405,7 @@ function Invoke-TopologyDelete {
             Write-LogWarn "Completed before the failure - these objects are gone from the target:"
             foreach ($a in $completedActions) { Write-Host "    $a" -ForegroundColor Yellow }
         }
-        Press-EnterToContinue
+        Wait-EnterKey
         return
     }
     
@@ -4394,7 +4423,7 @@ function Invoke-TopologyDelete {
         }
     }
     
-    Press-EnterToContinue
+    Wait-EnterKey
 }
 
 # =============================================================================
@@ -4434,8 +4463,8 @@ function Main {
             $choice = Read-Host "  Select [0-5]"
             
             switch ($choice) {
-                "1" { Invoke-SsloDump }
-                "2" { Invoke-SsloRestore }
+                "1" { Invoke-SsloRecord }
+                "2" { Invoke-SsloReplay }
                 "3" { Invoke-TopologyRedeploy }
                 "4" { Invoke-TopologyDelete }
                 "5" { break }
@@ -4449,7 +4478,7 @@ function Main {
                 }
                 default {
                     Write-LogWarn "Invalid selection."
-                    Press-EnterToContinue
+                    Wait-EnterKey
                 }
             }
             
