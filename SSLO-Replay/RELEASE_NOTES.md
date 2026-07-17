@@ -67,31 +67,6 @@
 - Dedup key changed from path to type:path. Certs and keys with the same name no longer collide
 - Version-lock removed. Snapshots are rejected only for snapshot format incompatibility, not tool version mismatch
 
-## SSLO Replay Snapshot Format v1.0 (b6 July 17 2026)
-
-```
-{
-  metadata
-    snapshotVersion     "1.0"
-    tool                "sslo-replay"
-    toolVersion         "0.3.15-devel"
-    repository          github URL
-    source
-      hostname          source device hostname
-      tmosVersion       TMOS version
-      ssloVersion       SSLO RPM version
-    timestamp           ISO 8601
-    blockCount          number of blocks
-
-  blocks[]
-    deploymentType      SERVICE | SERVICE_CHAIN | SECURITY_POLICY | SSL_SETTINGS | TOPOLOGY
-    deploymentName      object name (ssloS_, ssloSC_, ssloP_, ssloT_, sslo_)
-    backupType          "replayable" | "state"
-    block               cleaned iAppsLX block (inputProperties only, runtime fields stripped)
-
-}
-```
-
 ### Block fields stripped at capture
 
 id, existingBlockId, selfLink, generation, lastUpdateMicros, restrictedId, restrictedHash, obRestrictedAttribute, state, dataProperties, audit
