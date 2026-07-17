@@ -1,5 +1,39 @@
 # Release Notes
 
+## b6.3.15.0-devel (Beta 5 - July 17 2026)
+
+- Snapshot block field backupType renamed to captureType. SSLO Snapshots recorded by Beta 5 and earlier will fail import validation using Beta 6 - re-record your SSLO's using Beta 6. The snapshot format remains at 1.0 since we are still in beta.
+- Windows PowerShell 5.1 (Desktop edition) is enforced at startup. PowerShell 7+ ignores the ServicePointManager certificate bypass, so every connection would fail with opaque TLS errors. The tool now exits with the correct powershell.exe invocation instead
+- Config save connection-drop detection uses locale-invariant WebException status enums instead of matching the exception message, which .NET localizes per Windows display language. On a drop signature the tool confirms the management plane is reachable and re-issues the idempotent save before reporting success
+- Topology detection excludes operation blocks by their exact prefixes (sslo_ob_, sslo_obj_) instead of the bare sslo_ob stem. The stem match also swallowed legitimate topology names like sslo_observability, silently dropping them from snapshots, redeploy, and delete accounting
+- Replay circuit breaker consolidated into a single function. The 3-consecutive-failure prompt appeared four times inline in the replay loop; behavior is unchanged
+- Terminology aligned across functions, prompts, and output: record/snapshot/replay replaces dump/backup/restore
+
+## SSLO Replay Snapshot Format v1.0 (updated for beta 6)
+
+```
+{
+  metadata
+    snapshotVersion     "1.0"
+    tool                "sslo-replay"
+    toolVersion         "0.3.15-devel"
+    repository          github URL
+    source
+      hostname          source device hostname
+      tmosVersion       TMOS version
+      ssloVersion       SSLO RPM version
+    timestamp           ISO 8601
+    blockCount          number of blocks
+
+  blocks[]
+    deploymentType      SERVICE | SERVICE_CHAIN | SECURITY_POLICY | SSL_SETTINGS | TOPOLOGY
+    deploymentName      object name (ssloS_, ssloSC_, ssloP_, ssloT_, sslo_)
+    captureType         "replayable" | "state"
+    block               cleaned iAppsLX block (inputProperties only, runtime fields stripped)
+
+}
+``` 
+
 ## b5.3.15.0-devel (Beta 5 - June 12 2026)
 
 - Replay aborts when the target inventory cannot be read. A failed read previously disabled collision detection and the full snapshot would deploy onto a populated device
@@ -33,7 +67,7 @@
 - Dedup key changed from path to type:path. Certs and keys with the same name no longer collide
 - Version-lock removed. Snapshots are rejected only for snapshot format incompatibility, not tool version mismatch
 
-## SSLO Replay Snapshot Format v1.0
+## SSLO Replay Snapshot Format v1.0 (b6 July 17 2026)
 
 ```
 {
