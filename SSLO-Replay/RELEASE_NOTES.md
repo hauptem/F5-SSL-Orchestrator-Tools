@@ -6,7 +6,7 @@
 - Windows PowerShell 5.1 is enforced at startup. PowerShell 7+ ignores the ServicePointManager certificate bypass, so every connection would fail with opaque TLS errors. The tool now exits with the correct powershell.exe invocation instead
 - Config save connection-drop detection uses locale-invariant WebException status enums instead of matching the exception message, which .NET localizes per Windows display language. On a drop signature the tool confirms the management plane is reachable and re-issues the idempotent save before reporting success
 - Topology detection excludes operation blocks by their exact prefixes (sslo_ob_, sslo_obj_) instead of the bare sslo_ob stem. The stem match also swallowed legitimate topology names like sslo_observability, silently dropping them from snapshots, redeploy, and delete accounting
-- Replay circuit breaker consolidated into a single function. The 3-consecutive-failure prompt appeared four times inline in the replay loop; behavior is unchanged
+- Replay circuit breaker consolidated into a single function. 
 - Terminology aligned across functions, prompts, and output: record/snapshot/replay replaces dump/backup/restore
 
 ## SSLO Replay Snapshot Format v1.0 (updated in beta 6)
