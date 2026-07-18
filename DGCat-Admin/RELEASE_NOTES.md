@@ -7,7 +7,7 @@
 - PowerShell: fleet deploy scriptblocks are bound as closures at creation. They previously resolved editor variables through the dynamic call stack at invocation, which worked only because Invoke-FleetDeploy's parameter names carried the same values - a latent break on any parameter rename
 - PowerShell: search viewer no longer assigns to the $input automatic variable
 - PowerShell housekeeping: Wait-EnterKey replaces Press-EnterToContinue, unused DgType parameter removed from Deploy-DatagroupToHost, bare catch blocks normalized
-- The bash version number now tracks the suite for consistency and receives targeted bugfixes only (both fixes above)
+- The bash version number now tracks the suite for consistency and receives targeted bugfixes only (first two fixes above)
 
 # DGCat-Admin v5.3 Release Notes 
 
