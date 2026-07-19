@@ -28,7 +28,9 @@ set -euo pipefail
 # =============================================================================
 
 # Backup settings
-BACKUP_DIR="/shared/tmp/dgcat-admin-backups"
+# Resolved relative to the script location - bash has no $PSScriptRoot
+# equivalent, and a bare relative path would land wherever the operator cd'd
+BACKUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dgcat-admin-backups"
 MAX_BACKUPS=10
 BACKUPS_ENABLED=0
 
