@@ -1,5 +1,11 @@
 # Release Notes
 
+## b7.3.15.0-devel (Beta 7 - July 19 2026)
+
+- Poll timeout no longer reports a deployment as failed without checking for it. The gc processor does not stop when the poll gives up, and a completed operation block self-destructs 120 seconds after BOUND - so re-checking the operation block later is ambiguous (absent means succeeded-and-gone or never-bound). On timeout the tool now checks for the deployment's component block, the durable evidence that the deployment landed. Applies to CREATE operations only; a component block that predates a MODIFY or DELETE proves nothing. Late-verified objects count as replayed and reset the circuit breaker, so slow deployments can no longer trip the systemic-failure prompt
+- Timed-out objects that cannot be verified now report that the gc processor may still complete, and that a re-replay will safely skip anything that lands
+- Policy swap validates the target policy name with the same rule as replay-time renaming: 1-20 characters after ssloP_, letters, numbers, underscores. An unvalidated name previously flowed into OData filter queries, operation block names, and gc processor config data
+
 ## b6.3.15.0-devel (Beta 6 - July 17 2026)
 
 - Snapshot block field backupType renamed to captureType. **SSLO Snapshots recorded by Beta 5 and earlier will fail import validation using Beta 6 - re-record your SSLO's using Beta 6**. The updated snapshot format version remains at 1.0 since we are still in beta.
