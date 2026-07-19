@@ -1,6 +1,6 @@
 # DGCat-Admin v5.5 Release Notes 
 
-- Search drift detection now also compares datagroup values, not just keys. Entries present on every host but holding different values are flagged as a value mismatch, with per-host values shown in both Diff and Search results; previously the same key with different data on two hosts reported as consistent. Each entry is classified once after the fleet pull, so Diff and Search always agree. Search patterns still match keys only. URL categories are unaffected - they have no values. Applies to both versions (bash receives this as a targeted bugfix ... its pull loop already parsed values and discarded them)
+- Search drift detection now also compares datagroup values, not just keys. Entries present on every host but holding different values are flagged as a value mismatch, with per-host values shown in both Diff and Search results; previously the same key with different data on two hosts reported as consistent. Each entry is classified once after the fleet pull, so Diff and Search always agree. Search patterns still match keys only. URL categories are unaffected - they have no values. 
 - PowerShell: section headers now reach the session log. Write-LogSection wrote its banner to the console only, so LOGGING_ENABLED audit logs were a flat stream of status lines with no record of which operation produced them. 
 
 # DGCat-Admin v5.4 Release Notes 
