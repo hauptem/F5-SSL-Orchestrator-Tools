@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.4
+# Version: 5.5
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -145,6 +145,13 @@ function Write-LogSection {
     Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
     Write-Host "    $Title" -ForegroundColor White
     Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    if ($script:LogFile) {
+        @(
+            "  ══════════════════════════════════════════════════════════════",
+            "    $Title",
+            "  ══════════════════════════════════════════════════════════════"
+        ) | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
 }
 
 function Write-LogInfo {
@@ -2123,7 +2130,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.4                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.5                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -3449,6 +3456,7 @@ function Invoke-FleetLookingGlass {
     $origHost = $script:RemoteHost
     
     $entryHosts = @{}       # entry -> list of hosts
+    $entryValues = @{}      # entry -> @{ host -> value } (datagroups only)
     $pulledHosts = @()
     $hostCounts = @{}
     $hostSites = @{}
@@ -3489,8 +3497,11 @@ function Invoke-FleetLookingGlass {
                 $entry = $rec.Key
                 if (-not $entryHosts.ContainsKey($entry)) {
                     $entryHosts[$entry] = @()
+                    # Ordinal map: BIG-IP datagroup values are case-sensitive
+                    $entryValues[$entry] = [System.Collections.Hashtable]::new()
                 }
                 $entryHosts[$entry] += $hostName
+                $entryValues[$entry][$hostName] = [string]$rec.Value
             }
             $entries = $records
         } else {
@@ -3537,6 +3548,27 @@ function Invoke-FleetLookingGlass {
         $objectDisplay = "/${partition}/${objectName} (Datagroup)"
     } else {
         $objectDisplay = "${objectName} (URL Category)"
+    }
+    
+    # Classify each entry: consistent (same key AND value everywhere),
+    # missing (absent on some hosts), valuedrift (present everywhere but
+    # values differ - datagroups only; URL categories have no values)
+    $entryStatus = @{}
+    foreach ($entry in $entryHosts.Keys) {
+        if ($entryHosts[$entry].Count -lt $totalPulled) {
+            $entryStatus[$entry] = "missing"
+            continue
+        }
+        $status = "consistent"
+        if ($objectType -eq "datagroup") {
+            $firstVal = $null
+            foreach ($fleetHost in $pulledHosts) {
+                $v = [string]$entryValues[$entry][$fleetHost]
+                if ($null -eq $firstVal) { $firstVal = $v }
+                elseif ($v -cne $firstVal) { $status = "valuedrift"; break }
+            }
+        }
+        $entryStatus[$entry] = $status
     }
     
     # Viewer loop
@@ -3599,8 +3631,9 @@ function Invoke-FleetLookingGlass {
             
             foreach ($entry in $entryHosts.Keys) {
                 $hostsWithEntry = $entryHosts[$entry]
+                $status = $entryStatus[$entry]
                 
-                if ($hostsWithEntry.Count -lt $totalPulled) {
+                if ($status -eq "missing") {
                     $driftCount++
                     Write-Host "  $entry" -ForegroundColor Yellow
                     Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
@@ -3611,6 +3644,19 @@ function Invoke-FleetLookingGlass {
                         } else {
                             Write-Host -NoNewline "    $fleetHost ($site) - " -ForegroundColor White; Write-Host "missing" -ForegroundColor Red
                         }
+                    }
+                    Write-Host ""
+                } elseif ($status -eq "valuedrift") {
+                    $driftCount++
+                    Write-Host -NoNewline "  $entry" -ForegroundColor Yellow
+                    Write-Host " (value mismatch)" -ForegroundColor Red
+                    Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+                    foreach ($fleetHost in $pulledHosts) {
+                        $site = $hostSites[$fleetHost]
+                        $v = [string]$entryValues[$entry][$fleetHost]
+                        $vDisplay = $(if ($v) { $v } else { "(none)" })
+                        Write-Host -NoNewline "    $fleetHost ($site) - value: " -ForegroundColor White
+                        Write-Host $vDisplay -ForegroundColor Yellow
                     }
                     Write-Host ""
                 } else {
@@ -3660,7 +3706,7 @@ function Invoke-FleetLookingGlass {
             foreach ($entry in $entryHosts.Keys) {
                 if ($entry.ToLower().Contains($searchLower)) {
                     $matchCount++
-                    if ($entryHosts[$entry].Count -ge $totalPulled) {
+                    if ($entryStatus[$entry] -eq "consistent") {
                         $consistentMatches += $entry
                     } else {
                         $inconsistentMatches += $entry
@@ -3686,13 +3732,25 @@ function Invoke-FleetLookingGlass {
                     Write-Host "  Partial matches ($($inconsistentMatches.Count)):" -ForegroundColor Yellow
                     Write-Host "  ──────────────────────────────────────────────────────────────" -ForegroundColor Cyan
                     foreach ($entry in $inconsistentMatches) {
-                        Write-Host "  $entry" -ForegroundColor Yellow
-                        foreach ($fleetHost in $pulledHosts) {
-                            $site = $hostSites[$fleetHost]
-                            if ($entryHosts[$entry] -contains $fleetHost) {
-                                Write-Host "    $fleetHost ($site)" -ForegroundColor White
-                            } else {
-                                Write-Host -NoNewline "    $fleetHost ($site) - " -ForegroundColor White; Write-Host "missing" -ForegroundColor Red
+                        if ($entryStatus[$entry] -eq "valuedrift") {
+                            Write-Host -NoNewline "  $entry" -ForegroundColor Yellow
+                            Write-Host " (value mismatch)" -ForegroundColor Red
+                            foreach ($fleetHost in $pulledHosts) {
+                                $site = $hostSites[$fleetHost]
+                                $v = [string]$entryValues[$entry][$fleetHost]
+                                $vDisplay = $(if ($v) { $v } else { "(none)" })
+                                Write-Host -NoNewline "    $fleetHost ($site) - value: " -ForegroundColor White
+                                Write-Host $vDisplay -ForegroundColor Yellow
+                            }
+                        } else {
+                            Write-Host "  $entry" -ForegroundColor Yellow
+                            foreach ($fleetHost in $pulledHosts) {
+                                $site = $hostSites[$fleetHost]
+                                if ($entryHosts[$entry] -contains $fleetHost) {
+                                    Write-Host "    $fleetHost ($site)" -ForegroundColor White
+                                } else {
+                                    Write-Host -NoNewline "    $fleetHost ($site) - " -ForegroundColor White; Write-Host "missing" -ForegroundColor Red
+                                }
                             }
                         }
                         Write-Host ""
@@ -5242,7 +5300,7 @@ function Main {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.4                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.5                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White

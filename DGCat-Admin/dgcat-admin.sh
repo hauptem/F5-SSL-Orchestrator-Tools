@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.4
+# Version: 5.5
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -2819,7 +2819,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.4                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.5                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -5982,6 +5982,7 @@ menu_fleet_looking_glass() {
     local orig_host="${REMOTE_HOST}"
     
     declare -A entry_hosts      # entry -> "host1|host2|..."
+    declare -A entry_values     # "host|entry" -> value (datagroups only; hosts cannot contain '|')
     declare -a pulled_hosts     # hosts that were pulled
     declare -A host_counts      # host -> entry count
     declare -A host_sites       # host -> site name
@@ -6018,6 +6019,7 @@ menu_fleet_looking_glass() {
                 else
                     entry_hosts["${entry}"]="${host}"
                 fi
+                entry_values["${host}|${entry}"]="${value}"
                 count=$((count + 1))
             done < <(get_internal_datagroup_records_remote "${partition}" "${object_name}")
         else
@@ -6060,6 +6062,36 @@ menu_fleet_looking_glass() {
     else
         object_display="${object_name} (URL Category)"
     fi
+    
+    # Classify each entry: consistent (same key AND value everywhere),
+    # missing (absent on some hosts), valuedrift (present everywhere but
+    # values differ - datagroups only; URL categories have no values)
+    declare -A entry_status
+    local cls_entry cls_hosts cls_count cls_status cls_first_set cls_first_val cls_v cls_host
+    for cls_entry in "${!entry_hosts[@]}"; do
+        cls_hosts="${entry_hosts[${cls_entry}]}"
+        cls_count=$(( $(echo "${cls_hosts}" | tr -cd '|' | wc -c) + 1 ))
+        if [ ${cls_count} -lt ${total_pulled} ]; then
+            entry_status["${cls_entry}"]="missing"
+            continue
+        fi
+        cls_status="consistent"
+        if [ "${object_type}" == "datagroup" ]; then
+            cls_first_set=0
+            cls_first_val=""
+            for cls_host in "${pulled_hosts[@]}"; do
+                cls_v="${entry_values[${cls_host}|${cls_entry}]-}"
+                if [ ${cls_first_set} -eq 0 ]; then
+                    cls_first_val="${cls_v}"
+                    cls_first_set=1
+                elif [ "${cls_v}" != "${cls_first_val}" ]; then
+                    cls_status="valuedrift"
+                    break
+                fi
+            done
+        fi
+        entry_status["${cls_entry}"]="${cls_status}"
+    done
     
     # Viewer loop
     while true; do
@@ -6116,9 +6148,9 @@ menu_fleet_looking_glass() {
             
             for entry in "${!entry_hosts[@]}"; do
                 local hosts_with="${entry_hosts[${entry}]}"
-                local host_count=$(( $(echo "${hosts_with}" | tr -cd '|' | wc -c) + 1 ))
+                local status="${entry_status[${entry}]-consistent}"
                 
-                if [ ${host_count} -lt ${total_pulled} ]; then
+                if [ "${status}" == "missing" ]; then
                     drift_count=$((drift_count + 1))
                     echo -e "  ${YELLOW}${entry}${NC}"
                     echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
@@ -6129,6 +6161,17 @@ menu_fleet_looking_glass() {
                         else
                             echo -e "    ${WHITE}${fleet_host} (${site})${NC} - ${RED}missing${NC}"
                         fi
+                    done
+                    echo ""
+                elif [ "${status}" == "valuedrift" ]; then
+                    drift_count=$((drift_count + 1))
+                    echo -e "  ${YELLOW}${entry}${NC} ${RED}(value mismatch)${NC}"
+                    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
+                    for fleet_host in "${pulled_hosts[@]}"; do
+                        local site="${host_sites[${fleet_host}]}"
+                        local v="${entry_values[${fleet_host}|${entry}]-}"
+                        [ -z "${v}" ] && v="(none)"
+                        echo -e "    ${WHITE}${fleet_host} (${site}) - value:${NC} ${YELLOW}${v}${NC}"
                     done
                     echo ""
                 else
@@ -6180,10 +6223,8 @@ menu_fleet_looking_glass() {
                 fi
                 
                 match_count=$((match_count + 1))
-                local hosts_with="${entry_hosts[${entry}]}"
-                local host_count=$(( $(echo "${hosts_with}" | tr -cd '|' | wc -c) + 1 ))
                 
-                if [ ${host_count} -ge ${total_pulled} ]; then
+                if [ "${entry_status[${entry}]-consistent}" == "consistent" ]; then
                     consistent_matches+=("${entry}")
                 else
                     inconsistent_matches+=("${entry}")
@@ -6208,16 +6249,26 @@ menu_fleet_looking_glass() {
                     echo -e "  ${YELLOW}Partial matches (${#inconsistent_matches[@]}):${NC}"
                     echo -e "  ${CYAN}──────────────────────────────────────────────────────────────${NC}"
                     for entry in "${inconsistent_matches[@]}"; do
-                        echo -e "  ${YELLOW}${entry}${NC}"
-                        local hosts_with="${entry_hosts[${entry}]}"
-                        for fleet_host in "${pulled_hosts[@]}"; do
-                            local site="${host_sites[${fleet_host}]}"
-                            if [[ "|${hosts_with}|" == *"|${fleet_host}|"* ]] || [[ "${hosts_with}" == "${fleet_host}" ]]; then
-                                echo -e "    ${WHITE}${fleet_host} (${site})${NC}"
-                            else
-                                echo -e "    ${WHITE}${fleet_host} (${site})${NC} - ${RED}missing${NC}"
-                            fi
-                        done
+                        if [ "${entry_status[${entry}]-}" == "valuedrift" ]; then
+                            echo -e "  ${YELLOW}${entry}${NC} ${RED}(value mismatch)${NC}"
+                            for fleet_host in "${pulled_hosts[@]}"; do
+                                local site="${host_sites[${fleet_host}]}"
+                                local v="${entry_values[${fleet_host}|${entry}]-}"
+                                [ -z "${v}" ] && v="(none)"
+                                echo -e "    ${WHITE}${fleet_host} (${site}) - value:${NC} ${YELLOW}${v}${NC}"
+                            done
+                        else
+                            echo -e "  ${YELLOW}${entry}${NC}"
+                            local hosts_with="${entry_hosts[${entry}]}"
+                            for fleet_host in "${pulled_hosts[@]}"; do
+                                local site="${host_sites[${fleet_host}]}"
+                                if [[ "|${hosts_with}|" == *"|${fleet_host}|"* ]] || [[ "${hosts_with}" == "${fleet_host}" ]]; then
+                                    echo -e "    ${WHITE}${fleet_host} (${site})${NC}"
+                                else
+                                    echo -e "    ${WHITE}${fleet_host} (${site})${NC} - ${RED}missing${NC}"
+                                fi
+                            done
+                        fi
                         echo ""
                     done
                 fi
@@ -6972,7 +7023,7 @@ main() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.4                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.5                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
