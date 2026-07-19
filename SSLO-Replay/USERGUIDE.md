@@ -75,7 +75,7 @@ The target device needs:
 3. **VLANs created** - the ingress and service-side VLANs referenced by topologies and services
 4. **Network infrastructure** - self IPs, routes, anything the services need to reach inspection devices
 
-The tool validates all of this before touching the blocks API. If something is missing, it tells you what and where it is referenced.
+The tool validates the named object references before touching the blocks API: certs, keys, CA bundles, cipher groups, log publishers, VLANs, SNAT pools, gateway pools, profiles, iRules, LTM policies, access profiles, datagroups (including type for subnet-match datagroups), and custom URL categories. If something is missing, it tells you what and where it is referenced. Two things it cannot pre-validate: network reachability (self IPs, routes, whether service IPs answer) and monitors, which the gc processor validates at deploy time.
 
 ### Replay modes
 
@@ -94,12 +94,12 @@ Scoped replay also offers dynamic renaming. If the topology, its SSL settings, a
 5. Prerequisite validation walks every block and checks all external references on the target
 6. Pre-replay analysis checks which objects already exist on the target and skips them, displays a plan of what will be deployed. Existing objects in a failed or stuck state are flagged. Remove them on the target before re-replaying those objects
 7. Confirmation prompt. Type `REPLAY` to proceed; anything else cancels
-8. Block deployment. Each block is POSTed to `/mgmt/shared/iapp/blocks` as a CREATE operation. The tool waits for each block to reach BOUND state before proceeding to the next. If SSL settings reference private keys, you are prompted for each key's passphrase (press Enter if the key has none); each key is asked once per replay run
+8. Block deployment. Each block is POSTed to `/mgmt/shared/iapp/blocks` as a CREATE operation. The tool waits for each block to reach BOUND state before proceeding to the next. If the wait times out, the tool checks for the deployment's component block - the durable evidence that the deployment landed - and counts the object as replayed if it is found. If SSL settings reference private keys, you are prompted for each key's passphrase (press Enter if the key has none); each key is asked once per replay run
 9. Configuration save; tmsh save and mcpBlockIO block database save
 
 Deployment order: SSL settings, then services, service chains, security policies, and topologies last. Each object waits up to 120 seconds for the gc processor to complete; topologies get 180 seconds.
 
-If 3 objects fail in a row, the replay halts and asks whether to continue with the remaining objects. Objects that post without a returned block ID are reported as unverified, so confirm their state in the SSLO GUI. "Replay complete" is only reported with zero failed and zero unverified objects.
+If 3 objects fail in a row, the replay halts and asks whether to continue with the remaining objects. A timed-out object that could not be verified is safe to retry: the gc processor may still complete it after the tool moves on, and a re-replay skips anything that landed. Objects that post without a returned block ID are reported as unverified, so confirm their state in the SSLO GUI. "Replay complete" is only reported with zero failed and zero unverified objects.
 
 ### After replay
 
@@ -119,7 +119,7 @@ Use this when you want to push a policy from one environment to another without 
 
 1. Select a source policy from the snapshot
 2. Select a target topology on the connected device
-3. Name the policy on the target (defaults to the target topology's naming convention)
+3. Name the policy on the target (defaults to the target topology's naming convention). Same rule as replay-time renaming: 1-20 characters after the `ssloP_` prefix - letters, numbers, underscores
 4. The tool shows a pre-flight plan: what will be created, what will be overwritten, what already exists
 5. Confirm to proceed
 
@@ -142,7 +142,7 @@ Use this to:
 
 The redeploy reads the existing block state, constructs a MODIFY operation block with the current inputProperties, and POSTs it. The gc processor runs a full deployment pass. No snapshot file is needed. This operates entirely on the live device.
 
-Before the MODIFY, the tool scans for any blocks in a stuck state (BINDING, UNBINDING, ERROR) belonging to the selected topology. Stuck blocks are transitioned to ERROR and then deleted to clear the way for the fresh deployment. Matching is exact, so blocks of a sibling topology whose name merely contains the selected one are never touched.
+Before the MODIFY, the tool scans for any blocks in a stuck state (BINDING, UNBINDING, ERROR) belonging to the selected topology. Stuck blocks are transitioned to ERROR and then deleted to clear the way for the fresh deployment. Matching requires the exact topology name or an operation block ending in it, so blocks of a sibling topology whose name merely contains the selected one are never touched.
 
 ---
 
@@ -194,9 +194,9 @@ Run the tool, connect to the target, select option 2, pick the snapshot file.
 
 ## Troubleshooting
 
-### Replay fails with "block did not reach BOUND state"
+### Replay reports "poll timed out"
 
-The gc processor timed out. Check `/var/log/restnoded/restnoded.log` on the BIG-IP for the specific error. Common causes: missing VLAN, missing cert, service IP unreachable, APM provisioning issue.
+The gc processor did not finish within the wait window. The tool automatically checks for the deployment's component block and counts the object as replayed if the deployment landed late. If it could not be verified, the gc processor may still complete after the tool moves on - a re-replay safely skips anything that landed. For deployments that genuinely stalled, check `/var/log/restnoded/restnoded.log` on the BIG-IP for the specific error. Common causes: missing VLAN, missing cert, service IP unreachable, APM provisioning issue.
 
 ### Replay fails with "ERROR state"
 
