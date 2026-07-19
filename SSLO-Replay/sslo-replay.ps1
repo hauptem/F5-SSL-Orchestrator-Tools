@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay - F5 SSL Orchestrator Snapshot and Replay Tool
 # =============================================================================
-# Version: vb6.3.15-devel (Beta 6 July 17 2026)
+# Version: vb7.3.15-devel (Beta 7 July 19 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -1210,11 +1210,13 @@ function Get-MonitorDependency {
 function Get-BlockDependencyRefs {
     param(
         [string]$DeploymentType,
-        [string]$DeploymentName,
         [object]$ConfigData
     )
     
-    $script:_depRefs = [System.Collections.ArrayList]::new()
+    # Function-local collection. Add-Ref reads it through dynamic scoping and
+    # mutates it in place via .Add() - method calls do not create a local copy
+    # the way assignment would
+    $depRefs = [System.Collections.ArrayList]::new()
     
     # Helper to add a ref if it's a real external path
     function Add-Ref {
@@ -1224,7 +1226,7 @@ function Get-BlockDependencyRefs {
         if (Test-IsSsloGenerated -ObjPath $Path) { return }
         if ($Path -notmatch "^/Common/") { return }
         if (Test-IsCertKeyEndpoint -Endpoint $Endpoint) { return }
-        [void]$script:_depRefs.Add([ordered]@{ Type = $Type; Path = $Path; Endpoint = $Endpoint })
+        [void]$depRefs.Add([ordered]@{ Type = $Type; Path = $Path; Endpoint = $Endpoint })
     }
     
     switch ($DeploymentType) {
@@ -1240,18 +1242,18 @@ function Get-BlockDependencyRefs {
                         # Certificate
                         if ($chain.cert -and $chain.cert -ne "" -and $chain.cert -match "^/Common/" -and -not $certSeen[$chain.cert]) {
                             $certSeen[$chain.cert] = $true
-                            [void]$script:_depRefs.Add([ordered]@{ Type = "certificate"; Path = $chain.cert; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
+                            [void]$depRefs.Add([ordered]@{ Type = "certificate"; Path = $chain.cert; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
                         }
                         # Key (may be same name as cert - tracked separately)
                         $keyPath = "key:$($chain.key)"
                         if ($chain.key -and $chain.key -ne "" -and $chain.key -match "^/Common/" -and -not $certSeen[$keyPath]) {
                             $certSeen[$keyPath] = $true
-                            [void]$script:_depRefs.Add([ordered]@{ Type = "key"; Path = $chain.key; Endpoint = "/mgmt/tm/sys/crypto/key/" })
+                            [void]$depRefs.Add([ordered]@{ Type = "key"; Path = $chain.key; Endpoint = "/mgmt/tm/sys/crypto/key/" })
                         }
                         # Chain cert (if different from cert)
                         if ($chain.chain -and $chain.chain -ne "" -and $chain.chain -match "^/Common/" -and -not $certSeen[$chain.chain]) {
                             $certSeen[$chain.chain] = $true
-                            [void]$script:_depRefs.Add([ordered]@{ Type = "certificate"; Path = $chain.chain; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
+                            [void]$depRefs.Add([ordered]@{ Type = "certificate"; Path = $chain.chain; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
                         }
                     }
                 }
@@ -1260,7 +1262,7 @@ function Get-BlockDependencyRefs {
             if ($ConfigData.serverSettings -and $ConfigData.serverSettings.caBundle) {
                 $caBundle = $ConfigData.serverSettings.caBundle
                 if ($caBundle -and $caBundle -ne "" -and $caBundle -match "^/Common/") {
-                    [void]$script:_depRefs.Add([ordered]@{ Type = "ca_bundle"; Path = $caBundle; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
+                    [void]$depRefs.Add([ordered]@{ Type = "ca_bundle"; Path = $caBundle; Endpoint = "/mgmt/tm/sys/crypto/cert/" })
                 }
             }
             # Cipher groups - client and server
@@ -1320,7 +1322,7 @@ function Get-BlockDependencyRefs {
                     $monPath = $svc.customService.loadBalancing.monitor.fromSystem
                     if ($monPath -and $monPath -ne "" -and $monPath -notin $script:BUILTIN_MONITORS) {
                         # Monitor uses special probe detection - flag with type "monitor"
-                        [void]$script:_depRefs.Add([ordered]@{ Type = "monitor"; Path = $monPath; Endpoint = "" })
+                        [void]$depRefs.Add([ordered]@{ Type = "monitor"; Path = $monPath; Endpoint = "" })
                     }
                 }
                 # iRules: customService.iRuleList[].name
@@ -1448,7 +1450,7 @@ function Get-BlockDependencyRefs {
                     if ($opts.category) {
                         foreach ($catName in $opts.category) {
                             if ($catName -and $catName -ne "") {
-                                [void]$script:_depRefs.Add([ordered]@{ Type = "url_category"; Path = $catName; Endpoint = "/mgmt/tm/sys/url-db/url-category/" })
+                                [void]$depRefs.Add([ordered]@{ Type = "url_category"; Path = $catName; Endpoint = "/mgmt/tm/sys/url-db/url-category/" })
                             }
                         }
                     }
@@ -1457,7 +1459,7 @@ function Get-BlockDependencyRefs {
         }
     }
     
-    return ,@($script:_depRefs)
+    return ,@($depRefs)
 }
 
 # Capture external object references from snapshot blocks
@@ -1482,7 +1484,7 @@ function Invoke-DependencyCapture {
         }
         if ($null -eq $configData) { continue }
         
-        $refs = Get-BlockDependencyRefs -DeploymentType $entry.deploymentType -DeploymentName $entry.deploymentName -ConfigData $configData
+        $refs = Get-BlockDependencyRefs -DeploymentType $entry.deploymentType -ConfigData $configData
         if (-not $refs -or $refs.Count -eq 0) { continue }
         
         foreach ($ref in $refs) {
@@ -2407,12 +2409,16 @@ function Convert-StateBlockToModify {
     return $modifyBlock
 }
 
-# POST a block to the gc processor and poll for BOUND state
+# POST a block to the gc processor and poll for BOUND state.
+# VerifyName (CREATE operations only): deployment name whose component block
+# proves success if the poll times out. Never pass it for MODIFY or DELETE -
+# a component block that predates the operation proves nothing
 function Invoke-BlockPost {
     param(
         [object]$Block,
         [string]$Label,
-        [int]$PollMax = 120
+        [int]$PollMax = 120,
+        [string]$VerifyName = ""
     )
     
     $postBody = $Block | ConvertTo-Json -Depth 30
@@ -2457,7 +2463,26 @@ function Invoke-BlockPost {
             }
             return $false
         } else {
-            Write-LogWarn "$Label timed out (state: $finalState)"
+            # Poll timed out but the gc processor does not stop - the op block
+            # may reach BOUND after the poll gives up. The op block is transient
+            # (it self-destructs 120s after BOUND), so its later presence or
+            # absence is not reliable evidence either way. The component block
+            # is the durable positive evidence: if a state block with this
+            # deployment name exists, the deployment landed
+            if ($VerifyName) {
+                Write-LogWarn "$Label - poll timed out (state: $finalState). Checking component block..."
+                Start-Sleep -Seconds 10
+                $verifyResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$VerifyName'"
+                if ($verifyResult.Success -and $verifyResult.Response.items) {
+                    foreach ($vb in $verifyResult.Response.items) {
+                        if ($vb.state -in @("BOUND", "UNBOUND") -and -not (Get-DeploymentInfo -Block $vb)) {
+                            Write-LogOk "$Label (verified by component block after timeout)"
+                            return $true
+                        }
+                    }
+                }
+            }
+            Write-LogWarn "$Label timed out (state: $finalState). The gc processor may still complete - verify on the target before retrying."
             return $false
         }
     }
@@ -2591,6 +2616,15 @@ function Invoke-PolicySwap {
     # Ensure ssloP_ prefix
     if ($newPolicyName -notmatch "^ssloP_") {
         $newPolicyName = "ssloP_$newPolicyName"
+    }
+    # Names cascade into TMOS and APM object names downstream - same rule as
+    # replay-time renaming. Also keeps the name safe for the OData $filter
+    # existence checks and block names built from it below
+    $policyBase = $newPolicyName -replace "^ssloP_", ""
+    if ($policyBase -notmatch '^[A-Za-z0-9_]{1,20}$') {
+        Write-LogError "Policy name after ssloP_ must be 1-20 characters: letters, numbers, underscores."
+        Wait-EnterKey
+        return
     }
     
     # -------------------------------------------------------------------------
@@ -2767,7 +2801,9 @@ function Invoke-PolicySwap {
         }
         
         $pollMax = if ($entry.deploymentType -eq "TOPOLOGY") { 180 } else { 120 }
-        if (-not (Invoke-BlockPost -Block $postBlock -Label "$typeLabel $createName" -PollMax $pollMax)) {
+        # Component-block verification applies only to CREATEs - see Invoke-BlockPost
+        $verifyName = if ($item.Action -eq "create") { $createName } else { "" }
+        if (-not (Invoke-BlockPost -Block $postBlock -Label "$typeLabel $createName" -PollMax $pollMax -VerifyName $verifyName)) {
             $depFailed = $true
             break
         }
@@ -3731,9 +3767,32 @@ function Invoke-SsloReplay {
                 if (-not (Test-ReplayCircuitBreaker)) { break }
                 # No continue - fall through to the inter-object mcpd settle delay
             } else {
-                Write-LogWarn "$($item.DeploymentName) timed out (state: $finalState)"
-                $failed += $item.DeploymentName
-                if (-not (Test-ReplayCircuitBreaker)) { break }
+                # Poll timed out but the gc processor does not stop - the op
+                # block may reach BOUND after the poll gives up, then self-
+                # destruct 120s later. The component block is the durable
+                # evidence; every replay-loop post is a CREATE, so its
+                # existence proves the deployment landed
+                Write-LogWarn "$($item.DeploymentName) - poll timed out (state: $finalState). Checking component block..."
+                Start-Sleep -Seconds 10
+                $lateOk = $false
+                $verifyResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$($item.DeploymentName)'"
+                if ($verifyResult.Success -and $verifyResult.Response.items) {
+                    foreach ($vb in $verifyResult.Response.items) {
+                        if ($vb.state -in @("BOUND", "UNBOUND") -and -not (Get-DeploymentInfo -Block $vb)) {
+                            $lateOk = $true
+                            break
+                        }
+                    }
+                }
+                if ($lateOk) {
+                    Write-LogOk "$($item.DeploymentName) (verified by component block after timeout)"
+                    $replayed += $item.DeploymentName
+                    $script:ConsecutiveFailures = 0
+                } else {
+                    Write-LogWarn "$($item.DeploymentName) timed out. The gc processor may still complete - a re-replay will safely skip it if it lands."
+                    $failed += $item.DeploymentName
+                    if (-not (Test-ReplayCircuitBreaker)) { break }
+                }
                 # No continue - fall through to the inter-object mcpd settle delay
             }
         } else {
@@ -4196,31 +4255,37 @@ function Invoke-TopologyDelete {
     }
     
     # Reference walks against live config only
-    function Get-TopoRefs($topo) {
+    function Get-TopoRefs {
+        param([object]$Topo)
         $refs = @{ Ssl = @(); Policy = "" }
-        if ($topo.Config) {
-            $s = $topo.Config.sslSettingReference
+        if ($Topo.Config) {
+            $s = $Topo.Config.sslSettingReference
             if ($s) { $refs.Ssl = @(@($s) | Where-Object { $_ }) }
-            if ($topo.Config.securityPolicyReference) { $refs.Policy = [string]$topo.Config.securityPolicyReference }
+            if ($Topo.Config.securityPolicyReference) { $refs.Policy = [string]$Topo.Config.securityPolicyReference }
         }
         return $refs
     }
-    function Get-PolicyChains($pol) {
-        if ($pol -and $pol.Config) {
-            return @(Get-PolicyServiceChainNames -PolicyConfig $pol.Config)
+    function Get-PolicyChains {
+        param([object]$Pol)
+        if ($Pol -and $Pol.Config) {
+            return @(Get-PolicyServiceChainNames -PolicyConfig $Pol.Config)
         }
         return @()
     }
-    function Get-ChainServices($chain) {
+    function Get-ChainServices {
+        param([object]$Chain)
         $svcs = @()
-        if ($chain -and $chain.Config -and $chain.Config.orderedServiceList) {
-            foreach ($svc in $chain.Config.orderedServiceList) {
+        if ($Chain -and $Chain.Config -and $Chain.Config.orderedServiceList) {
+            foreach ($svc in $Chain.Config.orderedServiceList) {
                 if ($svc.name) { $svcs += [string]$svc.name }
             }
         }
         return @($svcs | Sort-Object -Unique)
     }
-    function Find-Live($name) { return ($live | Where-Object { $_.Name -eq $name } | Select-Object -First 1) }
+    function Find-Live {
+        param([string]$Name)
+        return ($live | Where-Object { $_.Name -eq $Name } | Select-Object -First 1)
+    }
     
     # Select topology
     Write-Host ""
