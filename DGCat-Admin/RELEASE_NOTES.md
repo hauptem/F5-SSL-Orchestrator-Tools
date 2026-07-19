@@ -54,6 +54,7 @@
 **Datagroup Editor and Deploy**
 - Added a second mode to the datagroup editor 'w' write function and 'D' deploy function. Originally this tool made atomic edits to datagroups in that when a datagroup was edited, entries added... entries deleted... the tool would pull the entire datagroup - do the edits in memory and then PATCH the entire datagroup in a "replace-all-with" REST equivalent action. There is another way to send tmsh commands in an options parameter to leave the contents of a datagroup alone and simply add or replace individual entries within.  DGCat-Admin Editor now supports both modes "Full Replace" i.e. REST PATCH, and "tmsh Modify" via the option parameter technique.
 - Described here: https://community.f5.com/discussions/technicalforum/update-an-internal-data-group-via-api/306520
+- and here        https://community.f5.com/discussions/technicalforum/add-new-key-into-data-group-without-updating-entire-list-using-the-api/272699
 
 **Cleanup**
 - Removed 8 orphaned functions
