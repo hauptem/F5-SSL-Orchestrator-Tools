@@ -104,13 +104,13 @@ There is no installation process, no dependencies beyond the above, and no confi
 The top of the script contains a configuration section with four settings you may want to adjust:
 
 ```bash
-BACKUP_DIR="dgcat-admin-backups"
+BACKUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dgcat-admin-backups"
 MAX_BACKUPS=10
 BACKUPS_ENABLED=0
 PARTITIONS="Common"
 ```
 
-**BACKUP_DIR** is where backups, logs, and the fleet configuration file are stored. 
+**BACKUP_DIR** is where backups, logs, and the fleet configuration file are stored. The default resolves next to the script itself (both versions), so the tool's files stay together no matter which directory you launch it from. 
 
 **MAX_BACKUPS** controls how many backup files are retained per object. When the limit is exceeded, the oldest backups are removed automatically.
 
@@ -350,11 +350,11 @@ Before anything changes, the tool displays a deployment preview showing the obje
 
 Deployment proceeds in up to three steps:
 
-**Step 1: Pre-deploy validation.** The tool connects to every target host using the same credentials, verifies the object exists, and creates a backup. Hosts that fail connectivity or don't have the object are flagged. The tool shows the validation results and asks whether you want to proceed. If too many hosts are unreachable, you can abort here - nothing has changed on any device.
+**Step 1: Pre-deploy validation.** The tool connects to every target host using the same credentials and verifies the object exists. Hosts that fail connectivity or don't have the object are flagged. If every host passes, deployment proceeds directly; if some hosts fail, the tool shows the validation results and asks whether to continue with a partial deployment. Nothing has changed on any device at this point.
 
 **Step 2: Apply to current device.** If there are pending changes, the tool applies them to the connected device first. If there are no pending changes (replication deploy), this step is skipped entirely - the current device already has the correct state.
 
-**Step 3: Deploy to fleet.** The tool applies changes to each validated host in sequence. Each host's result is shown in real time. If the same error occurs on three consecutive hosts (indicating a systemic problem rather than an isolated failure), the tool warns you and asks whether to continue or stop.
+**Step 3: Deploy to fleet.** For each validated host in sequence, the tool creates a backup (if backups are enabled), applies the changes, and saves the configuration. Each host's result is shown in real time. If the same error occurs on three consecutive hosts (indicating a systemic problem rather than an isolated failure), the tool warns you and asks whether to continue or stop.
 
 After all hosts have been processed, a summary table shows the status of every device:
 
@@ -371,7 +371,7 @@ After all hosts have been processed, a summary table shows the status of every d
   Total: 3 succeeded, 0 failed, 1 skipped
 ```
 
-Status meanings in the deploy summary: **OK** means the deployment succeeded. **SKIP** means the host was never attempted - it failed pre-deploy validation (unreachable, object not found, or backup failed). **FAIL** means the host passed validation but the actual deployment failed. This distinction lets you quickly identify hosts that need attention versus hosts that were simply unavailable.
+Status meanings in the deploy summary: **OK** means the deployment succeeded. **SKIP** means the host was never attempted - it failed pre-deploy validation (unreachable or object not found). **FAIL** means the host passed validation but the deployment itself failed - the backup, apply, or configuration save step did not complete. This distinction lets you quickly identify hosts that need attention versus hosts that were simply unavailable.
 
 ### What Fleet Deploy Will Not Do
 
@@ -606,10 +606,10 @@ When connected to a host that is not part of any fleet site, backups go to the r
 bigip01-mgmt_dc1_example_com_Common_bypass-domains_internal_20260327_143052.csv
 ```
 
-Fleet deployment backups for remote hosts are always organized by site:
+Fleet deployment backups for remote hosts are always organized by site and use the same naming convention, so connected-host and fleet backups of the same object share one rotation pool:
 
 ```
-DC1/bigip02-mgmt_dc1_example_com_Common_bypass-domains_20260327_143022.csv
+DC1/bigip02-mgmt_dc1_example_com_Common_bypass-domains_internal_20260327_143022.csv
 ```
 
 ### Retention
@@ -692,7 +692,7 @@ The host is reachable and credentials are valid, but the target datagroup or URL
 The host is unreachable or restjavad is down. Verify network connectivity and REST API availability on the target. See the 503 guidance above.
 
 **Hosts showing as SKIP in the deploy summary.**
-The host failed pre-deploy validation - either it was unreachable, the target object doesn't exist, or the backup failed. SKIP means deployment was never attempted on that host.
+The host failed pre-deploy validation - either it was unreachable or the target object doesn't exist. SKIP means deployment was never attempted on that host. A backup failure during deployment shows as FAIL, not SKIP.
 
 ### Editor Issues
 
