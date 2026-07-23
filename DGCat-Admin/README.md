@@ -1,31 +1,27 @@
 # DGCat-Admin v5.x — F5 BIG-IP Datagroup & URL Category Manager
 
 ![License](https://img.shields.io/badge/license-MIT-green)
-![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
-![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
 
 
 A menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems via the iControl REST API. Designed primarily for SSL Orchestrator (SSLO) policy management, but can be used for general purpose datagroup and URL category management.
 
 Available in two versions with identical functionality:
 
-- **Bash** (`dgcat-admin.sh`) — For Linux, macOS, or directly on BIG-IP/Big-IQ
+- **Bash** (`dgcat-admin.sh`) — For Linux, macOS, or directly on BIG-IP/BIG-IQ
 - **PowerShell** (`dgcat-admin.ps1`) — For Windows
 
-### The Datagroup and URL Category Approach
+## The Datagroup and URL Category Approach
 
 F5's recommended approach is to reference datagroups or custom URL categories in your SSLO security policy rules instead of adding entries directly. Datagroups and URL categories are optimized for fast lookups, can hold thousands of entries without impacting policy performance, and are independent objects that can be managed, exported, and replicated separately from the policies that reference them.
 
-The challenge is that BIG-IP provides limited tooling for bulk management of these objects when an orchestration tool such as Ansible is not available. Adding 500 domains to a datagroup through the GUI is tedious. Exporting a URL category to replicate it at another site requires manual work. Keeping six BIG-IP SSLO's in sync across three datacenters is operationally expensive. No one wants to mess with tmsh scripts in 2026.
+The challenge is that BIG-IP provides limited tooling for bulk management of these objects when an orchestration tool such as Ansible is not available. Adding 500 domains to a datagroup through the GUI is tedious. Exporting a URL category to replicate it at another site requires manual work. Keeping six BIG-IP SSLOs in sync across three datacenters is operationally expensive. No one wants to mess with tmsh scripts in 2026.
 
-### What DGCat-Admin Solves
+## What DGCat-Admin Solves
 
 DGCat-Admin provides a single interface for all of these operations. You can import thousands of entries from a CSV file in seconds, export existing objects for backup or replication, edit entries interactively with search and bulk operations, and push the result to every BIG-IP in your fleet with a single command.
 
 The tool handles the details that make these operations error-prone when done manually: type validation, backup before modification, format conversion between CSV and BIG-IP native formats, and atomic application of changes.
-
-DGCat-Admin makes managing Datagroups and URL Categories very easy.
 
 - Need to export a few massive datagroups or custom URL categories so you can precisely replicate existing SSLO business logic at another site in just minutes?
 - Need to ingest a large number of subnets or hosts from an Excel spreadsheet into a datagroup for SSLO security policy use?
@@ -52,7 +48,7 @@ DGCat-Admin makes managing Datagroups and URL Categories very easy.
 - PowerShell 5.1 or later
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
-- Note: Powershell works fast even with 20k URL records - just set API_TIMEOUT accordingly for large datasets
+- Note: PowerShell works fast even with 20k URL records - just set API_TIMEOUT accordingly for large datasets
 
 ## Installation
 
