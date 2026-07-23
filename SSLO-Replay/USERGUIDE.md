@@ -1,5 +1,19 @@
 # SSLO-Replay User Guide
 
+## Table of Contents
+
+- [Running the Tool](#running-the-tool)
+- [Main Menu](#main-menu)
+- [Recording a Snapshot](#recording-a-snapshot)
+- [Replaying a Snapshot](#replaying-a-snapshot)
+- [Swapping a Security Policy](#swapping-a-security-policy)
+- [Redeploying a Topology (experimental)](#redeploying-a-topology-experimental)
+- [Deleting a Topology](#deleting-a-topology)
+- [Preparing a Target Device](#preparing-a-target-device)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+- [Disclaimer](#disclaimer)
+
 ## Running the Tool
 
 ```powershell
@@ -75,6 +89,8 @@ The target device needs:
 3. **VLANs created** - the ingress and service-side VLANs referenced by topologies and services
 4. **Network infrastructure** - self IPs, routes, anything the services need to reach inspection devices
 
+See [Preparing a Target Device](#preparing-a-target-device) for the full step-by-step checklist covering these prerequisites.
+
 The tool validates the named object references before touching the blocks API: certs, keys, CA bundles, cipher groups, log publishers, VLANs, SNAT pools, gateway pools, profiles, iRules, LTM policies, access profiles, datagroups (including type for subnet-match datagroups), and custom URL categories. If something is missing, it tells you what and where it is referenced. Two things it cannot pre-validate: network reachability (self IPs, routes, whether service IPs answer) and monitors, which the gc processor validates at deploy time.
 
 ### Replay modes
@@ -103,7 +119,7 @@ If 3 objects fail in a row, the replay halts and asks whether to continue with t
 
 ### After replay
 
-After replay, the SSLO GUI may display a warning about a pending deployment or initialization; click the pulsing red icon in the top right of the SSLO main page GUI "resume upgrade" to reload the SSLO configuration and then wait 15 seconds and refresh the GUI. The message should clear.
+After replay, the SSLO GUI may display a warning about a pending deployment or initialization; click the pulsing red "resume upgrade" icon in the top right of the SSLO main page to reload the SSLO configuration, then wait about 15 seconds and refresh the GUI. The message should clear.
 
 <img width="408" height="168" alt="Image" src="https://github.com/user-attachments/assets/92446ab9-4cd2-4236-9146-ad2b027450d9" />
 
@@ -213,3 +229,26 @@ The tool lists every missing object with its type and which SSLO object referenc
 ### Policy swap blocked on missing service
 
 The policy references a service chain that references a service not present on the target. Services are not auto-created during policy swap because they require network infrastructure (VLANs, self IPs, pool members) that the tool cannot verify. Deploy the service first through a full replay or the SSLO GUI, then retry the policy swap.
+
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## Disclaimer
+
+- This solution is **NOT** officially endorsed, supported, or maintained by F5 Inc.
+- F5 Inc. retains all rights to their trademarks, including but not limited to "F5", "BIG-IP", "TMOS", "SSL Orchestrator", and related marks
+- This is an independent, community-developed solution that utilizes F5 products but is not affiliated with F5 Inc.
+- For official F5 support and solutions, please contact F5 Inc. directly
+
+**Technical Disclaimer:**
+
+- This software is provided "AS IS" without warranty of any kind
+- The authors and contributors are not responsible for any damages or issues that may arise from its use
+- Always test thoroughly in non-production environments before deployment
+- Backup your F5 configuration before implementing any changes
+- Review and understand all code before deploying to production systems
+
+By using this software, you acknowledge that you have read and understood these disclaimers and agree to use this solution at your own risk.
