@@ -8,8 +8,8 @@ A menu-driven administration tool for managing LTM datagroups and custom URL cat
 
 Available in two versions with identical functionality:
 
-- **Bash** (`dgcat-admin.sh`) — For Linux, macOS, or directly on BIG-IP/BIG-IQ
-- **PowerShell** (`dgcat-admin.ps1`) — For Windows
+- **Bash** (`dgcat-admin.sh`) — For Linux, macOS, or directly on BIG-IP/BIG-IQ. v5.3 is the final bash release; it remains fully functional but new development continues in the PowerShell version only.
+- **PowerShell** (`dgcat-admin.ps1`) — For Windows. This is the maintained version going forward.
 
 ## The Datagroup and URL Category Approach
 

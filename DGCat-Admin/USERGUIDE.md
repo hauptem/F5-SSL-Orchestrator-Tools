@@ -27,7 +27,7 @@
 
 DGCat-Admin is a menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. It connects to BIG-IP devices via the iControl REST API and is available in two versions with identical functionality:
 
-- **Bash** (`dgcat-admin.sh`) - Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or Big-IQ. v5.3 is the final bash release; the PowerShell version is maintained going forward.
+- **Bash** (`dgcat-admin.sh`) - Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or BIG-IQ. v5.3 is the final bash release; the PowerShell version is maintained going forward.
 - **PowerShell** (`dgcat-admin.ps1`) - Requires PowerShell 5.1 or later. Runs from any Windows workstation.
 
 Both versions require network access to the BIG-IP management interface on port 443 and an account with administrative API access.
@@ -42,7 +42,7 @@ DGCat-Admin supports managing a single device or an entire fleet of BIG-IPs. Cha
 
 F5's recommended approach is to reference datagroups or custom URL categories in your SSLO security policy rules instead of adding entries directly to the policy rules. Datagroups and URL categories are optimized for fast lookups, can hold thousands of entries without impacting policy performance, and are independent objects that can be managed, exported, and replicated separately from the policies that reference them.
 
-The challenge is that BIG-IP provides limited tooling for bulk management of these objects when an orchestration tool such as Ansible is not available. Adding 500 networks to a datagroup through the GUI is tedious. Exporting a URL category to replicate it at another site requires manual work. Keeping six BIG-IP SSLO's in sync across three datacenters is operationally expensive. No one wants to mess with tmsh scripts in 2026.
+The challenge is that BIG-IP provides limited tooling for bulk management of these objects when an orchestration tool such as Ansible is not available. Adding 500 networks to a datagroup through the GUI is tedious. Exporting a URL category to replicate it at another site requires manual work. Keeping six BIG-IP SSLOs in sync across three datacenters is operationally expensive. No one wants to mess with tmsh scripts in 2026.
 
 ### What DGCat-Admin Solves
 
@@ -56,7 +56,7 @@ The tool handles the details that make these operations error-prone when done ma
 
 ### REST API Architecture
 
-DGCat-Admin communicates with BIG-IP exclusively through the iControl REST API over HTTPS. Every operation: listing datagroups, reading records, applying changes, saving configuration is an API call. This means the tool can run from anywhere with network access to the BIG-IP management interface.
+DGCat-Admin communicates with BIG-IP exclusively through the iControl REST API over HTTPS. Every operation (listing datagroups, reading records, applying changes, saving configuration) is an API call. This means the tool can run from anywhere with network access to the BIG-IP management interface.
 
 When you connect, the tool authenticates with the credentials you provide and validates the connection by querying the BIG-IP system. All subsequent operations use the same authenticated session.
 
@@ -68,7 +68,7 @@ Fleet deployment uses a validate-then-apply model. Before any changes are made t
 
 ### Editor Model
 
-The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes - adding entries, deleting entries, bulk-deleting by pattern without touching the actual Big-IP configuration. All edits are staged in a candidate configuration. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you change your mind and quit out of DGCat-Admin without writing to the connected host or deploying to remote hosts, nothing changes on your Big-IP's at all.
+The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes (adding entries, deleting entries, bulk-deleting by pattern) without touching the actual BIG-IP configuration. All edits are staged in a candidate configuration. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you change your mind and quit out of DGCat-Admin without writing to the connected host or deploying to remote hosts, nothing changes on your BIG-IPs at all.
 
 ---
 
@@ -226,7 +226,7 @@ Exported files can be used directly as input for the Create/Update option, makin
 
 This is where you view contents and make changes. The editor supports browsing, searching, and modifying entries with full pagination.
 
-### How It Works
+### Editor Workflow
 
 When you open a datagroup or URL category in the editor, the tool fetches the current state from the BIG-IP and loads it into memory. All changes you make happen in memory only - the live object is not modified until you explicitly apply.
 
@@ -298,23 +298,15 @@ West|sslo-w1.company.com
 West|sslo-w2.company.com
 ```
 
-Site labels are used for grouping in the deployment scope selection and in the deployment summary. Use datacenter names, environment names, or whatever labeling scheme makes sense for your topology.
+Site labels are used for grouping in the deployment scope selection and in the deployment summary. Use datacenter names, environment names, or whatever labeling scheme makes sense for your topology. Site identifiers must contain only alphanumeric characters, dashes, and underscores. Lines starting with `#` are treated as comments. Blank lines are ignored.
+
+The file lives at `${BACKUP_DIR}/fleet.conf`. If it does not exist on first run, the tool creates a boilerplate template with format documentation and examples.
 
 The fleet is loaded once at session start. The tool displays a summary during pre-flight checks:
 
 ```
   [ OK ]  Fleet loaded: 4 hosts across 2 sites
 ```
-
-### Fleet Configuration File
-
-The fleet configuration file is located at `${BACKUP_DIR}/fleet.conf`. If no fleet configuration exists on first run, the tool creates a boilerplate template with format documentation and examples. It is a plain text file with one entry per line:
-
-```
-SITE|HOSTNAME_OR_IP
-```
-
-Site identifiers must contain only alphanumeric characters, dashes, and underscores. Lines starting with `#` are treated as comments. Blank lines are ignored.
 
 ### Initiating a Deploy
 
@@ -377,7 +369,7 @@ Status meanings in the deploy summary: **OK** means the deployment succeeded. **
 
 Fleet deployment does not create objects that don't exist on target hosts. If you're deploying a datagroup and one of your fleet members doesn't have that datagroup, it is skipped with a status of `SKIP`. The assumption is that you're synchronizing existing objects across devices that are already configured. To provision new environments with the required datagroups and URL categories, use the Bootstrap feature (menu option 8).
 
-Note: All fleet operations use the same cached credentials you used to connect to the initial Big-IP. If a fleet Big-IP requires different credentials, it will show as a connection failure during validation.
+Note: All fleet operations use the same cached credentials you used to connect to the initial BIG-IP. If a fleet BIG-IP requires different credentials, it will show as a connection failure during validation.
 
 ---
 
@@ -683,7 +675,7 @@ The partition listed in your `PARTITIONS` configuration does not exist on the BI
 One or more lines in `fleet.conf` are malformed: missing or extra `|` delimiter, empty site or host field, invalid characters, or a duplicate host. Each failing line is displayed with its line number and reason. The script halts until `fleet.conf` is corrected or deleted.
 
 **"No fleet hosts passed validation. No changes have been made."**
-Every target host either failed to connect or didn't have the target object. Verify network connectivity and credentials. Remember that fleet deployment uses the same credentials you used to connect to the initial Big-IP.
+Every target host either failed to connect or didn't have the target object. Verify network connectivity and credentials. Remember that fleet deployment uses the same credentials you used to connect to the initial BIG-IP.
 
 **Hosts showing "Object not found" during validation.**
 The host is reachable and credentials are valid, but the target datagroup or URL category does not exist on that host. Create the object on the target host first, then reattempt.
