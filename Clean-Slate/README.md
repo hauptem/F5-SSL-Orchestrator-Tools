@@ -1,20 +1,21 @@
 # Clean Slate for SSL Orchestrator
 
 ![License](https://img.shields.io/badge/license-MIT-green)
-![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
-![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
-![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
-![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
-![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
+![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x-blue)
 
 Removes all SSL Orchestrator configurations and restores SSLO to a clean state.
 
 Based on Kevin Stewart's [sslo-nuke-delete](https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete) script (F5, October 2020).
 
+## Warning
+
+**This script is destructive.** It will permanently delete all SSLO configuration on the device. Do not run on a system with active production SSLO traffic or on a system that you do not have backup configurations for.
+
 ## Requirements
 
-- BIG-IP running TMOS 17.x or higher
-- SSL Orchestrator 12.x or higher
+- BIG-IP running TMOS 17.x or 21.x series
+- SSL Orchestrator 12.x or 13.x
 
 ## What It Does
 
@@ -42,15 +43,11 @@ After the script completes, reinstall the SSLO RPM manually via the GUI:
 
 ## Operational Enhancements
 
-- Prompts for credentials 
+- Prompts for credentials
 - Requires explicit confirmation before execution
 - Backs up the SSLO RPM before deleting anything
 - Step-by-step logging with full log file output
 - Post-run verification of cleanup
-
-## Warning
-
-**This script is destructive.** It will permanently delete all SSLO configuration on the device. Do not run on a system with active production SSLO traffic or on a system that you do not have backup configurations for.
 
 ## License
 
