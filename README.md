@@ -1,13 +1,10 @@
 # F5 SSL Orchestrator Tools
 
-Useful scripts and tools for F5's SSL Orchestrator product. Some of these are modifications of existing F5 tools rebuilt for customers who have 'closed network' or other operational considerations.
-
 ![License](https://img.shields.io/badge/license-MIT-green)
-![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
-![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
-![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
-![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
-![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
+![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x-blue)
+
+Useful scripts and tools for F5's SSL Orchestrator product. Some of these are modifications of existing F5 tools rebuilt for customers who have 'closed network' or other operational considerations.
 
 ## Tools
 
@@ -15,7 +12,7 @@ Useful scripts and tools for F5's SSL Orchestrator product. Some of these are mo
 |------|-------------|
 | [Clean Slate](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/Clean-Slate) | Removes all SSLO configuration and restores to a 'clean slate' |
 | [TLS Recon](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/TLS-Recon) | Discover TLS traffic on non-standard ports during SSLO deployments |
-| [DGCat Admin](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/DGCat-Admin) | Menu-driven tool for LTM Datagroup and URL Category management |
+| [DGCat Admin](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/DGCat-Admin) | Menu-driven tool for LTM datagroup and URL category management |
 | [SSLO Replay](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/SSLO-Replay) | SSLO configuration backup and restore via REST API |
 | [SSLO Extension Installer](https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main/SSLO-Extension-Installer) | An offline installer/uninstaller for SSLO service extensions |
 
