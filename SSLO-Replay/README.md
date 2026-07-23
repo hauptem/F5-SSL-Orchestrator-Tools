@@ -1,30 +1,28 @@
 # SSLO-Replay 0.3.15.0-devel (Beta) - F5 SSLO Configuration Snapshot and Replay Tool
 
 ![License](https://img.shields.io/badge/license-MIT-green)
-![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
 ![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
 
-### Note that this is presented as a proof-of-concept still in beta version.
+> **Note:** This tool is a proof of concept and currently in beta.
+
 A menu-driven tool used for capturing F5 SSL Orchestrator configuration as a portable JSON STATE snapshot and replaying it to the same or different BIG-IP via the iControl REST API. Designed for disaster recovery, migration, and policy management in environments where Ansible is not available.
 
-Available as a single PowerShell script:
+SSLO-Replay is a single PowerShell script (`sslo-replay.ps1`) for Windows.
 
-- **PowerShell** (`sslo-replay.ps1`) - For Windows
-
-### The SSLO Backup Problem
+## The SSLO Backup Problem
 
 F5 does not provide a native mechanism to back up and restore SSL Orchestrator configuration across devices. UCS restore might have issues because iAppsLX block UUIDs are instance-specific. F5's own SSLO snapshots are internal checkpoints that cannot be exported or imported. The SSLO iFile representation carries the same UUID binding and would be useless to export and import. All three mechanisms are tied to the device that created them through the REST stack.
 
 F5 provides a script to delete an SSLO deployment, but no way to easily recreate it outside of ansible orchestration. The only recovery path is manual recreation through the GUI: clicking through every SSL setting, every service, every service chain, every security policy rule, and every topology. For a deployment with 10 topologies and complex security policies, this could be hours of careful manual administrative work - prone to human error.
 
-### What SSLO-Replay Solves
+## What SSLO-Replay Solves
 
 SSLO-Replay captures the logical configuration of an SSLO deployment, strips all instance-specific data, and replays it through the gc processor, the same API engine the SSLO iAppsLX GUI and Ansible use. The gc processor generates fresh UUIDs, builds the TMOS objects, and binds the blocks. The result is indistinguishable from having built it by hand.
 
-The snapshot is a single JSON file containing every SSLO object. External dependencies are exported alongside it as a human-readable manifest. The replay is deterministic, repeatable, and error-free.
+The snapshot is a single JSON file containing every SSLO object. External dependencies are exported alongside it as a human-readable manifest. The replay is deterministic, repeatable, and free of hand-entry errors.
 
-### Features
+## Features
 
 - **Record** - Captures all SSLO objects (SSL settings, services, service chains, security policies, topologies) in a single portable JSON file
 - **Full Replay** - Deterministic recreation of an entire SSLO deployment in dependency order
@@ -34,13 +32,13 @@ The snapshot is a single JSON file containing every SSLO object. External depend
 - **Delete** - Remove a topology and its unreferenced dependents from the live device, with reference counting so shared objects are retained
 - **Dependency Capture** - Records external BIG-IP objects (iRules, monitors, cipher groups, profiles, SNAT pools, datagroups, URL categories) as a .txt manifest for reference
 
-### How It Works
+## How It Works
 
 SSLO-Replay does not try to restore state. It replays intent.
 
 1. **Record** connects to a BIG-IP, retrieves all iAppsLX blocks, classifies the SSLO objects, strips instance-specific fields (UUIDs, block IDs, restricted hashes), captures external dependencies, and writes a portable JSON snapshot
 2. **Replay** reads the snapshot, validates prerequisites on the target, transforms state blocks into gc processor CREATE format with correct per-type inputProperties, and replays objects in dependency order: SSL settings → services → service chains → security policies → topologies
-3. The gc processor does what it was designed to do which generates fresh UUIDs, builds app folders, wires profiles, creates access policies, and binds each block
+3. The gc processor does what it was designed to do: it generates fresh UUIDs, builds app folders, wires profiles, creates access policies, and binds each block
 
 The transformation logic, per-type inputProperty templates, and prerequisite field paths are traced to the F5 Ansible SSLO collection module source code. The tool uses F5's own automation modules as the authoritative reference for the gc processor's input contract.
 
@@ -48,14 +46,14 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 <img width="771" height="521" alt="Image" src="https://github.com/user-attachments/assets/c7f555d5-534e-43b8-a0ca-7b85877917c4" />
 
 
-### Current Limitations
+## Current Limitations
 
-- Replay was not designed to install the LTM prerequisites, those will be present in a UCS restore. Replay was designed for quick SSLO restoration when you need to "nuke" your entire SSLO because of an sgc issue or when you want some SSLO config portability.
+- Replay was not designed to install the LTM prerequisites; those will be present in a UCS restore. Replay was designed for quick SSLO restoration when you need to "nuke" your entire SSLO because of a guided configuration (sgc) issue or when you want some SSLO config portability.
 - Certs and keys will never be captured during a snapshot in the JSON manifest for obvious security reasons. Install them on the target before replay.
 - General Settings (`ssloGS_global`) are environment-specific; configure via the SSLO GUI on the target before replay
 - Per-request policy modifications made outside SSLO with strict updates disabled will not survive replay
 - Extension services (blocking page, DoH guard) must be installed separately
-- SSLO-Replay is slow, because the REST API stack in a Big-IP is slow. It is not possible to get faster performance until F5 updates the internal processing pipeline. The benefit, however, is accuracy and the removal of human error.
+- SSLO-Replay is slow, because the REST API stack in a BIG-IP is slow. It is not possible to get faster performance until F5 updates the internal processing pipeline. The benefit, however, is accuracy and the removal of human error.
 
 ## Requirements
 
