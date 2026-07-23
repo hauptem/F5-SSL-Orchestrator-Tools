@@ -1,11 +1,8 @@
 # TLS Recon for SSL Orchestrator
 
 ![License](https://img.shields.io/badge/license-MIT-green)
-![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
-![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
-![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
-![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
-![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
+![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x-blue)
 
 A lightweight F5 BIG-IP iRule for discovering TLS traffic on non-standard ports during SSL Orchestrator deployments.
 
@@ -18,18 +15,19 @@ TLS Recon is an iRule that attaches to an SSLO TCP intercept virtual server and 
 ## Requirements
 
 - F5 BIG-IP with SSLO deployed
-- BIG-IP running TMOS 17.x or 21.x
-- SSL Orchestrator 12.0 or higher
+- BIG-IP running TMOS 17.x or 21.x series
+- SSL Orchestrator 12.x or 13.x
 
 ## Quick Start
 
-1. Create the iRule on your BIG-IP
-2. Deployment: Attach to SSLO TCP intercept virtual server - Example: sslo_<topology>_tcp.app/sslo_<topology>_tcp-in-t-4
-3. Monitor `/var/log/ltm` for `TLS-RECON` entries
-4. Use discovered ports to refine SSLO interception rules
-```bash
-tail -f /var/log/ltm | grep TLS-RECON
-```
+1. Create the `datagroup-tls-recon` exclusion datagroup (required; see Configuration below). The iRule references it at runtime and will not function without it, even if you have no ports to exclude yet
+2. Create the iRule on your BIG-IP
+3. Attach the iRule to the SSLO TCP intercept virtual server (for example, `sslo_<topology>_tcp.app/sslo_<topology>_tcp-in-t-4`)
+4. Monitor `/var/log/ltm` for `TLS-RECON` entries:
+   ```bash
+   tail -f /var/log/ltm | grep TLS-RECON
+   ```
+5. Use discovered ports to refine SSLO interception rules
 
 ## Configuration
 
@@ -42,7 +40,7 @@ set timeout 300
 
 **Port Exclusions**
 
-Create a datagroup to exclude ports you no longer want logged:
+The `datagroup-tls-recon` datagroup is required: the iRule references it at runtime and will not function if it does not exist. Create it empty if you have nothing to exclude, then add ports you no longer want logged:
 ```bash
 tmsh create ltm data-group internal datagroup-tls-recon type integer records add { 8443 { } }
 ```
