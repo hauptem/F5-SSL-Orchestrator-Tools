@@ -1,13 +1,10 @@
 # SSL Orchestrator Service Extensions Installer
 
-Unified installer and uninstaller for F5 SSL Orchestrator service extensions, based on Kevin Stewart's original 1.0 work. These extensions have been directly incorporated into this tool and modified to provide additional functionality.
-
 ![License](https://img.shields.io/badge/license-MIT-green)
-![F5 Compatible](https://img.shields.io/badge/F5%20BIG--IP-compatible-orange)
-![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
-![TMOS Version](https://img.shields.io/badge/TMOS-21.x%2B-red)
-![SSLO Version](https://img.shields.io/badge/SSLO-12.x%2B-blue)
-![SSLO Version](https://img.shields.io/badge/SSLO-13.x%2B-blue)
+![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x-blue)
+
+Unified installer and uninstaller for F5 SSL Orchestrator service extensions, based on Kevin Stewart's original 1.0 work. These extensions have been directly incorporated into this tool and modified to provide additional functionality.
 
 ## Why This Exists
 
@@ -42,7 +39,7 @@ Add `ssloS_CertError_Page` to any inspection service chain where TLS intercept i
 For `ssloS_CertError_Page` to function, the SSLO SSL configuration must be updated:
 - Set **Expire Certificate Response** to **Mask**
 - Set **Untrusted Certificate Authority** to **Mask**
-- Add **sslo-tls-verify-rule** to the topology virtualserver **Resources**
+- Add **sslo-tls-verify-rule** to the topology virtual server **Resources**
 
 The Mask setting tells SSLO to present a valid forged certificate to the client even when the server certificate has errors, allowing the block page to be delivered over the established HTTPS session.
 
@@ -59,7 +56,15 @@ The Mask setting tells SSLO to present a valid forged certificate to the client 
 - Before uninstalling, ensure that all services and service chains are removed from security policy rules. Uninstalling while objects are still referenced by a policy will cause MCP desync.
 - If you install any service extensions and then run F5's `sslofix` script, it will always report duplicate blocks in diagnostic mode. This is because the extension technique repurposes the "F5 Tenant Restrictions" service type within SSLO.
 
-[Release Notes](RELEASE_NOTES.md) — Service Extension Installer 
+## Requirements
+
+- BIG-IP running TMOS 17.x or 21.x series
+- SSL Orchestrator 12.x or 13.x
+- The `blocking-page-html` file alongside the script (the only external payload; all other iRules, iFiles, and service definitions are embedded)
+
+## Documentation
+
+- [Release Notes](RELEASE_NOTES.md) — Version history for the Service Extensions Installer
 
 ## License
 
