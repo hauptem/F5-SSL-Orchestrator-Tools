@@ -161,9 +161,9 @@ log_step() {
     log "${WHITE}  [....] $1${NC}"
 }
 
-# Debug tracing - stderr only. Several functions build their results on
-# stdout (datagroup lists, selections, backup paths), so a debug line on
-# stdout would be captured into that data and corrupt it
+# Debug tracing - stderr only. Functions that return results on stdout
+# (lists, selections, backup paths) would capture a stdout debug line
+# into their data
 log_debug() {
     if [ "${DEBUG_ENABLED}" -eq 1 ]; then
         echo -e "${GRAY}  [DBUG]  $1${NC}" >&2
@@ -405,8 +405,8 @@ strip_partition_prefix() {
 # Prompt user to select a datagroup from a partition
 # Names are folder-qualified (folder/name) for objects inside TMOS folders.
 # Bare-name input matching a single folder object resolves to it; multiple
-# matches list the candidates. New names accept folder/name form, but the
-# folder must already exist in TMOS - this tool creates objects, not folders
+# matches list the candidates. New names accept folder/name; the folder must
+# already exist - this tool creates objects, not folders
 # Args: partition, prompt_text, [mode]
 # Outputs: name|subpath|class on success (subpath empty at partition root)
 # Returns: 0 on success, 1 on failure/cancel
@@ -1209,10 +1209,9 @@ urlencode_options() {
 # Last incremental error detail (BIG-IP JSON message when available)
 INCREMENTAL_ERROR_MSG=""
 
-# After a tmsh passthrough reports failure, read the datagroup back and check
-# whether the change actually landed - the device sometimes applies the change
-# while the client-side transport reports an error, and retrying is unsafe
-# because tmsh refuses to add an existing record or delete a missing one
+# Read-back after a reported passthrough failure - the device sometimes
+# applies the change while the transport reports an error. Retry is unsafe:
+# tmsh refuses add-existing and delete-missing
 # Args: partition, name, subpath, op (add|delete), verify_keys (newline list)
 # Returns: 0 if every key is in the expected end state, 1 otherwise
 test_incremental_result() {
@@ -1239,8 +1238,8 @@ test_incremental_result() {
 
 # Add records to datagroup incrementally using ?options=records add
 # Args: partition, name, tmsh_records (from build_tmsh_records_add), [subpath], [verify_keys]
-# tmsh resolves the target from the request body, so subPath goes there as
-# well as in the URI. verify_keys (newline list) enables the read-back check
+# tmsh resolves the target from the request body - subPath goes in body and
+# URI. verify_keys (newline list) enables the read-back check
 # Returns: 0 on success, 1 on failure; sets INCREMENTAL_ERROR_MSG on failure
 add_datagroup_records_incremental() {
     local partition="$1"
@@ -5013,10 +5012,9 @@ editor_submenu() {
         return 1
     }
     
-    # Render a staged value change for the pending-change summaries.
-    # Shows the value being applied; a prior value is only mentioned when one
-    # actually existed (replaced or cleared). Reads the orig_lookup and
-    # work_lookup tables built by the calling handler
+    # Render a staged value change for the pending summaries - the value
+    # being applied, prior value shown only when one existed. Reads the
+    # orig_lookup/work_lookup tables built by the calling handler
     format_value_change() {
         local fv_key="$1"
         local fv_old="${orig_lookup[${fv_key}]:-}"
@@ -5030,11 +5028,10 @@ editor_submenu() {
         fi
     }
     
-    # Decide whether a change set can ride the tmsh passthrough. Two things
-    # disqualify it - records add/delete cannot alter an existing record's
-    # value, and keys and values are embedded unquoted in the options string.
-    # Evaluated before the apply and deploy menus are drawn so a mode that
-    # cannot work is never presented as a choice
+    # Decide tmsh passthrough eligibility. Disqualifiers: value changes
+    # (records add/delete cannot alter an existing value) and keys/values
+    # tmsh reads as syntax - embedded unquoted in the options string.
+    # Evaluated before the mode menus so an unusable mode is never offered
     # Args: value_change_count; gate strings (keys and values) on stdin
     # Sets: TMSH_ELIGIBLE (1/0), TMSH_INELIGIBLE_REASON
     check_tmsh_eligibility() {
@@ -5267,9 +5264,8 @@ editor_submenu() {
                 press_enter_to_continue
                 ;;
             e)
-                # Edit an entry in place. Delete-then-add would move the record
-                # to the end of the set and lose its position, so the working
-                # arrays are updated at the original index instead
+                # Edit in place at the original index - delete-then-add would
+                # move the record to the end of the set
                 echo ""
                 read -rp "  Enter entry number or key to edit (or 'q' to cancel): " edit_input
                 
@@ -5399,8 +5395,8 @@ editor_submenu() {
                     continue
                 fi
                 
-                # Exact-match duplicate check (BIG-IP keys are case-sensitive,
-                # so a case-only rename is a real change, not a self-collision)
+                # Exact-match duplicate check - BIG-IP keys are case-sensitive;
+                # a case-only rename is a real change, not a self-collision
                 if [ "${enew_key}" != "${ecurrent_key}" ]; then
                     local edup=false
                     for ((ei=0; ei<${#working_keys[@]}; ei++)); do
@@ -5416,9 +5412,8 @@ editor_submenu() {
                     fi
                 fi
                 
-                # Staged in the working arrays only - no confirmation here.
-                # The BIG-IP is untouched until Apply, where the full change
-                # set is summarized and confirmed once
+                # Staged in the working arrays only - the single confirmation
+                # is at Apply, with the full change set summarized
                 working_keys[$efound_idx]="${enew_key}"
                 working_values[$efound_idx]="${enew_value}"
                 log_ok "Entry staged for edit: ${enew_key}"
@@ -5701,11 +5696,9 @@ editor_submenu() {
                 
                 # Apply changes
                 if [ "${edit_type}" == "datagroup" ]; then
-                    # Decide tmsh eligibility before the menu is drawn. When
-                    # the change set contains edited records or tmsh syntax
-                    # characters the passthrough cannot apply it, so tmsh
-                    # Modify is not offered at all - Full Replace is the only
-                    # mode listed
+                    # Decide tmsh eligibility before the menu is drawn - tmsh
+                    # Modify is withheld when the passthrough cannot apply the
+                    # change set; Full Replace is the only mode listed
                     local wgate_check=""
                     local wg_i wgv_i
                     for ((wg_i=0; wg_i<${#additions[@]}; wg_i++)); do
@@ -5736,8 +5729,8 @@ editor_submenu() {
                         echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                         echo ""
                         read -rp "  Select [0-1]: " apply_mode_choice
-                        # 1 selects Full Replace in the reduced menu; mapped
-                        # onto the value the shared case below expects
+                        # Reduced menu: 1 is Full Replace - remapped for the
+                        # shared case below
                         if [ "${apply_mode_choice}" == "1" ]; then
                             apply_mode_choice="2"
                         fi
@@ -5745,9 +5738,8 @@ editor_submenu() {
                     
                     case "${apply_mode_choice}" in
                         1)
-                            # The reduced menu remaps 1 to Full Replace, so
-                            # this branch only runs when tmsh was offered;
-                            # kept as a guard against future menu changes
+                            # Unreachable while the reduced menu remaps 1 to
+                            # Full Replace - kept as a guard for future menu edits
                             if [ "${TMSH_ELIGIBLE}" -ne 1 ]; then
                                 log_error "tmsh Modify unavailable: ${TMSH_INELIGIBLE_REASON}."
                                 log_error "Use Full Replace for this change set. No changes have been made."
@@ -6010,11 +6002,10 @@ editor_submenu() {
                         continue
                     fi
                     
-                    # Decide tmsh eligibility before the menu is drawn. Merge
-                    # rides the same tmsh passthrough as apply, so when the
-                    # change set cannot be expressed that way it is not offered
-                    # - Full Replace is the only mode listed. URL category
-                    # merge does not use tmsh, so it is always offered
+                    # Decide tmsh eligibility before the menu is drawn - Merge
+                    # uses the tmsh passthrough and is withheld when the change
+                    # set cannot be expressed that way. URL category merge does
+                    # not use tmsh and is always offered
                     TMSH_ELIGIBLE=1
                     TMSH_INELIGIBLE_REASON=""
                     if [ "${edit_type}" == "datagroup" ]; then
@@ -6065,9 +6056,8 @@ editor_submenu() {
                             ;;
                     esac
                     
-                    # Merge is withheld from the menu when ineligible;
-                    # re-asserted here so a typed 2 cannot reach the
-                    # passthrough regardless
+                    # Merge withheld when ineligible - re-asserted so a
+                    # typed 2 cannot reach the passthrough
                     if [ "${deploy_mode}" == "merge" ] && [ "${TMSH_ELIGIBLE}" -ne 1 ]; then
                         log_error "Merge unavailable: ${TMSH_INELIGIBLE_REASON}."
                         log_error "Use Full Replace to deploy this change set. No changes have been made."

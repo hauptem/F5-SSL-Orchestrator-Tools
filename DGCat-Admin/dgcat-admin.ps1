@@ -61,8 +61,8 @@ $script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol", "sys_APM_MS_Off
 
 # Protected TMOS folders - datagroups inside these are owned by an external
 # declaration engine (AS3, Service Discovery) and are rewritten on its next
-# push, so edits made here are silently discarded. Matched on the first folder
-# segment only, because AS3 nests its tenants below its own folder
+# push - edits made here are silently discarded. Matched on the first folder
+# segment only; AS3 nests its tenants below its own folder
 $script:PROTECTED_FOLDERS = @("appsvcs", "ServiceDiscovery")
 
 # CSV preview lines
@@ -572,13 +572,10 @@ function Invoke-F5Api {
             $statusCode = [int]$_.Exception.Response.StatusCode
         }
         
-        # BIG-IP states the reason for a rejection as JSON in the response body,
-        # and Invoke-RestMethod does not surface it - the exception message
-        # carries only the generic status text. That body holds the TMOS error
-        # code, which is usually the one thing identifying what was refused.
-        # Invoke-RestMethod consumes the response stream to populate
-        # ErrorDetails, so re-reading the stream returns nothing on PowerShell
-        # 5.1 - the body is taken from ErrorDetails first, stream as fallback
+        # BIG-IP states the rejection reason as JSON in the response body; the
+        # exception message carries only generic status text. Invoke-RestMethod
+        # drains the stream into ErrorDetails on 5.1 - ErrorDetails first,
+        # stream as fallback
         $errorBody = ""
         $errorDetail = $_.Exception.Message
         if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
@@ -984,7 +981,7 @@ function Test-IncrementalResult {
 
 # Add records to datagroup incrementally using ?options=records add
 # VerifyKeys enables read-back confirmation when the request reports failure;
-# omitting it preserves the original take-the-response-at-face-value behaviour
+# omitting it preserves the original take-the-response-at-face-value behavior
 function Add-DatagroupRecordsIncremental {
     param([string]$Partition, [string]$Name, [string]$TmshRecords, [string]$SubPath = "", [string[]]$VerifyKeys = @())
     
@@ -4473,12 +4470,11 @@ function Invoke-EditorSubmenu {
         return $false
     }
     
-    # Helper: decide whether a change set can be applied through the tmsh
-    # passthrough. Two things disqualify it - records add/delete cannot alter
-    # an existing record's value, and keys and values are embedded unquoted in
-    # the options string, so anything tmsh reads as syntax corrupts the parse.
-    # Evaluated before the apply and deploy menus are drawn so a mode that
-    # cannot work is never presented as a choice
+    # Helper: decide tmsh passthrough eligibility for a change set.
+    # Disqualifiers: value changes (records add/delete cannot alter an
+    # existing value) and keys/values tmsh reads as syntax - embedded
+    # unquoted in the options string. Evaluated before the mode menus so
+    # an unusable mode is never offered
     # Returns: @{ Eligible; Reason }
     function Get-TmshEligibility {
         param($Changes)
@@ -4507,9 +4503,8 @@ function Invoke-EditorSubmenu {
         return @{ Eligible = $true; Reason = "" }
     }
     
-    # Helper: render a staged value change for the pending-change summaries.
-    # Shows the value being applied; a prior value is only mentioned when one
-    # actually existed (replaced or cleared)
+    # Helper: render a staged value change for the pending summaries - the
+    # value being applied, with a prior value shown only when one existed
     function Format-ValueChange {
         param([string]$Key)
         $origIdx = $originalKeys.IndexOf($Key)
@@ -4699,9 +4694,8 @@ function Invoke-EditorSubmenu {
                 Wait-EnterKey
             }
             "e" {
-                # Edit an entry in place. Delete-then-add would move the record
-                # to the end of the set and lose its position, so the working
-                # arrays are updated at the original index instead
+                # Edit in place at the original index - delete-then-add would
+                # move the record to the end of the set
                 Write-Host ""
                 $editInput = Read-Host "  Enter entry number or key to edit (or 'q' to cancel)"
                 if ([string]::IsNullOrWhiteSpace($editInput) -or $editInput -eq 'q') { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
@@ -4778,16 +4772,15 @@ function Invoke-EditorSubmenu {
                     Wait-EnterKey; continue
                 }
                 
-                # Ordinal: BIG-IP keys are case-sensitive, so a case-only rename
-                # is a real change and must not be rejected as a self-collision
+                # Ordinal - BIG-IP keys are case-sensitive; a case-only rename
+                # is a real change, not a self-collision
                 if ($newKey -cne $currentKey -and $workingKeys -ccontains $newKey) {
                     Write-LogError "Entry '$newKey' already exists."
                     Wait-EnterKey; continue
                 }
                 
-                # Staged in the working arrays only - no confirmation here.
-                # The BIG-IP is untouched until Apply, where the full change
-                # set is summarized and confirmed once
+                # Staged in the working arrays only - the single confirmation
+                # is at Apply, with the full change set summarized
                 $workingKeys[$foundIdx] = $newKey
                 $workingValues[$foundIdx] = $newValue
                 Write-LogOk "Entry staged for edit: $newKey"
@@ -4919,10 +4912,9 @@ function Invoke-EditorSubmenu {
                 if ($EditType -eq "datagroup") {
                     $tmshMode = Get-TmshEligibility -Changes $changes
                     
-                    # Select apply mode. When the change set contains edited
-                    # records or tmsh syntax characters the passthrough cannot
-                    # apply it, so tmsh Modify is not offered at all - Full
-                    # Replace is the only mode listed
+                    # Select apply mode. tmsh Modify is withheld when the
+                    # passthrough cannot apply the change set - Full Replace
+                    # is the only mode listed
                     Write-Host ""
                     Write-Host "  Select apply mode:" -ForegroundColor White
                     if ($tmshMode.Eligible) {
@@ -4936,16 +4928,15 @@ function Invoke-EditorSubmenu {
                         Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
                         Write-Host ""
                         $applyModeChoice = Read-Host "  Select [0-1]"
-                        # 1 selects Full Replace in the reduced menu; mapped onto
-                        # the value the shared switch below expects
+                        # Reduced menu: 1 is Full Replace - remapped for the
+                        # shared switch below
                         if ($applyModeChoice -eq "1") { $applyModeChoice = "2" }
                     }
                     
                     switch ($applyModeChoice) {
                         "1" {
-                            # The reduced menu remaps 1 to Full Replace, so this
-                            # branch only runs when tmsh Modify was offered; kept
-                            # as a guard against future menu changes
+                            # Unreachable while the reduced menu remaps 1 to
+                            # Full Replace - kept as a guard for future menu edits
                             if (-not $tmshMode.Eligible) {
                                 Write-LogError "tmsh Modify unavailable: $($tmshMode.Reason)."
                                 Write-LogError "Use Full Replace for this change set. No changes have been made."
@@ -5084,9 +5075,9 @@ function Invoke-EditorSubmenu {
                     Write-Host "  Continue to deployment options? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $contDeploy = Read-Host
                     if ($contDeploy -ne "yes") { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
                     
-                    # Select deploy mode. Merge rides the same tmsh passthrough
-                    # as apply, so when the change set cannot be expressed that
-                    # way it is not offered - Full Replace is the only mode listed
+                    # Select deploy mode. Merge uses the tmsh passthrough and
+                    # is withheld when the change set cannot be expressed that
+                    # way - Full Replace is the only mode listed
                     $tmshMode = @{ Eligible = $true; Reason = "" }
                     if ($EditType -eq "datagroup") { $tmshMode = Get-TmshEligibility -Changes $changes }
                     
@@ -5213,9 +5204,8 @@ function Invoke-EditorSubmenu {
                     }
                 }
                 
-                # Build merge data before Step 2: the selected mode governs
-                # the current device as well as the fleet, so a Merge needs the
-                # additions and deletions ready for the local apply too
+                # Build merge data before Step 2 - the mode governs the current
+                # device too, and a local Merge needs the delta ready
                 $additionsJson = @()
                 $deletionsList = @()
                 if ($deployMode -eq "merge" -and $hasPending) {
@@ -5264,10 +5254,9 @@ function Invoke-EditorSubmenu {
                         }
                     }
                     
-                    # Apply - through the same per-host deploy function as the
-                    # fleet, so the selected mode governs the connected device
-                    # too: Merge applies only the staged delta here as well,
-                    # never a silent full replace
+                    # Apply through the same per-host deploy function as the
+                    # fleet - the selected mode governs the connected device
+                    # too; Merge sends only the staged delta
                     $currentSuccess = $false
                     if ($EditType -eq "datagroup") {
                         $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
@@ -5310,10 +5299,9 @@ function Invoke-EditorSubmenu {
                 # creation. Without it, resolution falls through the dynamic call
                 # stack at invocation inside Invoke-FleetDeploy - which works only
                 # by the accident that its own parameter names carry the same values.
-                # The closure runs in a dynamic module whose command lookup skips
-                # the running script's scope on Windows PowerShell 5.1, so calling
-                # the deploy function by name fails with CommandNotFound - the
-                # function itself is captured as a variable alongside the data
+                # The closure's dynamic module skips the running script's scope
+                # on Windows PowerShell 5.1 - calling the deploy function by name
+                # fails CommandNotFound; captured as a variable instead
                 if ($EditType -eq "datagroup") {
                     $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
                     $deployFn = ${function:Deploy-DatagroupToHost}
