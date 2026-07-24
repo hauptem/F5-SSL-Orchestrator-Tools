@@ -27,7 +27,7 @@
 
 DGCat-Admin is a menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. It connects to BIG-IP devices via the iControl REST API and is available in two versions with identical functionality:
 
-- **Bash** (`dgcat-admin.sh`) - Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or BIG-IQ. v5.3 is the final bash release; the PowerShell version is maintained going forward.
+- **Bash** (`dgcat-admin.sh`) - Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or BIG-IQ.
 - **PowerShell** (`dgcat-admin.ps1`) - Requires PowerShell 5.1 or later. Runs from any Windows workstation.
 
 Both versions require network access to the BIG-IP management interface on port 443 and an account with administrative API access.
@@ -68,7 +68,17 @@ Fleet deployment uses a validate-then-apply model. Before any changes are made t
 
 ### Editor Model
 
-The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes (adding entries, deleting entries, bulk-deleting by pattern) without touching the actual BIG-IP configuration. All edits are staged in a candidate configuration. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you change your mind and quit out of DGCat-Admin without writing to the connected host or deploying to remote hosts, nothing changes on your BIG-IPs at all.
+The interactive editor loads the current state of a datagroup or URL category into memory and lets you make changes (adding entries, editing entries in place, deleting entries, bulk-deleting by pattern) without touching the actual BIG-IP configuration. All edits are staged in a candidate configuration. When you're ready, you apply the changes atomically, or deploy them to the fleet. If you change your mind and quit out of DGCat-Admin without writing to the connected host or deploying to remote hosts, nothing changes on your BIG-IPs at all.
+
+### Datagroups in TMOS Folders
+
+Datagroups can live inside TMOS folders below the partition (for example `/Common/dashboard/mygroup`), and the tool supports them everywhere: listing, selection, the editor, create, delete, export, backup, Search, Fleet Backup, and deploy.
+
+Listings show these objects with their folder (`dashboard/mygroup`). When selecting by name, a bare name that exists in exactly one folder resolves to it automatically; if the same name exists in more than one place, the tool lists the candidates and asks for the full name. You can always enter the fully qualified form: `folder/name` or `/Partition/folder/name`.
+
+New datagroups can be created inside a folder by entering the name as `folder/name`. The folder itself must already exist on the BIG-IP - the tool creates objects, not folders.
+
+Folders listed in the `PROTECTED_FOLDERS` configuration (default: `appsvcs`, `ServiceDiscovery`) belong to AS3 and Service Discovery. Datagroups in them are shown in listings tagged "externally managed", but create, edit, and delete are blocked - changing them from outside the managing system would be reverted or would break it.
 
 ---
 
@@ -163,7 +173,7 @@ If the connection fails, you're given the option to retry or exit. Common failur
 
 This is useful for preparing objects that will be populated later through the editor, CSV import, or fleet deployment.
 
-For datagroups, you select a partition and the tool displays existing datagroups for reference. Type a name for the new datagroup and choose a type (string, address, or integer). Protected system datagroups are hidden from the list.
+For datagroups, you select a partition and the tool displays existing datagroups for reference. Type a name for the new datagroup and choose a type (string, address, or integer). To create the datagroup inside a TMOS folder, enter the name as `folder/name` - the folder must already exist on the BIG-IP. Protected system datagroups are hidden from the list.
 
 For URL categories, you provide a name and select a default action (allow, block, or confirm). 
 
@@ -246,6 +256,12 @@ Use `s` to change the sort order between original (as stored), ascending (A-Z), 
 
 Press `a` to add an entry. For datagroups, you enter a key and optionally a value. For URL categories, you enter a domain or URL and the tool converts it to the proper format automatically. The tool checks for duplicates and warns you if the entry already exists.
 
+### Editing Entries
+
+Press `e` to change an existing entry in place. You can specify the entry by its line number (as shown in the current view) or by typing the key directly. The tool shows the current key and value, then prompts for each - press Enter to keep the current setting, or enter `-` at the value prompt to clear the value. For URL categories, an edit replaces the URL.
+
+The record keeps its original position in the set, unlike deleting and re-adding it. Edits stage in memory like every other editor change, so there is no per-edit confirmation - the single confirmation happens at apply, which keeps bulk editing fast.
+
 ### Deleting Entries
 
 Press `d` to delete a single entry. You can specify the entry by its line number (as shown in the current view) or by typing the key directly.
@@ -254,9 +270,9 @@ Press `x` to delete by pattern. Enter a search string and the tool shows all mat
 
 ### Applying Changes
 
-Press `w` to apply your changes to the current device. The tool shows a summary of all additions, deletions, and value changes, creates a backup of the current state, and asks for confirmation before applying.
+Press `w` to apply your changes to the current device. The tool shows a summary of all additions, deletions, and value changes, creates a backup of the current state, and asks for confirmation before applying. Value changes are shown with the value being applied (`key : value`, or `key : old -> new` when replacing an existing value).
 
-For datagroups, you then select an apply mode. **tmsh Modify** adds and deletes only the changed records. **Full Replace** writes the entire record set via REST. tmsh Modify is refused when the change set includes value changes to existing records or keys/values containing characters unsafe for tmsh (whitespace, braces, quotes, backslash, `;`, `#`); use Full Replace for those change sets. The same restrictions apply to fleet Merge mode.
+For datagroups, you then select an apply mode. **tmsh Modify** adds and deletes only the changed records. **Full Replace** writes the entire record set via REST. tmsh cannot apply value changes to existing records, or keys and values containing characters unsafe for tmsh (whitespace, braces, quotes, backslash, `;`, `#`) - when the change set includes any of these, the menu offers Full Replace as the only mode. The same rule governs fleet Merge mode.
 
 After a successful apply, the tool offers to save the BIG-IP configuration.
 
@@ -322,7 +338,9 @@ After confirming your intent to deploy, you select a deployment mode:
 
 **Full Replace** overwrites the target object on each fleet host with the exact state from the current device. After deployment, every device has an identical copy. This is the right choice when you want strict parity across your fleet.
 
-**Merge** applies only your additions and deletions to each target, preserving any entries that are specific to that device. For datagroups, the tool pulls the current records from each target, applies the changes in memory, and writes the merged result. For URL categories, the tool uses the API's native add and delete operations. This is the right choice when different sites have intentional differences - such as site-specific bypass entries or local address ranges - and you only want to propagate the changes you made, not overwrite everything.
+**Merge** applies only your additions and deletions to each target, preserving any entries that are specific to that device. For datagroups, the tool sends incremental tmsh `records add` and `records delete` operations to each target; the rest of the record set is never touched. For URL categories, the tool uses the API's native add and delete operations. This is the right choice when different sites have intentional differences - such as site-specific bypass entries or local address ranges - and you only want to propagate the changes you made, not overwrite everything.
+
+The selected mode governs every device in the deployment, including the one you're connected to - a Merge deploy applies only the staged delta to the current device as well. Because datagroup Merge uses the same tmsh passthrough as tmsh Modify, it is only offered when the change set can be expressed that way; change sets containing edited values or tmsh-unsafe characters show Full Replace as the only mode.
 
 ### Deployment Scope
 
@@ -598,6 +616,12 @@ When connected to a host that is not part of any fleet site, backups go to the r
 bigip01-mgmt_dc1_example_com_Common_bypass-domains_internal_20260327_143052.csv
 ```
 
+For datagroups inside a TMOS folder, the folder is folded into the filename so same-named datagroups in different folders keep separate files and rotation pools, and the backup header records the folder:
+
+```
+bigip01-mgmt_dc1_example_com_Common_dashboard_pool-alias_internal_20260327_143052.csv
+```
+
 Fleet deployment backups for remote hosts are always organized by site and use the same naming convention, so connected-host and fleet backups of the same object share one rotation pool:
 
 ```
@@ -626,6 +650,14 @@ The following system datagroups are protected and cannot be modified or deleted 
 - `sys_APM_MS_Office_OFBA_DG`
 
 Attempting to modify or delete these datagroups will produce an error message.
+
+### Protected Folders
+
+Datagroups inside the TMOS folders listed in `PROTECTED_FOLDERS` are treated as externally managed. The defaults are the folders used by AS3 (`appsvcs`) and Service Discovery (`ServiceDiscovery`). These objects appear in listings tagged "externally managed", but create, edit, and delete are blocked - changes made outside the managing system would be reverted or would break it. Remove entries from the list to disable the guard.
+
+### Debug Tracing
+
+Set `DEBUG_ENABLED` to `1` in the script configuration to trace every API request and response: method, URL, decoded tmsh options, request body, HTTP status, and the BIG-IP error body on failures. Credentials are never traced. Debug output is the fastest way to diagnose a rejected API call, since BIG-IP states the actual reason in the response body. The default is `0` (disabled).
 
 ### Log Files
 
@@ -685,6 +717,12 @@ The host is unreachable or restjavad is down. Verify network connectivity and RE
 
 **Hosts showing as SKIP in the deploy summary.**
 The host failed pre-deploy validation - either it was unreachable or the target object doesn't exist. SKIP means deployment was never attempted on that host. A backup failure during deployment shows as FAIL, not SKIP.
+
+**"Failed to create datagroup" with HTTP 400 when creating into a folder.**
+The most common cause is that the target folder does not exist on the BIG-IP - the tool creates objects, not folders. Verify the folder in the GUI or create it first. Enable `DEBUG_ENABLED` to see the exact reason BIG-IP returns in the response body.
+
+**"Device reported an error but the records are present - treating as applied."**
+TMOS occasionally applies a tmsh `records add` or `records delete` while the client-side transport reports an error. The tool reads the datagroup back and, when the records are in the expected end state, treats the operation as applied and continues. Nothing needs to be done; the warning is informational. A blind retry would be unsafe because tmsh refuses to add an existing record or delete a missing one.
 
 ### Editor Issues
 
