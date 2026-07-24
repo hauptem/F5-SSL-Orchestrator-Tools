@@ -2762,11 +2762,11 @@ get_internal_datagroup_type() {
     get_internal_datagroup_type_remote "${partition}" "${dg_name}" "${subpath}"
 }
 # Get datagroup type
-# Args: partition, name, class (unused, kept for caller compatibility), [subpath]
+# Args: partition, name, [subpath]
 get_datagroup_type() {
     local partition="$1"
     local dg_name="$2"
-    local subpath="${4:-}"
+    local subpath="${3:-}"
     get_internal_datagroup_type "${partition}" "${dg_name}" "${subpath}"
 }
 # Get datagroup records as "key|value" lines
@@ -2777,11 +2777,11 @@ get_internal_datagroup_records() {
     get_internal_datagroup_records_remote "${partition}" "${dg_name}" "${subpath}"
 }
 # Get datagroup records
-# Args: partition, name, class (unused, kept for caller compatibility), [subpath]
+# Args: partition, name, [subpath]
 get_datagroup_records() {
     local partition="$1"
     local dg_name="$2"
-    local subpath="${4:-}"
+    local subpath="${3:-}"
     get_internal_datagroup_records "${partition}" "${dg_name}" "${subpath}"
 }
 
@@ -3504,10 +3504,10 @@ menu_create_datagroup() {
     if [ -n "${selection_class}" ]; then
         # Datagroup exists - this is a restore operation
         dg_class="${selection_class}"
-        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
+        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}")
         
         local current_count
-        current_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}" 2>/dev/null | wc -l)
+        current_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" 2>/dev/null | wc -l)
         
         log_info "Datagroup '${dg_name}' exists in partition '${partition}'."
         log_info "  Class: ${dg_class}"
@@ -3776,7 +3776,7 @@ menu_create_datagroup() {
         while IFS='|' read -r key value; do
             [ -z "${key}" ] && continue
             merged_data["${key}"]="${value}"
-        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
+        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}")
         
         local existing_count=${#merged_data[@]}
         
@@ -3933,8 +3933,8 @@ menu_delete_datagroup_only() {
     
     # Show current contents
     local dg_type record_count
-    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
-    record_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}" 2>/dev/null | wc -l)
+    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}")
+    record_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" 2>/dev/null | wc -l)
     
     
     echo ""
@@ -4205,7 +4205,7 @@ menu_export_datagroup() {
     # Export
     log_step "Exporting ${dg_class} datagroup..."
     local dg_type
-    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
+    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}")
     
     {
         echo "# Datagroup Export: $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")"
@@ -4215,7 +4215,7 @@ menu_export_datagroup() {
         echo "# Exported: $(date)"
         echo "# Format: key,value"
         echo "#"
-        get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" | while IFS='|' read -r key value; do
+        get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" | while IFS='|' read -r key value; do
             echo "${key},${value}"
         done
     } > "${export_path}"
@@ -4933,7 +4933,7 @@ editor_submenu() {
         dg_name="$3"
         dg_class="$4"
         dg_subpath="${5:-}"
-        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
+        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}")
         display_title="DGCat-Admin Editor"
         display_info1="Path:  $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")"
         display_info2="Class: ${dg_class}  |  Type: ${dg_type}"
@@ -4962,7 +4962,7 @@ editor_submenu() {
             working_values+=("${value}")
             original_keys+=("${key}")
             original_values+=("${value}")
-        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
+        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}")
     else
         while IFS= read -r url; do
             [ -z "${url}" ] && continue
