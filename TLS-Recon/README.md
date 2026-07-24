@@ -2,7 +2,6 @@
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
-![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x-blue)
 
 A lightweight F5 BIG-IP iRule for discovering TLS traffic on non-standard ports during SSL Orchestrator deployments.
 
