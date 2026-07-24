@@ -1,7 +1,7 @@
 # DGCat-Admin v5.x — F5 BIG-IP Datagroup & URL Category Manager
 
 ![License](https://img.shields.io/badge/license-MIT-green)
-![TMOS Version](https://img.shields.io/badge/TMOS-17.x%2B-red)
+![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
 
 
 A menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems via the iControl REST API. Designed primarily for SSL Orchestrator (SSLO) policy management, but can be used for general purpose datagroup and URL category management.
