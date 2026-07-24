@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.5
+# Version: 5.6
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -33,6 +33,12 @@ $script:BACKUPS_ENABLED = 0
 # Session logging (set to 1 to enable log file creation)
 $script:LOGGING_ENABLED = 0
 
+# API tracing (set to 1 to echo every request and response)
+# Traces method, URI, decoded tmsh options, request body, HTTP status,
+# WebException status and the BIG-IP error body. Credentials are never traced.
+# Verbose - enable only while diagnosing an API failure
+$script:DEBUG_ENABLED = 0
+
 # API timeout (seconds)
 # Max time for any single API request including connection
 $script:API_TIMEOUT = 60
@@ -52,6 +58,12 @@ $script:PARTITIONS = @("Common")
 
 # Protected system datagroups - DO NOT MODIFY
 $script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol", "sys_APM_MS_Office_OFBA_DG")
+
+# Protected TMOS folders - datagroups inside these are owned by an external
+# declaration engine (AS3, Service Discovery) and are rewritten on its next
+# push, so edits made here are silently discarded. Matched on the first folder
+# segment only, because AS3 nests its tenants below its own folder
+$script:PROTECTED_FOLDERS = @("appsvcs", "ServiceDiscovery")
 
 # CSV preview lines
 $script:PREVIEW_LINES = 5
@@ -188,6 +200,15 @@ function Write-LogStep {
     if ($script:LogFile) { "  [....]  $Message" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 -ErrorAction SilentlyContinue }
 }
 
+# No-op unless DEBUG_ENABLED, so callers can trace unconditionally
+function Write-LogDebug {
+    param([string]$Message)
+    if ($script:DEBUG_ENABLED -ne 1) { return }
+    Write-Host "  [DBUG]" -NoNewline -ForegroundColor DarkGray
+    Write-Host "  $Message" -ForegroundColor DarkGray
+    if ($script:LogFile) { "  [DBUG]  $Message" | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 -ErrorAction SilentlyContinue }
+}
+
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
@@ -296,6 +317,48 @@ function Test-IntegerEntries {
     return $errors
 }
 
+# Validate a single datagroup key against the datagroup's type
+# String-type datagroups accept any key, so only address and integer are checked
+# Returns: empty string if valid, error message if invalid
+function Test-DatagroupKeyFormat {
+    param([string]$Key, [string]$Type)
+    
+    if ($Type -eq "address" -or $Type -eq "ip") {
+        if ($Key.Contains(':')) { return "IPv6 is not supported. Use an IPv4 address or CIDR." }
+        if ($Key -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(/(\d{1,2}))?$') {
+            foreach ($octet in @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])) {
+                if ($octet -gt 255) { return "Invalid IPv4 address: octet exceeds 255." }
+            }
+            if ($Matches[6] -and [int]$Matches[6] -gt 32) { return "Invalid CIDR: prefix exceeds /32." }
+            return ""
+        }
+        return "Invalid entry. Expected IPv4 address (N.N.N.N) or CIDR (N.N.N.N/M)."
+    }
+    
+    if ($Type -eq "integer") {
+        if ($Key -notmatch '^-?[0-9]+$') { return "Invalid entry. Expected an integer value." }
+    }
+    
+    return ""
+}
+
+# Validate a single URL category entry before format conversion
+# Returns: empty string if valid, terse reason if invalid
+function Test-UrlEntryFormat {
+    param([string]$Entry)
+    
+    # Only the domain is validated; protocol and path are stripped first
+    $domain = $Entry -replace '^https?://', ''
+    $domain = $domain -replace '/.*$', ''
+    
+    if ([string]::IsNullOrWhiteSpace($domain)) { return "empty after removing protocol/path" }
+    if ($domain -match '\s') { return "contains spaces" }
+    # Valid characters only: alphanumeric, dots, hyphens, asterisks, underscores
+    if ($domain -notmatch '^[a-zA-Z0-9.*_-]+$') { return "invalid characters" }
+    if ($domain.Contains('..')) { return "consecutive dots" }
+    return ""
+}
+
 # Validate URL category CSV entries are valid domains
 # Check raw entries before format conversion
 # Returns: array of @{ Entry; Reason } for invalid entries
@@ -304,33 +367,8 @@ function Test-UrlCsvEntries {
     
     $errors = @()
     foreach ($entry in $Keys) {
-        # Strip protocol
-        $domain = $entry -replace '^https?://', ''
-        # Strip path
-        $domain = $domain -replace '/.*$', ''
-        
-        # Must not be empty after stripping
-        if ([string]::IsNullOrWhiteSpace($domain)) {
-            $errors += @{ Entry = $entry; Reason = "empty after removing protocol/path" }
-            continue
-        }
-        
-        # Must not contain spaces
-        if ($domain -match '\s') {
-            $errors += @{ Entry = $entry; Reason = "contains spaces" }
-            continue
-        }
-        
-        # Valid characters only: alphanumeric, dots, hyphens, asterisks, underscores
-        if ($domain -notmatch '^[a-zA-Z0-9.*_-]+$') {
-            $errors += @{ Entry = $entry; Reason = "invalid characters" }
-            continue
-        }
-        
-        # No consecutive dots
-        if ($domain.Contains('..')) {
-            $errors += @{ Entry = $entry; Reason = "consecutive dots" }
-        }
+        $reason = Test-UrlEntryFormat -Entry $entry
+        if ($reason) { $errors += @{ Entry = $entry; Reason = $reason } }
     }
     return $errors
 }
@@ -341,10 +379,71 @@ function Test-ProtectedDatagroup {
     return $script:PROTECTED_DATAGROUPS -contains $Name
 }
 
+# Test whether a datagroup's folder is owned by an external declaration engine
+function Test-ProtectedFolder {
+    param([string]$SubPath)
+    if ([string]::IsNullOrWhiteSpace($SubPath)) { return $false }
+    $root = @($SubPath.Trim('/') -split '/')[0]
+    return $script:PROTECTED_FOLDERS -contains $root
+}
+
 # Strip a leading /Partition/ prefix from an object name
 function Remove-PartitionPrefix {
     param([string]$Name)
     return $Name -replace '^/[^/]*/', ''
+}
+
+# Build the tilde-delimited REST object path for a datagroup
+# A datagroup in a TMOS folder is addressed with the folder as an additional
+# segment between partition and name. Omitting it produces a path that does
+# not resolve, and the resulting 404 reads as an empty object rather than an
+# error: /Common/dashboard/pools -> ~Common~dashboard~pools
+function Get-DatagroupPath {
+    param([string]$Partition, [string]$Name, [string]$SubPath = "")
+    if ([string]::IsNullOrWhiteSpace($SubPath)) { return "~${Partition}~${Name}" }
+    $folder = $SubPath.Trim('/') -replace '/', '~'
+    return "~${Partition}~${folder}~${Name}"
+}
+
+# Build the operator-facing full path for a datagroup, for prompts and logs
+function Get-DatagroupDisplayPath {
+    param([string]$Partition, [string]$Name, [string]$SubPath = "")
+    if ([string]::IsNullOrWhiteSpace($SubPath)) { return "/${Partition}/${Name}" }
+    return "/${Partition}/$($SubPath.Trim('/'))/${Name}"
+}
+
+# Build the filename token identifying a datagroup's partition and folder
+# The folder is folded in so two datagroups sharing a leaf name in different
+# folders neither overwrite each other on disk nor share one rotation pool
+function Get-DatagroupScopeToken {
+    param([string]$Partition, [string]$SubPath = "")
+    $token = $Partition
+    if (-not [string]::IsNullOrWhiteSpace($SubPath)) {
+        $token = "${Partition}_$($SubPath.Trim('/'))"
+    }
+    return ($token -replace '[^a-zA-Z0-9_-]', '_')
+}
+
+# Split an operator-entered datagroup reference into folder and leaf components
+# Accepts: name | folder/name | /Partition/name | /Partition/folder/name
+# Returns: @{ SubPath; Name }
+function Split-DatagroupPath {
+    param([string]$Entry)
+
+    # A leading /Partition/ is dropped: the caller already knows the partition,
+    # and everything that remains is folder segments plus the leaf name
+    $path = $Entry.Trim()
+    if ($path.StartsWith('/')) { $path = $path -replace '^/[^/]*/', '' }
+
+    $segments = @($path -split '/' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($segments.Count -eq 0) { return @{ SubPath = ""; Name = "" } }
+
+    $leaf = $segments[$segments.Count - 1]
+    $folder = ""
+    if ($segments.Count -gt 1) {
+        $folder = ($segments[0..($segments.Count - 2)] -join '/')
+    }
+    return @{ SubPath = $folder; Name = $leaf }
 }
 
 # Convert CRLF line endings to LF in place
@@ -449,9 +548,18 @@ function Invoke-F5Api {
         }
     }
     
+    if ($script:DEBUG_ENABLED -eq 1) {
+        # $headers is deliberately never traced: it carries the Basic credential
+        Write-LogDebug "REQ  $Method $uri"
+        $decodedEndpoint = [System.Uri]::UnescapeDataString($Endpoint)
+        if ($decodedEndpoint -ne $Endpoint) { Write-LogDebug "REQ  decoded: $decodedEndpoint" }
+        if ($params.ContainsKey("Body")) { Write-LogDebug "REQ  body: $($params.Body)" }
+    }
+    
     try {
         $response = Invoke-RestMethod @params
-        return @{ Success = $true; Response = $response; StatusCode = 200 }
+        Write-LogDebug "RSP  HTTP 200"
+        return @{ Success = $true; Response = $response; StatusCode = 200; ErrorBody = "" }
     } catch {
         $statusCode = 0
         # WebException.Status is a locale-invariant enum - unlike the exception
@@ -463,7 +571,44 @@ function Invoke-F5Api {
         if ($_.Exception.Response) {
             $statusCode = [int]$_.Exception.Response.StatusCode
         }
-        return @{ Success = $false; Response = $null; StatusCode = $statusCode; Error = $_.Exception.Message; WebStatus = $webStatus }
+        
+        # BIG-IP states the reason for a rejection as JSON in the response body,
+        # and Invoke-RestMethod does not surface it - the exception message
+        # carries only the generic status text. That body holds the TMOS error
+        # code, which is usually the one thing identifying what was refused.
+        # Invoke-RestMethod consumes the response stream to populate
+        # ErrorDetails, so re-reading the stream returns nothing on PowerShell
+        # 5.1 - the body is taken from ErrorDetails first, stream as fallback
+        $errorBody = ""
+        $errorDetail = $_.Exception.Message
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $errorBody = $_.ErrorDetails.Message
+        } elseif ($_.Exception.Response) {
+            try {
+                $stream = $_.Exception.Response.GetResponseStream()
+                if ($stream -and $stream.CanSeek) { $stream.Position = 0 }
+                $reader = New-Object System.IO.StreamReader($stream)
+                $errorBody = $reader.ReadToEnd()
+                $reader.Close()
+            } catch { <# stream already consumed or not readable #> }
+        }
+        if ($errorBody) {
+            try {
+                $parsed = $errorBody | ConvertFrom-Json
+                if ($parsed.message) { $errorDetail = $parsed.message }
+            } catch {
+                # Not JSON - the raw body still beats the generic status text
+                $errorDetail = $errorBody
+            }
+        }
+        
+        if ($script:DEBUG_ENABLED -eq 1) {
+            Write-LogDebug "RSP  HTTP $statusCode  WebStatus=$webStatus"
+            Write-LogDebug "RSP  exception: $($_.Exception.Message)"
+            if ($errorBody) { Write-LogDebug "RSP  body: $errorBody" }
+        }
+        
+        return @{ Success = $false; Response = $null; StatusCode = $statusCode; Error = $errorDetail; WebStatus = $webStatus; ErrorBody = $errorBody }
     }
 }
 
@@ -646,6 +791,8 @@ function Test-PartitionRemote {
 # -----------------------------------------------------------------------------
 
 # List internal datagroups in a partition, excluding iApp-owned objects
+# Objects held in a TMOS folder report it as subPath; it is captured here
+# because every downstream request needs it to address the object
 function Get-DatagroupListRemote {
     param([string]$Partition)
     
@@ -656,7 +803,15 @@ function Get-DatagroupListRemote {
     if ($result.Response.items) {
         foreach ($item in $result.Response.items) {
             if ($item.partition -eq $Partition -and $item.fullPath -notmatch '\.app/') {
-                $items += @{ Partition = $Partition; Name = $item.name; Class = "internal" }
+                # subPath is absent entirely on partition-root objects
+                $subPath = ""
+                if ($item.PSObject.Properties['subPath']) { $subPath = [string]$item.subPath }
+                $items += @{
+                    Partition = $Partition
+                    Name      = $item.name
+                    SubPath   = $subPath
+                    Class     = "internal"
+                }
             }
         }
     }
@@ -665,15 +820,17 @@ function Get-DatagroupListRemote {
 
 # Test whether an internal datagroup exists
 function Test-DatagroupExistsRemote {
-    param([string]$Partition, [string]$Name)
-    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
+    param([string]$Partition, [string]$Name, [string]$SubPath = "")
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
     return $result.Success
 }
 
 # Get a datagroup's type (string, address, or integer)
 function Get-DatagroupTypeRemote {
-    param([string]$Partition, [string]$Name)
-    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
+    param([string]$Partition, [string]$Name, [string]$SubPath = "")
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
     if ($result.Success) { return $result.Response.type }
     return ""
 }
@@ -681,8 +838,9 @@ function Get-DatagroupTypeRemote {
 # Get datagroup records
 # Returns: array of @{ Key; Value }
 function Get-DatagroupRecordsRemote {
-    param([string]$Partition, [string]$Name)
-    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
+    param([string]$Partition, [string]$Name, [string]$SubPath = "")
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
     if (-not $result.Success) { return @() }
     
     $records = @()
@@ -695,9 +853,12 @@ function Get-DatagroupRecordsRemote {
 }
 
 # Create an empty internal datagroup
+# A non-empty SubPath targets an existing TMOS folder. The folder is not
+# created here, so a missing one surfaces as a create failure
 function New-DatagroupRemote {
-    param([string]$Partition, [string]$Name, [string]$Type)
+    param([string]$Partition, [string]$Name, [string]$Type, [string]$SubPath = "")
     $body = @{ name = $Name; partition = $Partition; type = $Type }
+    if (-not [string]::IsNullOrWhiteSpace($SubPath)) { $body.subPath = $SubPath.Trim('/') }
     $result = Invoke-F5Post -Endpoint "/mgmt/tm/ltm/data-group/internal" -Body $body
     return $result.Success
 }
@@ -705,16 +866,18 @@ function New-DatagroupRemote {
 # Replace a datagroup's full record set via PATCH
 # Returns: full API result hashtable
 function Set-DatagroupRecordsRemote {
-    param([string]$Partition, [string]$Name, [array]$Records)
+    param([string]$Partition, [string]$Name, [array]$Records, [string]$SubPath = "")
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
     $body = @{ records = $Records }
-    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}" -Body $body
+    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath" -Body $body
     return $result
 }
 
 # Delete an internal datagroup
 function Remove-DatagroupRemote {
-    param([string]$Partition, [string]$Name)
-    $result = Invoke-F5Delete -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
+    param([string]$Partition, [string]$Name, [string]$SubPath = "")
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
+    $result = Invoke-F5Delete -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
     return $result.Success
 }
 
@@ -773,26 +936,109 @@ function ConvertTo-TmshRecordsDelete {
     return $result
 }
 
+# Transport-layer detail from the last incremental record change. Retained so
+# the operator sees why a request was reported as failed, whether or not
+# read-back subsequently showed the change had been applied
+$script:IncrementalErrorMsg = ""
+
+# Confirm an incremental record change actually landed on the device
+# The tmsh passthrough can report failure after TMOS has already applied the
+# modification. Reissuing the request is not safe here the way it is for a
+# config save - tmsh rejects an add for an existing key and a delete for a
+# missing one - so the record set is read back and the device settles it
+# Returns: $true only if every key reached the expected state
+function Test-IncrementalResult {
+    param(
+        [string]$Partition,
+        [string]$Name,
+        [string[]]$Keys,
+        [ValidateSet("present", "absent")][string]$Expect,
+        [string]$SubPath = ""
+    )
+    
+    # Verified single GET - a failed read confirms nothing, and treating its
+    # empty result as "the keys are gone" would turn a dead session into a
+    # false success on exactly the operation being checked
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
+    if (-not $result.Success) {
+        Write-LogDebug "VRFY read-back failed - cannot confirm, reporting failure"
+        return $false
+    }
+    
+    # Ordinal map: BIG-IP datagroup keys are case-sensitive
+    $present = [System.Collections.Hashtable]::new()
+    if ($result.Response.records) {
+        foreach ($rec in $result.Response.records) { $present[$rec.name] = $true }
+    }
+    
+    foreach ($key in $Keys) {
+        if ([string]::IsNullOrWhiteSpace($key)) { continue }
+        $exists = $present.ContainsKey($key)
+        Write-LogDebug "VRFY '$key' present=$exists expected=$Expect"
+        if ($Expect -eq "present" -and -not $exists) { return $false }
+        if ($Expect -eq "absent" -and $exists) { return $false }
+    }
+    return $true
+}
+
 # Add records to datagroup incrementally using ?options=records add
+# VerifyKeys enables read-back confirmation when the request reports failure;
+# omitting it preserves the original take-the-response-at-face-value behaviour
 function Add-DatagroupRecordsIncremental {
-    param([string]$Partition, [string]$Name, [string]$TmshRecords)
+    param([string]$Partition, [string]$Name, [string]$TmshRecords, [string]$SubPath = "", [string[]]$VerifyKeys = @())
     
+    $script:IncrementalErrorMsg = ""
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
     $options = [System.Uri]::EscapeDataString("records add {$TmshRecords }")
+    # tmsh resolves the object from the body rather than the URI, so a folder
+    # object has to declare subPath here too or the passthrough is applied
+    # against the partition root
     $body = @{ name = $Name; partition = $Partition }
+    if (-not [string]::IsNullOrWhiteSpace($SubPath)) { $body.subPath = $SubPath.Trim('/') }
     
-    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}?options=$options" -Body $body
-    return $result.Success
+    Write-LogDebug "TMSH records add {$TmshRecords }"
+    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/${objectPath}?options=$options" -Body $body
+    if ($result.Success) { return $true }
+    
+    $webNote = $(if ($result.WebStatus) { " / $($result.WebStatus)" } else { "" })
+    $script:IncrementalErrorMsg = "HTTP $($result.StatusCode)$webNote - $($result.Error)"
+    if ($VerifyKeys.Count -eq 0) { return $false }
+    
+    if (Test-IncrementalResult -Partition $Partition -Name $Name -Keys $VerifyKeys -Expect "present" -SubPath $SubPath) {
+        Write-LogWarn "Record add reported an error but the records are present on the device."
+        Write-LogWarn "  $($script:IncrementalErrorMsg)"
+        return $true
+    }
+    return $false
 }
 
 # Delete records from datagroup incrementally using ?options=records delete
+# VerifyKeys enables read-back confirmation when the request reports failure
 function Remove-DatagroupRecordsIncremental {
-    param([string]$Partition, [string]$Name, [string]$TmshKeys)
+    param([string]$Partition, [string]$Name, [string]$TmshKeys, [string]$SubPath = "", [string[]]$VerifyKeys = @())
     
+    $script:IncrementalErrorMsg = ""
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
     $options = [System.Uri]::EscapeDataString("records delete {$TmshKeys }")
+    # See Add-DatagroupRecordsIncremental: tmsh resolves from the body
     $body = @{ name = $Name; partition = $Partition }
+    if (-not [string]::IsNullOrWhiteSpace($SubPath)) { $body.subPath = $SubPath.Trim('/') }
     
-    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}?options=$options" -Body $body
-    return $result.Success
+    Write-LogDebug "TMSH records delete {$TmshKeys }"
+    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/${objectPath}?options=$options" -Body $body
+    if ($result.Success) { return $true }
+    
+    $webNote = $(if ($result.WebStatus) { " / $($result.WebStatus)" } else { "" })
+    $script:IncrementalErrorMsg = "HTTP $($result.StatusCode)$webNote - $($result.Error)"
+    if ($VerifyKeys.Count -eq 0) { return $false }
+    
+    if (Test-IncrementalResult -Partition $Partition -Name $Name -Keys $VerifyKeys -Expect "absent" -SubPath $SubPath) {
+        Write-LogWarn "Record delete reported an error but the records are gone from the device."
+        Write-LogWarn "  $($script:IncrementalErrorMsg)"
+        return $true
+    }
+    return $false
 }
 
 # -----------------------------------------------------------------------------
@@ -982,10 +1228,12 @@ function Get-AllDatagroupList {
             $all += Get-DatagroupListRemote -Partition $partition
         }
     }
-    return @($all | Sort-Object { $_.Partition }, { $_.Name })
+    return @($all | Sort-Object { $_.Partition }, { $_.SubPath }, { $_.Name })
 }
 
 # Prompt the operator to select a datagroup by number or name
+# Names may be entered bare, as folder/name, or as a full /Partition/folder/name
+# Returns: @{ Name; SubPath; Class }, or $null if cancelled
 function Select-Datagroup {
     param([string]$Partition, [string]$Prompt = "Enter datagroup name", [string]$Mode = "existing")
     # Modes: existing (must exist), any (accept new or existing), new (must not exist)
@@ -1015,7 +1263,11 @@ function Select-Datagroup {
         
         for ($i = 0; $i -lt $filteredDatagroups.Count; $i++) {
             $dg = $filteredDatagroups[$i]
-            $line = "{0,-35} ({1})" -f $dg.Name, $dg.Class
+            # Qualify folder objects so /Common/foo and /Common/dashboard/foo
+            # are distinguishable in the list
+            $display = $(if ($dg.SubPath) { "$($dg.SubPath)/$($dg.Name)" } else { $dg.Name })
+            $class = $(if (Test-ProtectedFolder -SubPath $dg.SubPath) { "$($dg.Class), externally managed" } else { $dg.Class })
+            $line = "{0,-35} ({1})" -f $display, $class
             if ($Mode -eq "new") {
                 Write-Host "    $line" -ForegroundColor White
             } else {
@@ -1039,12 +1291,12 @@ function Select-Datagroup {
         # Check if input is a number
         $num = 0
         if ([int]::TryParse($dgInput, [ref]$num) -and $num -ge 1 -and $num -le $filteredDatagroups.Count) {
+            $sel = $filteredDatagroups[$num - 1]
             if ($Mode -eq "new") {
-                Write-LogError "Datagroup '$($filteredDatagroups[$num - 1].Name)' already exists. Enter a new name."
+                Write-LogError "Datagroup '$(Get-DatagroupDisplayPath -Partition $Partition -Name $sel.Name -SubPath $sel.SubPath)' already exists. Enter a new name."
                 continue
             }
-            $sel = $filteredDatagroups[$num - 1]
-            return @{ Name = $sel.Name; Class = $sel.Class }
+            return @{ Name = $sel.Name; SubPath = $sel.SubPath; Class = $sel.Class }
         }
         
         if ([int]::TryParse($dgInput, [ref]$num)) {
@@ -1052,28 +1304,63 @@ function Select-Datagroup {
             continue
         }
         
-        # Direct name entry - check against in-memory list
-        $dgName = Remove-PartitionPrefix -Name $dgInput
-        $found = $datagroups | Where-Object { $_.Name -eq $dgName } | Select-Object -First 1
+        # Direct name entry - split folder from leaf, then match in-memory
+        $parsed = Split-DatagroupPath -Entry $dgInput
+        $dgName = $parsed.Name
+        $dgSubPath = $parsed.SubPath
         
-        if ($found) {
-            if ($Mode -eq "new") {
-                Write-LogError "Datagroup '$dgName' already exists. Enter a new name."
-                continue
-            }
-            return @{ Name = $found.Name; Class = $found.Class }
-        } else {
-            if ($Mode -eq "existing") {
-                Write-LogError "Datagroup '$dgName' does not exist in partition '$Partition'. Try again."
-                continue
-            }
-            # Validate TMOS naming rules for new names
-            if ($dgName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') {
-                Write-LogError "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
-                continue
-            }
-            return @{ Name = $dgName; Class = "" }
+        if ([string]::IsNullOrWhiteSpace($dgName)) {
+            Write-LogError "No datagroup name provided. Try again."
+            continue
         }
+        
+        # A folder given in the input must match exactly; a bare name matches
+        # on leaf alone, but only when that leaf is unique across folders
+        $candidates = @($datagroups | Where-Object { $_.Name -eq $dgName })
+        if ($dgSubPath) {
+            $candidates = @($candidates | Where-Object { $_.SubPath -eq $dgSubPath })
+        }
+        
+        if ($candidates.Count -gt 1) {
+            Write-LogError "Datagroup '$dgName' exists in more than one folder. Qualify the name:"
+            foreach ($candidate in $candidates) {
+                Write-Host "          $(Get-DatagroupDisplayPath -Partition $Partition -Name $candidate.Name -SubPath $candidate.SubPath)" -ForegroundColor White
+            }
+            continue
+        }
+        
+        if ($candidates.Count -eq 1) {
+            $found = $candidates[0]
+            if ($Mode -eq "new") {
+                Write-LogError "Datagroup '$(Get-DatagroupDisplayPath -Partition $Partition -Name $found.Name -SubPath $found.SubPath)' already exists. Enter a new name."
+                continue
+            }
+            return @{ Name = $found.Name; SubPath = $found.SubPath; Class = $found.Class }
+        }
+        
+        if ($Mode -eq "existing") {
+            Write-LogError "Datagroup '$dgName' does not exist in partition '$Partition'. Try again."
+            continue
+        }
+        
+        # Validate TMOS naming rules for new names
+        if ($dgName -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') {
+            Write-LogError "Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores."
+            continue
+        }
+        # Folder segments follow the same rules, and the folder must already
+        # exist in TMOS - this tool creates objects, not folders
+        if ($dgSubPath) {
+            $badSegment = ""
+            foreach ($segment in ($dgSubPath -split '/')) {
+                if ($segment -notmatch '^[a-zA-Z][a-zA-Z0-9_-]*$') { $badSegment = $segment; break }
+            }
+            if ($badSegment) {
+                Write-LogError "Invalid folder name '$badSegment'. Must start with a letter and contain only letters, numbers, dashes, underscores."
+                continue
+            }
+        }
+        return @{ Name = $dgName; SubPath = $dgSubPath; Class = "" }
     }
 }
 
@@ -1312,10 +1599,10 @@ function Test-HostConnection {
 
 # Test whether a datagroup exists on a fleet host
 function Test-RemoteDatagroup {
-    param([string]$HostName, [string]$Partition, [string]$Name)
+    param([string]$HostName, [string]$Partition, [string]$Name, [string]$SubPath = "")
     $origHost = $script:RemoteHost
     $script:RemoteHost = $HostName
-    $exists = Test-DatagroupExistsRemote -Partition $Partition -Name $Name
+    $exists = Test-DatagroupExistsRemote -Partition $Partition -Name $Name -SubPath $SubPath
     $script:RemoteHost = $origHost
     return $exists
 }
@@ -1333,13 +1620,14 @@ function Test-RemoteUrlCategory {
 # Back up a datagroup from a fleet host to its site subdirectory
 # Returns: backup file path, or empty string on failure
 function Backup-RemoteDatagroup {
-    param([string]$HostName, [string]$Partition, [string]$Name, [string]$SiteId)
+    param([string]$HostName, [string]$Partition, [string]$Name, [string]$SiteId, [string]$SubPath = "")
     $origHost = $script:RemoteHost
     $script:RemoteHost = $HostName
 
     # Verified single GET - a backup written from a failed read would look
     # valid but contain zero records, worse than no backup at all
-    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
     $script:RemoteHost = $origHost
     if (-not $result.Success) { return "" }
 
@@ -1353,16 +1641,18 @@ function Backup-RemoteDatagroup {
 
     Confirm-SiteLogDir -SiteId $SiteId | Out-Null
     $safeHost = $HostName -replace '[^a-zA-Z0-9_-]', '_'
+    $safeScope = Get-DatagroupScopeToken -Partition $Partition -SubPath $SubPath
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
     # Same name shape as connected-host backups (including the internal class
     # segment) so both paths share one rotation pool per host and object
     $backupDir = Join-Path $script:BACKUP_DIR $SiteId
-    $backupFile = Join-Path $backupDir "${safeHost}_${Partition}_${Name}_internal_${ts}.csv"
+    $backupFile = Join-Path $backupDir "${safeHost}_${safeScope}_${Name}_internal_${ts}.csv"
 
     $lines = @(
-        "# Datagroup Backup: /${Partition}/${Name}",
+        "# Datagroup Backup: $(Get-DatagroupDisplayPath -Partition $Partition -Name $Name -SubPath $SubPath)",
         "# Host: $HostName",
         "# Site: $SiteId",
+        "# Folder: $SubPath",
         "# Type: $dgType",
         "# Created: $(Get-Date)",
         "# Reason: Pre-deploy backup",
@@ -1372,7 +1662,7 @@ function Backup-RemoteDatagroup {
 
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
-        Remove-OldBackups -Pattern "${safeHost}_${Partition}_${Name}_internal" -Directory $backupDir
+        Remove-OldBackups -Pattern "${safeHost}_${safeScope}_${Name}_internal" -Directory $backupDir
         return $backupFile
     } catch {
         return ""
@@ -1518,7 +1808,8 @@ function Deploy-DatagroupToHost {
     param(
         [string]$HostName, [string]$Partition, [string]$DgName,
         [array]$RecordsJson, [string]$SiteId,
-        [string]$DeployMode = "replace", [array]$AdditionsJson = @(), [string[]]$DeletionsList = @()
+        [string]$DeployMode = "replace", [array]$AdditionsJson = @(), [string[]]$DeletionsList = @(),
+        [string]$SubPath = ""
     )
     
     $script:DeployErrorMsg = ""
@@ -1538,7 +1829,7 @@ function Deploy-DatagroupToHost {
             }
             $addTmsh = ConvertTo-TmshRecordsAdd -Keys $addKeys -Values $addValues
             if ($addTmsh) {
-                if (-not (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshRecords $addTmsh)) {
+                if (-not (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshRecords $addTmsh -SubPath $SubPath -VerifyKeys $addKeys)) {
                     Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Adding records" -ForegroundColor White
                     $mergeErrors++
                 }
@@ -1549,7 +1840,7 @@ function Deploy-DatagroupToHost {
         if ($DeletionsList.Count -gt 0) {
             $delTmsh = ConvertTo-TmshRecordsDelete -Keys $DeletionsList
             if ($delTmsh) {
-                if (-not (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshKeys $delTmsh)) {
+                if (-not (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshKeys $delTmsh -SubPath $SubPath -VerifyKeys $DeletionsList)) {
                     Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Deleting records" -ForegroundColor White
                     $mergeErrors++
                 }
@@ -1565,7 +1856,7 @@ function Deploy-DatagroupToHost {
         Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
     } else {
         # Full replace
-        $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $RecordsJson
+        $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $RecordsJson -SubPath $SubPath
         if (-not $result.Success) {
             Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
             $script:DeployErrorMsg = "Failed to apply records (HTTP $($result.StatusCode))"
@@ -1646,7 +1937,7 @@ function Deploy-UrlCategoryToHost {
 # Verify connectivity and object existence on each deploy target
 # Returns: array of @{ Host; Site; Status; Message }
 function Invoke-PreDeployValidation {
-    param([string]$ObjectType, [string]$ObjectName, [string]$Partition, [string[]]$Targets)
+    param([string]$ObjectType, [string]$ObjectName, [string]$Partition, [string[]]$Targets, [string]$SubPath = "")
     
     Write-Host ""
     
@@ -1670,7 +1961,7 @@ function Invoke-PreDeployValidation {
         # Verify object exists
         $exists = $false
         if ($ObjectType -eq "datagroup") {
-            $exists = Test-RemoteDatagroup -HostName $hostName -Partition $Partition -Name $ObjectName
+            $exists = Test-RemoteDatagroup -HostName $hostName -Partition $Partition -Name $ObjectName -SubPath $SubPath
         } else {
             $exists = Test-RemoteUrlCategory -HostName $hostName -Name $ObjectName
         }
@@ -1707,7 +1998,8 @@ function Invoke-FleetDeploy {
     param(
         [string]$ObjectType, [string]$ObjectName, [string]$Partition,
         [array]$ValidationResults, [scriptblock]$DeployAction,
-        [string]$CurrentHost = "", [string]$CurrentStatus = "", [string]$CurrentMessage = ""
+        [string]$CurrentHost = "", [string]$CurrentStatus = "", [string]$CurrentMessage = "",
+        [string]$SubPath = ""
     )
     
     $successCount = 0
@@ -1738,7 +2030,7 @@ function Invoke-FleetDeploy {
         if ($script:BACKUPS_ENABLED -eq 1) {
             $backupFile = ""
             if ($ObjectType -eq "datagroup") {
-                $backupFile = Backup-RemoteDatagroup -HostName $vr.Host -Partition $Partition -Name $ObjectName -SiteId $vr.Site
+                $backupFile = Backup-RemoteDatagroup -HostName $vr.Host -Partition $Partition -Name $ObjectName -SiteId $vr.Site -SubPath $SubPath
             } else {
                 $backupFile = Backup-RemoteUrlCategory -HostName $vr.Host -CatName $ObjectName -SiteId $vr.Site
             }
@@ -1835,11 +2127,12 @@ function Invoke-FleetDeploy {
 # Back up a datagroup from the connected host
 # Returns: backup file path, or empty string on failure
 function Backup-Datagroup {
-    param([string]$Partition, [string]$Name)
+    param([string]$Partition, [string]$Name, [string]$SubPath = "")
 
     # Verified single GET - a backup written from a failed read would look
     # valid but contain zero records, worse than no backup at all
-    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${Partition}~${Name}"
+    $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
     if (-not $result.Success) { return "" }
 
     $dgType = $result.Response.type
@@ -1850,15 +2143,18 @@ function Backup-Datagroup {
         }
     }
 
-    $safePartition = $Partition -replace '/', '_'
+    # Folder is folded into the scope token so two datagroups sharing a leaf
+    # name in different folders keep separate files and rotation pools
+    $safePartition = Get-DatagroupScopeToken -Partition $Partition -SubPath $SubPath
     $safeHostname = $script:RemoteHost -replace '[^a-zA-Z0-9_-]', '_'
     $backupPath = Get-ConnectedBackupDir
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
     $backupFile = Join-Path $backupPath "${safeHostname}_${safePartition}_${Name}_internal_${ts}.csv"
 
     $lines = @(
-        "# Datagroup Backup: /${Partition}/${Name}",
+        "# Datagroup Backup: $(Get-DatagroupDisplayPath -Partition $Partition -Name $Name -SubPath $SubPath)",
         "# Partition: $Partition",
+        "# Folder: $SubPath",
         "# Class: internal",
         "# Type: $dgType",
         "# Created: $(Get-Date)",
@@ -2130,7 +2426,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.5                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.6                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -2231,9 +2527,18 @@ function Invoke-CreateEmptyDatagroup {
     if ($null -eq $selection) { Wait-EnterKey; return }
     
     $dgName = $selection.Name
+    $dgSubPath = $selection.SubPath
+    $dgPath = Get-DatagroupDisplayPath -Partition $partition -Name $dgName -SubPath $dgSubPath
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "The name '$dgName' is reserved for a BIG-IP system datagroup."
+        Wait-EnterKey
+        return
+    }
+    
+    if (Test-ProtectedFolder -SubPath $dgSubPath) {
+        Write-LogError "Folder '$dgSubPath' is managed by an external declaration engine."
+        Write-LogError "Objects created there are overwritten on its next push. This operation is blocked."
         Wait-EnterKey
         return
     }
@@ -2262,7 +2567,7 @@ function Invoke-CreateEmptyDatagroup {
     # Confirm
     Write-Host ""
     Write-LogInfo "Ready to create:"
-    Write-LogInfo "  Path: /${partition}/${dgName}"
+    Write-LogInfo "  Path: $dgPath"
     Write-LogInfo "  Type: $displayType"
     Write-Host ""
     Write-Host "  Create this datagroup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $confirm = Read-Host
@@ -2272,12 +2577,15 @@ function Invoke-CreateEmptyDatagroup {
         return
     }
     
-    Write-LogStep "Creating datagroup '/${partition}/${dgName}'..."
-    if (New-DatagroupRemote -Partition $partition -Name $dgName -Type $dgType) {
-        Write-LogOk "Datagroup '/${partition}/${dgName}' created successfully (empty)."
+    Write-LogStep "Creating datagroup '$dgPath'..."
+    if (New-DatagroupRemote -Partition $partition -Name $dgName -Type $dgType -SubPath $dgSubPath) {
+        Write-LogOk "Datagroup '$dgPath' created successfully (empty)."
         Invoke-PromptSaveConfig
     } else {
         Write-LogError "Failed to create datagroup."
+        # Folders are not created by this tool, so a missing one is the
+        # most likely cause when a sub-path was supplied
+        if ($dgSubPath) { Write-LogInfo "Verify that folder '/${partition}/${dgSubPath}' exists on the BIG-IP." }
     }
     
     Wait-EnterKey
@@ -2404,9 +2712,18 @@ function Invoke-CreateDatagroup {
     if ($null -eq $selection) { Wait-EnterKey; return }
     
     $dgName = $selection.Name
+    $dgSubPath = $selection.SubPath
+    $dgPath = Get-DatagroupDisplayPath -Partition $partition -Name $dgName -SubPath $dgSubPath
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "The name '$dgName' is reserved for a BIG-IP system datagroup."
+        Wait-EnterKey
+        return
+    }
+    
+    if (Test-ProtectedFolder -SubPath $dgSubPath) {
+        Write-LogError "Datagroup '$dgPath' is managed by an external declaration engine."
+        Write-LogError "Changes made here are overwritten on its next push. This operation is blocked."
         Wait-EnterKey
         return
     }
@@ -2417,10 +2734,10 @@ function Invoke-CreateDatagroup {
     $restoreMode = ""
     
     if ($exists) {
-        $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName
-        $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName
+        $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
+        $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
         
-        Write-LogInfo "Datagroup '$dgName' exists in partition '$partition'."
+        Write-LogInfo "Datagroup '$dgPath' exists."
         Write-LogInfo "  Type: $dgType"
         Write-LogInfo "  Current records: $($records.Count)"
         Write-Host ""
@@ -2447,7 +2764,7 @@ function Invoke-CreateDatagroup {
         # Backup before modification
         if ($script:BACKUPS_ENABLED -eq 1) {
             Write-LogStep "Creating backup of existing datagroup..."
-            $backupFile = Backup-Datagroup -Partition $partition -Name $dgName
+            $backupFile = Backup-Datagroup -Partition $partition -Name $dgName -SubPath $dgSubPath
             if ($backupFile) {
                 Write-LogOk "Backup saved: $backupFile"
             } else {
@@ -2644,7 +2961,7 @@ function Invoke-CreateDatagroup {
     # Prepare final arrays
     if ($restoreMode -eq "merge") {
         Write-LogStep "Reading existing entries for merge..."
-        $existing = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName
+        $existing = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
         # Ordinal: BIG-IP datagroup keys are case-sensitive
         $merged = [System.Collections.Hashtable]::new()
         foreach ($rec in $existing) { $merged[$rec.Key] = $rec.Value }
@@ -2675,9 +2992,10 @@ function Invoke-CreateDatagroup {
     $records = ConvertTo-RecordsJson -Keys $finalKeys -Values $finalValues
     
     if (-not $exists) {
-        Write-LogStep "Creating datagroup '/${partition}/${dgName}'..."
-        if (-not (New-DatagroupRemote -Partition $partition -Name $dgName -Type $apiType)) {
+        Write-LogStep "Creating datagroup '$dgPath'..."
+        if (-not (New-DatagroupRemote -Partition $partition -Name $dgName -Type $apiType -SubPath $dgSubPath)) {
             Write-LogError "Failed to create datagroup."
+            if ($dgSubPath) { Write-LogInfo "Verify that folder '/${partition}/${dgSubPath}' exists on the BIG-IP." }
             if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
             Wait-EnterKey
             return
@@ -2685,7 +3003,7 @@ function Invoke-CreateDatagroup {
     }
     
     Write-LogStep "Applying $($finalKeys.Count) entries to datagroup..."
-    $result = Set-DatagroupRecordsRemote -Partition $partition -Name $dgName -Records $records
+    $result = Set-DatagroupRecordsRemote -Partition $partition -Name $dgName -Records $records -SubPath $dgSubPath
     if (-not $result.Success) {
         Write-LogError "Failed to apply records. HTTP $($result.StatusCode)"
         if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
@@ -2693,7 +3011,7 @@ function Invoke-CreateDatagroup {
         return
     }
     
-    Write-LogOk "Datagroup '/${partition}/${dgName}' saved with $($finalKeys.Count) entries."
+    Write-LogOk "Datagroup '$dgPath' saved with $($finalKeys.Count) entries."
     Invoke-PromptSaveConfig
     
     if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
@@ -2979,6 +3297,8 @@ function Invoke-DeleteDatagroup {
     if ($null -eq $selection) { Wait-EnterKey; return }
     
     $dgName = $selection.Name
+    $dgSubPath = $selection.SubPath
+    $dgPath = Get-DatagroupDisplayPath -Partition $partition -Name $dgName -SubPath $dgSubPath
     
     if (Test-ProtectedDatagroup -Name $dgName) {
         Write-LogError "Datagroup '$dgName' is a protected BIG-IP system datagroup."
@@ -2987,19 +3307,26 @@ function Invoke-DeleteDatagroup {
         return
     }
     
-    $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName
-    $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName
+    if (Test-ProtectedFolder -SubPath $dgSubPath) {
+        Write-LogError "Datagroup '$dgPath' is managed by an external declaration engine."
+        Write-LogError "This operation is blocked for safety."
+        Wait-EnterKey
+        return
+    }
+    
+    $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
+    $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
     
     Write-Host ""
     Write-LogWarn "You are about to delete the following datagroup:"
-    Write-LogInfo "  Path:    /${partition}/${dgName}"
+    Write-LogInfo "  Path:    $dgPath"
     Write-LogInfo "  Type:    $dgType"
     Write-LogInfo "  Records: $($records.Count)"
     Write-Host ""
     
     if ($script:BACKUPS_ENABLED -eq 1) {
         Write-LogStep "Creating backup before deletion..."
-        $backupFile = Backup-Datagroup -Partition $partition -Name $dgName
+        $backupFile = Backup-Datagroup -Partition $partition -Name $dgName -SubPath $dgSubPath
         if ($backupFile) {
             Write-LogOk "Backup saved: $backupFile"
         } else {
@@ -3014,9 +3341,9 @@ function Invoke-DeleteDatagroup {
     $confirm = Read-Host
     if ($confirm -cne "DELETE") { Write-LogInfo "Aborted."; Wait-EnterKey; return }
     
-    Write-LogStep "Deleting datagroup '/${partition}/${dgName}'..."
-    if (Remove-DatagroupRemote -Partition $partition -Name $dgName) {
-        Write-LogOk "Datagroup '/${partition}/${dgName}' deleted successfully."
+    Write-LogStep "Deleting datagroup '$dgPath'..."
+    if (Remove-DatagroupRemote -Partition $partition -Name $dgName -SubPath $dgSubPath) {
+        Write-LogOk "Datagroup '$dgPath' deleted successfully."
     } else {
         Write-LogError "Failed to delete datagroup."
         Wait-EnterKey
@@ -3158,7 +3485,10 @@ function Invoke-ExportDatagroup {
     if ($null -eq $selection) { Wait-EnterKey; return }
     
     $dgName = $selection.Name
-    $safePartition = $partition -replace '/', '_'
+    $dgSubPath = $selection.SubPath
+    # Folder is folded into the scope token so exports of two same-named
+    # datagroups in different folders do not overwrite each other
+    $safePartition = Get-DatagroupScopeToken -Partition $partition -SubPath $dgSubPath
     $defaultPath = Join-Path $script:BACKUP_DIR "${safePartition}_${dgName}_internal_$($script:Timestamp).csv"
     Write-Host ""
     $exportPath = Read-Host "  Export path [$defaultPath]"
@@ -3172,12 +3502,13 @@ function Invoke-ExportDatagroup {
     }
     
     Write-LogStep "Exporting datagroup..."
-    $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName
-    $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName
+    $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
+    $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
     
     $lines = @(
-        "# Datagroup Export: /${partition}/${dgName}",
+        "# Datagroup Export: $(Get-DatagroupDisplayPath -Partition $partition -Name $dgName -SubPath $dgSubPath)",
         "# Partition: $partition",
+        "# Folder: $dgSubPath",
         "# Type: $dgType",
         "# Exported: $(Get-Date)",
         "# Format: key,value",
@@ -3342,6 +3673,7 @@ function Invoke-FleetLookingGlass {
     $objectType = ""
     $objectName = ""
     $partition = ""
+    $objectSubPath = ""
     
     switch ($typeChoice) {
         "1" {
@@ -3355,6 +3687,7 @@ function Invoke-FleetLookingGlass {
             $dgSelection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name"
             if ($null -eq $dgSelection) { return }
             $objectName = $dgSelection.Name
+            $objectSubPath = $dgSelection.SubPath
         }
         "2" {
             $objectType = "urlcat"
@@ -3482,10 +3815,10 @@ function Invoke-FleetLookingGlass {
         # Pull entries
         $entries = @()
         if ($objectType -eq "datagroup") {
-            $records = Get-DatagroupRecordsRemote -Partition $partition -Name $objectName
+            $records = Get-DatagroupRecordsRemote -Partition $partition -Name $objectName -SubPath $objectSubPath
             if ($records.Count -eq 0) {
                 # Check if object exists vs empty
-                $existResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~${partition}~${objectName}"
+                $existResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$(Get-DatagroupPath -Partition $partition -Name $objectName -SubPath $objectSubPath)"
                 if (-not $existResult.Success) {
                     Write-Host "`r$(' ' * 80)" -NoNewline
                     Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
@@ -3545,7 +3878,7 @@ function Invoke-FleetLookingGlass {
     
     # Build display info
     if ($objectType -eq "datagroup") {
-        $objectDisplay = "/${partition}/${objectName} (Datagroup)"
+        $objectDisplay = "$(Get-DatagroupDisplayPath -Partition $partition -Name $objectName -SubPath $objectSubPath) (Datagroup)"
     } else {
         $objectDisplay = "${objectName} (URL Category)"
     }
@@ -3618,7 +3951,7 @@ function Invoke-FleetLookingGlass {
             Write-Host ""
             Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
             if ($objectType -eq "datagroup") {
-                $diffLabel = "Datagroup: /${partition}/${objectName}"
+                $diffLabel = "Datagroup: $(Get-DatagroupDisplayPath -Partition $partition -Name $objectName -SubPath $objectSubPath)"
             } else {
                 $diffLabel = "URL Category: ${objectName}"
             }
@@ -3801,6 +4134,7 @@ function Invoke-FleetBackup {
     $objectType = ""
     $objectName = ""
     $partition = ""
+    $objectSubPath = ""
     
     switch ($typeChoice) {
         "1" {
@@ -3814,6 +4148,7 @@ function Invoke-FleetBackup {
             $dgSelection = Select-Datagroup -Partition $partition -Prompt "Enter datagroup name"
             if ($null -eq $dgSelection) { return }
             $objectName = $dgSelection.Name
+            $objectSubPath = $dgSelection.SubPath
         }
         "2" {
             $objectType = "urlcat"
@@ -3935,7 +4270,7 @@ function Invoke-FleetBackup {
         # Create backup
         $backupFile = ""
         if ($objectType -eq "datagroup") {
-            $backupFile = Backup-RemoteDatagroup -HostName $hostName -Partition $partition -Name $objectName -SiteId $siteId
+            $backupFile = Backup-RemoteDatagroup -HostName $hostName -Partition $partition -Name $objectName -SiteId $siteId -SubPath $objectSubPath
         } else {
             $backupFile = Backup-RemoteUrlCategory -HostName $hostName -CatName $objectName -SiteId $siteId
         }
@@ -4003,7 +4338,14 @@ function Invoke-EditMenu {
                 return
             }
             
-            Invoke-EditorSubmenu -EditType "datagroup" -Partition $partition -DgName $selection.Name -DgClass $selection.Class
+            if (Test-ProtectedFolder -SubPath $selection.SubPath) {
+                Write-LogError "The datagroup '$(Get-DatagroupDisplayPath -Partition $partition -Name $selection.Name -SubPath $selection.SubPath)' is managed by an external declaration engine."
+                Write-LogError "Edits made here are overwritten on its next push. This operation is blocked."
+                Wait-EnterKey
+                return
+            }
+            
+            Invoke-EditorSubmenu -EditType "datagroup" -Partition $partition -DgName $selection.Name -DgClass $selection.Class -DgSubPath $selection.SubPath
         }
         "2" {
             if (-not (Test-UrlCategoryDbAvailable)) {
@@ -4070,7 +4412,7 @@ function Invoke-EditMenu {
 function Invoke-EditorSubmenu {
     param(
         [string]$EditType,
-        [string]$Partition = "", [string]$DgName = "", [string]$DgClass = "",
+        [string]$Partition = "", [string]$DgName = "", [string]$DgClass = "", [string]$DgSubPath = "",
         [string]$CatName = ""
     )
     
@@ -4082,8 +4424,8 @@ function Invoke-EditorSubmenu {
     $entryLabel = "Entries"
     
     if ($EditType -eq "datagroup") {
-        $dgType = Get-DatagroupTypeRemote -Partition $Partition -Name $DgName
-        $displayInfo1 = "Path:  /${Partition}/${DgName}"
+        $dgType = Get-DatagroupTypeRemote -Partition $Partition -Name $DgName -SubPath $DgSubPath
+        $displayInfo1 = "Path:  $(Get-DatagroupDisplayPath -Partition $Partition -Name $DgName -SubPath $DgSubPath)"
         $displayInfo2 = "Class: $DgClass  |  Type: $dgType"
     } else {
         $displayInfo1 = "URL Category: $CatName"
@@ -4098,7 +4440,7 @@ function Invoke-EditorSubmenu {
     $originalValues = [System.Collections.ArrayList]::new()
     
     if ($EditType -eq "datagroup") {
-        $records = Get-DatagroupRecordsRemote -Partition $Partition -Name $DgName
+        $records = Get-DatagroupRecordsRemote -Partition $Partition -Name $DgName -SubPath $DgSubPath
         foreach ($rec in $records) {
             $workingKeys.Add($rec.Key) | Out-Null
             $workingValues.Add($rec.Value) | Out-Null
@@ -4129,6 +4471,54 @@ function Invoke-EditorSubmenu {
             if ($workingKeys[$i] -cne $originalKeys[$i] -or $workingValues[$i] -cne $originalValues[$i]) { return $true }
         }
         return $false
+    }
+    
+    # Helper: decide whether a change set can be applied through the tmsh
+    # passthrough. Two things disqualify it - records add/delete cannot alter
+    # an existing record's value, and keys and values are embedded unquoted in
+    # the options string, so anything tmsh reads as syntax corrupts the parse.
+    # Evaluated before the apply and deploy menus are drawn so a mode that
+    # cannot work is never presented as a choice
+    # Returns: @{ Eligible; Reason }
+    function Get-TmshEligibility {
+        param($Changes)
+        
+        if ($Changes.ValueChanges.Count -gt 0) {
+            return @{
+                Eligible = $false
+                Reason = "$($Changes.ValueChanges.Count) record(s) have changed values, which records add/delete cannot apply"
+            }
+        }
+        
+        $tmshCheck = @()
+        foreach ($addKey in $Changes.Additions) {
+            $tmshCheck += $addKey
+            $idx = $workingKeys.IndexOf($addKey)
+            if ($idx -ge 0 -and $workingValues[$idx]) { $tmshCheck += $workingValues[$idx] }
+        }
+        $tmshCheck += $Changes.Deletions
+        if (-not (Test-TmshSafeStrings -Strings $tmshCheck)) {
+            return @{
+                Eligible = $false
+                Reason = "keys or values contain characters unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')"
+            }
+        }
+        
+        return @{ Eligible = $true; Reason = "" }
+    }
+    
+    # Helper: render a staged value change for the pending-change summaries.
+    # Shows the value being applied; a prior value is only mentioned when one
+    # actually existed (replaced or cleared)
+    function Format-ValueChange {
+        param([string]$Key)
+        $origIdx = $originalKeys.IndexOf($Key)
+        $workIdx = $workingKeys.IndexOf($Key)
+        $oldValue = $(if ($origIdx -ge 0) { [string]$originalValues[$origIdx] } else { "" })
+        $newValue = $(if ($workIdx -ge 0) { [string]$workingValues[$workIdx] } else { "" })
+        if (-not $oldValue) { return "${Key} : ${newValue}" }
+        if (-not $newValue) { return "${Key} : (value cleared)" }
+        return "${Key} : ${oldValue} -> ${newValue}"
     }
     
     # Helper: compute additions, deletions, and value changes
@@ -4232,8 +4622,9 @@ function Invoke-EditorSubmenu {
         Write-Host "s" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Change sort" -ForegroundColor Green
         Write-Host ""
         Write-Host "  " -NoNewline; Write-Host "a" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Add entry    " -NoNewline -ForegroundColor Green
-        Write-Host "d" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Delete entry     " -NoNewline -ForegroundColor Green
-        Write-Host "x" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Delete by pattern" -ForegroundColor Green
+        Write-Host "e" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Edit entry       " -NoNewline -ForegroundColor Green
+        Write-Host "d" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Delete entry" -ForegroundColor Green
+        Write-Host "  " -NoNewline; Write-Host "x" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Delete by pattern" -ForegroundColor Green
         Write-Host ""
         Write-Host "  " -NoNewline; Write-Host "w" -NoNewline -ForegroundColor Yellow; Write-Host ") " -NoNewline -ForegroundColor White; Write-Host "Apply changes (write to current device)" -ForegroundColor Green
         if (Test-FleetAvailable) {
@@ -4279,34 +4670,8 @@ function Invoke-EditorSubmenu {
                     if ($workingKeys -ccontains $newKey) { Write-LogWarn "Entry '$newKey' already exists."; Wait-EnterKey; continue }
                     
                     # Validate entry format based on datagroup type
-                    if ($dgType -eq "address" -or $dgType -eq "ip") {
-                        if ($newKey.Contains(':')) {
-                            Write-LogError "IPv6 is not supported. Use an IPv4 address or CIDR."
-                            Wait-EnterKey; continue
-                        }
-                        if ($newKey -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(/(\d{1,2}))?$') {
-                            $octets = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4])
-                            $badOctet = $false
-                            foreach ($o in $octets) {
-                                if ($o -gt 255) { Write-LogError "Invalid IPv4 address: octet exceeds 255."; $badOctet = $true; break }
-                            }
-                            if ($badOctet) { Wait-EnterKey; continue }
-                            if ($Matches[6] -and [int]$Matches[6] -gt 32) {
-                                Write-LogError "Invalid CIDR: prefix exceeds /32."
-                                Wait-EnterKey; continue
-                            }
-                        } else {
-                            Write-LogError "Invalid entry. Expected IPv4 address (N.N.N.N) or CIDR (N.N.N.N/M)."
-                            Wait-EnterKey; continue
-                        }
-                    }
-                    
-                    if ($dgType -eq "integer") {
-                        if ($newKey -notmatch '^-?[0-9]+$') {
-                            Write-LogError "Invalid entry. Expected an integer value."
-                            Wait-EnterKey; continue
-                        }
-                    }
+                    $keyError = Test-DatagroupKeyFormat -Key $newKey -Type $dgType
+                    if ($keyError) { Write-LogError $keyError; Wait-EnterKey; continue }
                     
                     $newValue = Read-Host "  Enter value (optional, press Enter to skip)"
                     $workingKeys.Add($newKey) | Out-Null
@@ -4318,24 +4683,8 @@ function Invoke-EditorSubmenu {
                     if ([string]::IsNullOrWhiteSpace($newUrl)) { Write-LogWarn "No URL provided."; Wait-EnterKey; continue }
                     
                     # Validate domain format before conversion
-                    $checkDomain = $newUrl -replace '^https?://', ''
-                    $checkDomain = $checkDomain -replace '/.*$', ''
-                    if ([string]::IsNullOrWhiteSpace($checkDomain)) {
-                        Write-LogError "Invalid entry: empty after removing protocol/path."
-                        Wait-EnterKey; continue
-                    }
-                    if ($checkDomain -match '\s') {
-                        Write-LogError "Invalid entry: contains spaces."
-                        Wait-EnterKey; continue
-                    }
-                    if ($checkDomain -notmatch '^[a-zA-Z0-9.*_-]+$') {
-                        Write-LogError "Invalid entry: contains invalid characters."
-                        Wait-EnterKey; continue
-                    }
-                    if ($checkDomain.Contains('..')) {
-                        Write-LogError "Invalid entry: consecutive dots."
-                        Wait-EnterKey; continue
-                    }
+                    $urlError = Test-UrlEntryFormat -Entry $newUrl
+                    if ($urlError) { Write-LogError "Invalid entry: $urlError."; Wait-EnterKey; continue }
                     
                     $formattedUrl = Format-DomainForUrlCategory -Domain $newUrl
                     if ($workingKeys -contains $formattedUrl) { Write-LogWarn "URL '$formattedUrl' already exists."; Wait-EnterKey; continue }
@@ -4346,6 +4695,107 @@ function Invoke-EditorSubmenu {
                     $workingKeys.Add($formattedUrl) | Out-Null
                     $workingValues.Add("") | Out-Null
                     Write-LogOk "URL staged for addition: $formattedUrl"
+                }
+                Wait-EnterKey
+            }
+            "e" {
+                # Edit an entry in place. Delete-then-add would move the record
+                # to the end of the set and lose its position, so the working
+                # arrays are updated at the original index instead
+                Write-Host ""
+                $editInput = Read-Host "  Enter entry number or key to edit (or 'q' to cancel)"
+                if ([string]::IsNullOrWhiteSpace($editInput) -or $editInput -eq 'q') { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
+                
+                # A number indexes the filtered and sorted view the operator can
+                # see, not the underlying working array
+                $editKey = ""
+                $num = 0
+                if ([int]::TryParse($editInput, [ref]$num)) {
+                    if ($num -ge 1 -and $num -le $totalCount) {
+                        $entry = $sortedEntries[$num - 1]
+                        $editKey = $(if ($EditType -eq "datagroup" -and $entry.Contains('|')) { ($entry -split '\|')[0] } else { $entry })
+                    }
+                } else {
+                    $editKey = $editInput
+                }
+                
+                if ([string]::IsNullOrWhiteSpace($editKey)) { Write-LogError "Entry not found."; Wait-EnterKey; continue }
+                
+                $foundIdx = $workingKeys.IndexOf($editKey)
+                if ($foundIdx -eq -1) { Write-LogError "Entry not found: $editKey"; Wait-EnterKey; continue }
+                
+                $currentKey = [string]$workingKeys[$foundIdx]
+                $currentValue = [string]$workingValues[$foundIdx]
+                $shownValue = $(if ($currentValue) { $currentValue } else { "(none)" })
+                
+                Write-Host ""
+                Write-LogInfo "Editing entry:"
+                if ($EditType -eq "datagroup") {
+                    Write-LogInfo "  Key:   $currentKey"
+                    Write-LogInfo "  Value: $shownValue"
+                } else {
+                    Write-LogInfo "  URL: $currentKey"
+                }
+                Write-Host ""
+                Write-Host "  Press Enter at a prompt to keep the current setting." -ForegroundColor White
+                Write-Host ""
+                
+                $newKey = $currentKey
+                $newValue = $currentValue
+                
+                if ($EditType -eq "datagroup") {
+                    $keyInput = Read-Host "  New key [$currentKey]"
+                    if (-not [string]::IsNullOrWhiteSpace($keyInput)) { $newKey = $keyInput }
+                    
+                    $keyError = Test-DatagroupKeyFormat -Key $newKey -Type $dgType
+                    if ($keyError) { Write-LogError $keyError; Wait-EnterKey; continue }
+                    
+                    $valueInput = Read-Host "  New value [$shownValue] ('-' to clear)"
+                    if (-not [string]::IsNullOrWhiteSpace($valueInput)) {
+                        if ($valueInput -eq '-') {
+                            # '-' is the clear sentinel; confirm it so a literal
+                            # dash remains reachable as a value
+                            $clearConfirm = Read-Host "  Clear the value? (yes/no) [yes]"
+                            if ([string]::IsNullOrWhiteSpace($clearConfirm)) { $clearConfirm = "yes" }
+                            $newValue = $(if ($clearConfirm -eq "yes") { "" } else { "-" })
+                        } else {
+                            $newValue = $valueInput
+                        }
+                    }
+                } else {
+                    # URL categories carry no value; an edit replaces the URL
+                    $urlInput = Read-Host "  New domain or URL [$currentKey]"
+                    if ([string]::IsNullOrWhiteSpace($urlInput)) { $urlInput = $currentKey }
+                    
+                    $urlError = Test-UrlEntryFormat -Entry $urlInput
+                    if ($urlError) { Write-LogError "Invalid entry: $urlError."; Wait-EnterKey; continue }
+                    $newKey = Format-DomainForUrlCategory -Domain $urlInput
+                    $newValue = ""
+                }
+                
+                if ($newKey -ceq $currentKey -and $newValue -ceq $currentValue) {
+                    Write-LogInfo "No changes made."
+                    Wait-EnterKey; continue
+                }
+                
+                # Ordinal: BIG-IP keys are case-sensitive, so a case-only rename
+                # is a real change and must not be rejected as a self-collision
+                if ($newKey -cne $currentKey -and $workingKeys -ccontains $newKey) {
+                    Write-LogError "Entry '$newKey' already exists."
+                    Wait-EnterKey; continue
+                }
+                
+                # Staged in the working arrays only - no confirmation here.
+                # The BIG-IP is untouched until Apply, where the full change
+                # set is summarized and confirmed once
+                $workingKeys[$foundIdx] = $newKey
+                $workingValues[$foundIdx] = $newValue
+                Write-LogOk "Entry staged for edit: $newKey"
+                if ($newKey -cne $currentKey) { Write-LogInfo "  Key:   $currentKey -> $newKey" }
+                if ($newValue -cne $currentValue) {
+                    if (-not $currentValue) { Write-LogInfo "  Value: $newValue" }
+                    elseif (-not $newValue) { Write-LogInfo "  Value: (cleared)" }
+                    else { Write-LogInfo "  Value: $currentValue -> $newValue" }
                 }
                 Wait-EnterKey
             }
@@ -4440,7 +4890,7 @@ function Invoke-EditorSubmenu {
                 if ($changes.ValueChanges.Count -gt 0) {
                     if ($changes.Additions.Count -gt 0 -or $changes.Deletions.Count -gt 0) { Write-Host "" }
                     Write-Host "  Value changes ($($changes.ValueChanges.Count)):" -ForegroundColor Yellow
-                    foreach ($entry in $changes.ValueChanges) { Write-Host "    ~ $entry" -ForegroundColor Yellow }
+                    foreach ($entry in $changes.ValueChanges) { Write-Host "    ~ $(Format-ValueChange -Key $entry)" -ForegroundColor Yellow }
                 }
                 Write-Host "  ──────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
                 Write-Host "  Final count: $($workingKeys.Count) entries" -ForegroundColor White
@@ -4453,7 +4903,7 @@ function Invoke-EditorSubmenu {
                     Write-LogStep "Creating backup before applying changes..."
                     $backupFile = ""
                     if ($EditType -eq "datagroup") {
-                        $backupFile = Backup-Datagroup -Partition $Partition -Name $DgName
+                        $backupFile = Backup-Datagroup -Partition $Partition -Name $DgName -SubPath $DgSubPath
                     } else {
                         $backupFile = Backup-UrlCategory -CatName $CatName
                     }
@@ -4467,37 +4917,38 @@ function Invoke-EditorSubmenu {
                 
                 # Apply
                 if ($EditType -eq "datagroup") {
-                    # Select apply mode
+                    $tmshMode = Get-TmshEligibility -Changes $changes
+                    
+                    # Select apply mode. When the change set contains edited
+                    # records or tmsh syntax characters the passthrough cannot
+                    # apply it, so tmsh Modify is not offered at all - Full
+                    # Replace is the only mode listed
                     Write-Host ""
                     Write-Host "  Select apply mode:" -ForegroundColor White
-                    Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " tmsh Modify   - Add/delete only changed records (tmsh passthrough)" -ForegroundColor White
-                    Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Full Replace  - PATCH entire record set via REST" -ForegroundColor White
-                    Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
-                    Write-Host ""
-                    $applyModeChoice = Read-Host "  Select [0-2]"
+                    if ($tmshMode.Eligible) {
+                        Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " tmsh Modify   - Add/delete only changed records (tmsh passthrough)" -ForegroundColor White
+                        Write-Host -NoNewline "    "; Write-Host -NoNewline "2" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Full Replace  - PATCH entire record set via REST" -ForegroundColor White
+                        Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
+                        Write-Host ""
+                        $applyModeChoice = Read-Host "  Select [0-2]"
+                    } else {
+                        Write-Host -NoNewline "    "; Write-Host -NoNewline "1" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Full Replace  - PATCH entire record set via REST" -ForegroundColor White
+                        Write-Host -NoNewline "    "; Write-Host -NoNewline "0" -ForegroundColor Yellow; Write-Host -NoNewline ")" -ForegroundColor White; Write-Host " Cancel" -ForegroundColor White
+                        Write-Host ""
+                        $applyModeChoice = Read-Host "  Select [0-1]"
+                        # 1 selects Full Replace in the reduced menu; mapped onto
+                        # the value the shared switch below expects
+                        if ($applyModeChoice -eq "1") { $applyModeChoice = "2" }
+                    }
                     
                     switch ($applyModeChoice) {
                         "1" {
-                            # Gate: tmsh records add/delete cannot change an existing record's value
-                            if ($changes.ValueChanges.Count -gt 0) {
-                                Write-LogError "tmsh Modify unavailable: $($changes.ValueChanges.Count) record(s) have changed values,"
-                                Write-LogError "which records add/delete cannot apply."
-                                Write-LogError "Use Full Replace mode for this change set. No changes have been made."
-                                Wait-EnterKey
-                                continue
-                            }
-                            # Gate: tmsh passthrough embeds keys/values unquoted
-                            $tmshCheck = @()
-                            foreach ($addKey in $changes.Additions) {
-                                $tmshCheck += $addKey
-                                $idx = $workingKeys.IndexOf($addKey)
-                                if ($idx -ge 0 -and $workingValues[$idx]) { $tmshCheck += $workingValues[$idx] }
-                            }
-                            $tmshCheck += $changes.Deletions
-                            if (-not (Test-TmshSafeStrings -Strings $tmshCheck)) {
-                                Write-LogError "tmsh Modify unavailable: one or more keys or values contain characters"
-                                Write-LogError "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
-                                Write-LogError "Use Full Replace mode for this change set. No changes have been made."
+                            # The reduced menu remaps 1 to Full Replace, so this
+                            # branch only runs when tmsh Modify was offered; kept
+                            # as a guard against future menu changes
+                            if (-not $tmshMode.Eligible) {
+                                Write-LogError "tmsh Modify unavailable: $($tmshMode.Reason)."
+                                Write-LogError "Use Full Replace for this change set. No changes have been made."
                                 Wait-EnterKey
                                 continue
                             }
@@ -4514,10 +4965,11 @@ function Invoke-EditorSubmenu {
                                     $addValues += $(if ($idx -ge 0) { $workingValues[$idx] } else { "" })
                                 }
                                 $addTmsh = ConvertTo-TmshRecordsAdd -Keys $addKeys -Values $addValues
-                                if (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshRecords $addTmsh) {
+                                if (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshRecords $addTmsh -SubPath $DgSubPath -VerifyKeys $addKeys) {
                                     Write-LogOk "$($changes.Additions.Count) record(s) added."
                                 } else {
                                     Write-LogError "Failed to add records."
+                                    if ($script:IncrementalErrorMsg) { Write-LogError "  $($script:IncrementalErrorMsg)" }
                                     $incErrors++
                                 }
                             }
@@ -4525,10 +4977,11 @@ function Invoke-EditorSubmenu {
                             # Deletions second
                             if ($changes.Deletions.Count -gt 0) {
                                 $delTmsh = ConvertTo-TmshRecordsDelete -Keys $changes.Deletions
-                                if (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshKeys $delTmsh) {
+                                if (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshKeys $delTmsh -SubPath $DgSubPath -VerifyKeys $changes.Deletions) {
                                     Write-LogOk "$($changes.Deletions.Count) record(s) deleted."
                                 } else {
                                     Write-LogError "Failed to delete records."
+                                    if ($script:IncrementalErrorMsg) { Write-LogError "  $($script:IncrementalErrorMsg)" }
                                     $incErrors++
                                 }
                             }
@@ -4543,7 +4996,7 @@ function Invoke-EditorSubmenu {
                         "2" {
                             Write-LogStep "Applying changes to datagroup (full replace)..."
                             $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
-                            $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $records
+                            $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $records -SubPath $DgSubPath
                             if ($result.Success) {
                                 Write-LogOk "Changes applied successfully."
                             } else {
@@ -4620,7 +5073,7 @@ function Invoke-EditorSubmenu {
                     if ($changes.ValueChanges.Count -gt 0) {
                         if ($changes.Additions.Count -gt 0 -or $changes.Deletions.Count -gt 0) { Write-Host "" }
                         Write-Host "  Value changes ($($changes.ValueChanges.Count)):" -ForegroundColor Yellow
-                        $show = 0; foreach ($e in $changes.ValueChanges) { if ($show -lt 10) { Write-Host "    ~ $e" -ForegroundColor Yellow }; $show++ }
+                        $show = 0; foreach ($e in $changes.ValueChanges) { if ($show -lt 10) { Write-Host "    ~ $(Format-ValueChange -Key $e)" -ForegroundColor Yellow }; $show++ }
                         if ($changes.ValueChanges.Count -gt 10) { Write-Host "    ... and $($changes.ValueChanges.Count - 10) more" -ForegroundColor Yellow }
                     }
                     Write-Host ""
@@ -4631,45 +5084,38 @@ function Invoke-EditorSubmenu {
                     Write-Host "  Continue to deployment options? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $contDeploy = Read-Host
                     if ($contDeploy -ne "yes") { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
                     
-                    # Select deploy mode
+                    # Select deploy mode. Merge rides the same tmsh passthrough
+                    # as apply, so when the change set cannot be expressed that
+                    # way it is not offered - Full Replace is the only mode listed
+                    $tmshMode = @{ Eligible = $true; Reason = "" }
+                    if ($EditType -eq "datagroup") { $tmshMode = Get-TmshEligibility -Changes $changes }
+                    
                     Write-Host ""
                     Write-Host "  Select deployment mode:" -ForegroundColor White
                     Write-Host '    ' -NoNewline; Write-Host '1' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
                     Write-Host "Full Replace - Overwrite target with exact state from current device" -ForegroundColor White
-                    Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
-                    Write-Host "Merge        - Apply only additions/deletions, preserve target-specific entries" -ForegroundColor White
+                    if ($tmshMode.Eligible) {
+                        Write-Host '    ' -NoNewline; Write-Host '2' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
+                        Write-Host "Merge        - Apply only additions/deletions, preserve target-specific entries" -ForegroundColor White
+                    }
                     Write-Host '    ' -NoNewline; Write-Host '0' -NoNewline -ForegroundColor Yellow; Write-Host ') ' -NoNewline -ForegroundColor White
                     Write-Host "Cancel" -ForegroundColor White
                     Write-Host ""
-                    $deployModeChoice = Read-Host "  Select [0-2]"
+                    if ($tmshMode.Eligible) {
+                        $deployModeChoice = Read-Host "  Select [0-2]"
+                    } else {
+                        $deployModeChoice = Read-Host "  Select [0-1]"
+                    }
                     $deployMode = switch ($deployModeChoice) { "1" { "replace" }; "2" { "merge" }; default { "" } }
                     if ([string]::IsNullOrWhiteSpace($deployMode)) { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
 
-                    # Gate: merge mode embeds keys/values unquoted in tmsh; reject
-                    # unsafe change sets before any device is modified
-                    if ($deployMode -eq "merge" -and $EditType -eq "datagroup") {
-                        # Gate: tmsh records add/delete cannot change an existing record's value
-                        if ($changes.ValueChanges.Count -gt 0) {
-                            Write-LogError "Merge mode unavailable: $($changes.ValueChanges.Count) record(s) have changed values,"
-                            Write-LogError "which tmsh records add/delete cannot apply."
-                            Write-LogError "Use Full Replace mode to deploy this change set. No changes have been made."
-                            Wait-EnterKey
-                            continue
-                        }
-                        $tmshCheck = @()
-                        foreach ($addKey in $changes.Additions) {
-                            $tmshCheck += $addKey
-                            $idx = $workingKeys.IndexOf($addKey)
-                            if ($idx -ge 0 -and $workingValues[$idx]) { $tmshCheck += $workingValues[$idx] }
-                        }
-                        $tmshCheck += $changes.Deletions
-                        if (-not (Test-TmshSafeStrings -Strings $tmshCheck)) {
-                            Write-LogError "Merge mode unavailable: one or more keys or values contain characters"
-                            Write-LogError "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
-                            Write-LogError "Use Full Replace mode to deploy this change set. No changes have been made."
-                            Wait-EnterKey
-                            continue
-                        }
+                    # Merge is withheld from the menu when ineligible; re-asserted
+                    # here so a typed 2 cannot reach the passthrough regardless
+                    if ($deployMode -eq "merge" -and -not $tmshMode.Eligible) {
+                        Write-LogError "Merge unavailable: $($tmshMode.Reason)."
+                        Write-LogError "Use Full Replace to deploy this change set. No changes have been made."
+                        Wait-EnterKey
+                        continue
                     }
                 } else {
                     $deployMode = "replace"
@@ -4679,7 +5125,7 @@ function Invoke-EditorSubmenu {
                 # Select scope
                 $deployTargets = @()
                 if ($EditType -eq "datagroup") {
-                    $deployTargets = Select-DeployScope -ObjectType "datagroup" -ObjectName "/${Partition}/${DgName}"
+                    $deployTargets = Select-DeployScope -ObjectType "datagroup" -ObjectName "$(Get-DatagroupDisplayPath -Partition $Partition -Name $DgName -SubPath $DgSubPath)"
                 } else {
                     $deployTargets = Select-DeployScope -ObjectType "urlcat" -ObjectName $CatName
                 }
@@ -4694,7 +5140,7 @@ function Invoke-EditorSubmenu {
                 Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
                 Write-Host ""
                 if ($EditType -eq "datagroup") {
-                    Write-Host "  Object:  /${Partition}/${DgName} ($dgType)" -ForegroundColor White
+                    Write-Host "  Object:  $(Get-DatagroupDisplayPath -Partition $Partition -Name $DgName -SubPath $DgSubPath) ($dgType)" -ForegroundColor White
                 } else {
                     Write-Host "  Object:  $CatName" -ForegroundColor White
                 }
@@ -4738,7 +5184,7 @@ function Invoke-EditorSubmenu {
                 Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
                 
                 if ($EditType -eq "datagroup") {
-                    $validationResults = Invoke-PreDeployValidation -ObjectType "datagroup" -ObjectName $DgName -Partition $Partition -Targets $deployTargets
+                    $validationResults = Invoke-PreDeployValidation -ObjectType "datagroup" -ObjectName $DgName -Partition $Partition -Targets $deployTargets -SubPath $DgSubPath
                 } else {
                     $validationResults = Invoke-PreDeployValidation -ObjectType "urlcat" -ObjectName $CatName -Partition "" -Targets $deployTargets
                 }
@@ -4767,90 +5213,9 @@ function Invoke-EditorSubmenu {
                     }
                 }
                 
-                # Step 2: Apply to current device (only if pending changes)
-                $currentStatus = "OK"
-                $currentMessage = "No changes needed"
-                
-                if ($hasPending) {
-                    Write-Host ""
-                    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-                    Write-Host "    STEP 2: APPLYING TO CURRENT DEVICE" -ForegroundColor White
-                    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-                    Write-Host ""
-                    Write-Host "  Deploying to $($script:RemoteHost)..." -ForegroundColor White
-                    
-                    # Backup
-                    if ($script:BACKUPS_ENABLED -eq 1) {
-                        $currentBackup = ""
-                        if ($EditType -eq "datagroup") {
-                            $currentBackup = Backup-Datagroup -Partition $Partition -Name $DgName
-                        } else {
-                            $currentBackup = Backup-UrlCategory -CatName $CatName
-                        }
-                        if ($currentBackup) {
-                            Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Creating backup" -ForegroundColor White
-                        } else {
-                            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
-                            Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
-                            if ($cont -ne "yes") { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
-                        }
-                    }
-                    
-                    # Apply
-                    $currentSuccess = $false
-                    if ($EditType -eq "datagroup") {
-                        $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
-                        $result = Set-DatagroupRecordsRemote -Partition $Partition -Name $DgName -Records $records
-                        if ($result.Success) {
-                            Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
-                            if (Save-F5Config) {
-                                Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Saving configuration" -ForegroundColor White
-                                $currentSuccess = $true
-                            } else {
-                                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Saving configuration" -ForegroundColor White
-                            }
-                        } else {
-                            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
-                        }
-                    } else {
-                        $urlObjects = ConvertTo-UrlObjects -Urls @($workingKeys)
-                        if (Set-UrlCategoryEntriesRemote -Name $CatName -Urls $urlObjects) {
-                            Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Applying changes" -ForegroundColor White
-                            if (Save-F5Config) {
-                                Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Saving configuration" -ForegroundColor White
-                                $currentSuccess = $true
-                            } else {
-                                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Saving configuration" -ForegroundColor White
-                            }
-                        } else {
-                            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Applying changes" -ForegroundColor White
-                        }
-                    }
-                    
-                    if (-not $currentSuccess) {
-                        Write-Host ""
-                        Write-LogError "Failed to apply changes to current device."
-                        Write-Host "  Continue deploying to fleet anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $contFleet = Read-Host
-                        if ($contFleet -ne "yes") { Write-LogInfo "Deploy aborted."; Wait-EnterKey; continue }
-                    }
-                    
-                    $currentStatus = $(if ($currentSuccess) { "OK" } else { "FAIL" })
-                    $currentMessage = $(if ($currentSuccess) { "Deployed and saved" } else { "Failed to apply" })
-                    if ($currentSuccess) {
-                        $originalKeys.Clear(); $originalValues.Clear()
-                        foreach ($k in $workingKeys) { $originalKeys.Add($k) | Out-Null }
-                        foreach ($v in $workingValues) { $originalValues.Add($v) | Out-Null }
-                    }
-                }
-                
-                # Final step: Deploy to fleet
-                $fleetStepNum = $(if ($hasPending) { 3 } else { 2 })
-                Write-Host ""
-                Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-                Write-Host "    STEP ${fleetStepNum}: DEPLOYING TO FLEET" -ForegroundColor White
-                Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-                
-                # Build merge data
+                # Build merge data before Step 2: the selected mode governs
+                # the current device as well as the fleet, so a Merge needs the
+                # additions and deletions ready for the local apply too
                 $additionsJson = @()
                 $deletionsList = @()
                 if ($deployMode -eq "merge" -and $hasPending) {
@@ -4870,25 +5235,101 @@ function Invoke-EditorSubmenu {
                     $deletionsList = $changes.Deletions
                 }
                 
+                # Step 2: Apply to current device (only if pending changes)
+                $currentStatus = "OK"
+                $currentMessage = "No changes needed"
+                
+                if ($hasPending) {
+                    Write-Host ""
+                    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                    Write-Host "    STEP 2: APPLYING TO CURRENT DEVICE" -ForegroundColor White
+                    Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                    Write-Host ""
+                    Write-Host "  Deploying to $($script:RemoteHost)..." -ForegroundColor White
+                    
+                    # Backup
+                    if ($script:BACKUPS_ENABLED -eq 1) {
+                        $currentBackup = ""
+                        if ($EditType -eq "datagroup") {
+                            $currentBackup = Backup-Datagroup -Partition $Partition -Name $DgName -SubPath $DgSubPath
+                        } else {
+                            $currentBackup = Backup-UrlCategory -CatName $CatName
+                        }
+                        if ($currentBackup) {
+                            Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green; Write-Host "  Creating backup" -ForegroundColor White
+                        } else {
+                            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Creating backup" -ForegroundColor White
+                            Write-Host "  Continue without backup? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $cont = Read-Host
+                            if ($cont -ne "yes") { Write-LogInfo "Deploy cancelled."; Wait-EnterKey; continue }
+                        }
+                    }
+                    
+                    # Apply - through the same per-host deploy function as the
+                    # fleet, so the selected mode governs the connected device
+                    # too: Merge applies only the staged delta here as well,
+                    # never a silent full replace
+                    $currentSuccess = $false
+                    if ($EditType -eq "datagroup") {
+                        $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
+                        $currentSuccess = Deploy-DatagroupToHost -HostName $script:RemoteHost -Partition $Partition -DgName $DgName `
+                            -RecordsJson $records -SiteId (Get-HostSite -Hostname $script:RemoteHost) -DeployMode $deployMode `
+                            -AdditionsJson $additionsJson -DeletionsList $deletionsList -SubPath $DgSubPath
+                    } else {
+                        $urlObjects = ConvertTo-UrlObjects -Urls @($workingKeys)
+                        $currentSuccess = Deploy-UrlCategoryToHost -HostName $script:RemoteHost -CatName $CatName -UrlsJson $urlObjects `
+                            -SiteId (Get-HostSite -Hostname $script:RemoteHost) -DeployMode $deployMode `
+                            -AdditionsJson $additionsJson -DeletionsList $deletionsList
+                    }
+                    
+                    if (-not $currentSuccess) {
+                        Write-Host ""
+                        Write-LogError "Failed to apply changes to current device."
+                        Write-Host "  Continue deploying to fleet anyway? (yes/no) " -NoNewline; Write-Host "[" -NoNewline -ForegroundColor Green; Write-Host "no" -NoNewline -ForegroundColor Red; Write-Host "]" -NoNewline -ForegroundColor Green; Write-Host ": " -NoNewline; $contFleet = Read-Host
+                        if ($contFleet -ne "yes") { Write-LogInfo "Deploy aborted."; Wait-EnterKey; continue }
+                    }
+                    
+                    $currentStatus = $(if ($currentSuccess) { "OK" } else { "FAIL" })
+                    $currentMessage = $(if ($currentSuccess) { "Deployed and saved" } elseif ($script:DeployErrorMsg) { $script:DeployErrorMsg } else { "Failed to apply" })
+                    if ($currentSuccess) {
+                        $originalKeys.Clear(); $originalValues.Clear()
+                        foreach ($k in $workingKeys) { $originalKeys.Add($k) | Out-Null }
+                        foreach ($v in $workingValues) { $originalValues.Add($v) | Out-Null }
+                    }
+                }
+                
+                # Final step: Deploy to fleet
+                $fleetStepNum = $(if ($hasPending) { 3 } else { 2 })
+                Write-Host ""
+                Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                Write-Host "    STEP ${fleetStepNum}: DEPLOYING TO FLEET" -ForegroundColor White
+                Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                
                 # Build deploy action scriptblock
                 # GetNewClosure binds the editor's variables ($Partition, $DgName,
-                # $deployMode, $records, ...) into the scriptblock at creation.
-                # Without it, resolution falls through the dynamic call stack at
-                # invocation inside Invoke-FleetDeploy - which works only by the
-                # accident that its own parameter names carry the same values
+                # $DgSubPath, $deployMode, $records, ...) into the scriptblock at
+                # creation. Without it, resolution falls through the dynamic call
+                # stack at invocation inside Invoke-FleetDeploy - which works only
+                # by the accident that its own parameter names carry the same values.
+                # The closure runs in a dynamic module whose command lookup skips
+                # the running script's scope on Windows PowerShell 5.1, so calling
+                # the deploy function by name fails with CommandNotFound - the
+                # function itself is captured as a variable alongside the data
                 if ($EditType -eq "datagroup") {
                     $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
+                    $deployFn = ${function:Deploy-DatagroupToHost}
                     $deployAction = {
                         param($h, $s)
-                        Deploy-DatagroupToHost -HostName $h -Partition $Partition -DgName $DgName `
+                        & $deployFn -HostName $h -Partition $Partition -DgName $DgName `
                             -RecordsJson $records -SiteId $s -DeployMode $deployMode `
-                            -AdditionsJson $additionsJson -DeletionsList $deletionsList
+                            -AdditionsJson $additionsJson -DeletionsList $deletionsList `
+                            -SubPath $DgSubPath
                     }.GetNewClosure()
                 } else {
                     $urlObjects = ConvertTo-UrlObjects -Urls @($workingKeys)
+                    $deployFn = ${function:Deploy-UrlCategoryToHost}
                     $deployAction = {
                         param($h, $s)
-                        Deploy-UrlCategoryToHost -HostName $h -CatName $CatName -UrlsJson $urlObjects -SiteId $s `
+                        & $deployFn -HostName $h -CatName $CatName -UrlsJson $urlObjects -SiteId $s `
                             -DeployMode $deployMode -AdditionsJson $additionsJson -DeletionsList $deletionsList
                     }.GetNewClosure()
                 }
@@ -4897,7 +5338,8 @@ function Invoke-EditorSubmenu {
                 Invoke-FleetDeploy -ObjectType $EditType -ObjectName $objectName -Partition $Partition `
                     -ValidationResults $validationResults `
                     -DeployAction $deployAction -CurrentHost $script:RemoteHost `
-                    -CurrentStatus $currentStatus -CurrentMessage $currentMessage
+                    -CurrentStatus $currentStatus -CurrentMessage $currentMessage `
+                    -SubPath $DgSubPath
                 
                 Wait-EnterKey
             }
@@ -5300,7 +5742,7 @@ function Main {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.5                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.6                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White

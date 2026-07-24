@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.5
+# Version: 5.6
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -62,6 +62,17 @@ PROTECTED_DATAGROUPS=(
     "sys_APM_MS_Office_OFBA_DG"
 )
 
+# TMOS folders whose objects are managed by other systems (AS3, Service
+# Discovery). Datagroups in these folders are shown in listings but blocked
+# from create, edit, and delete. Delete entries to disable the guard
+PROTECTED_FOLDERS=(
+    "appsvcs"
+    "ServiceDiscovery"
+)
+
+# Debug tracing (set to 1 to log request/response detail for every API call)
+DEBUG_ENABLED=0
+
 # CSV preview lines
 PREVIEW_LINES=5
 
@@ -108,6 +119,7 @@ YELLOW='\033[33m'
 RED='\033[31m'
 GREEN='\033[32m'
 WHITE='\033[37m'
+GRAY='\033[90m'
 NC='\033[0m'
 
 # =============================================================================
@@ -147,6 +159,19 @@ log_error() {
 
 log_step() {
     log "${WHITE}  [....] $1${NC}"
+}
+
+# Debug tracing - stderr only. Several functions build their results on
+# stdout (datagroup lists, selections, backup paths), so a debug line on
+# stdout would be captured into that data and corrupt it
+log_debug() {
+    if [ "${DEBUG_ENABLED}" -eq 1 ]; then
+        echo -e "${GRAY}  [DBUG]  $1${NC}" >&2
+        if [ "${LOGGING_ENABLED}" -eq 1 ]; then
+            echo "  [DBUG]  $1" >> "${LOGFILE}" 2>/dev/null || true
+        fi
+    fi
+    return 0
 }
 
 # =============================================================================
@@ -303,14 +328,87 @@ cleanup_old_backups() {
     fi
 }
 
+# Validate a single datagroup key against the datagroup's type
+# String-type datagroups accept any key, so only address and integer are checked
+# Echoes: empty if valid, error message if invalid
+validate_datagroup_key_format() {
+    local key="$1"
+    local dg_type="$2"
+    
+    if [ "${dg_type}" == "address" ] || [ "${dg_type}" == "ip" ]; then
+        if [[ "${key}" == *":"* ]]; then
+            echo "IPv6 is not supported. Use an IPv4 address or CIDR."
+            return 0
+        fi
+        if [[ "${key}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(/([0-9]{1,2}))?$ ]]; then
+            local octet
+            for octet in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do
+                if [ "${octet}" -gt 255 ]; then
+                    echo "Invalid IPv4 address: octet exceeds 255."
+                    return 0
+                fi
+            done
+            if [ -n "${BASH_REMATCH[6]}" ] && [ "${BASH_REMATCH[6]}" -gt 32 ]; then
+                echo "Invalid CIDR: prefix exceeds /32."
+                return 0
+            fi
+            return 0
+        fi
+        echo "Invalid entry. Expected IPv4 address (N.N.N.N) or CIDR (N.N.N.N/M)."
+        return 0
+    fi
+    
+    if [ "${dg_type}" == "integer" ]; then
+        if ! [[ "${key}" =~ ^-?[0-9]+$ ]]; then
+            echo "Invalid entry. Expected an integer value."
+            return 0
+        fi
+    fi
+    
+    return 0
+}
+
+# Validate a single URL category entry before format conversion
+# Only the domain is validated; protocol and path are stripped first
+# Echoes: empty if valid, terse reason if invalid
+validate_url_entry_format() {
+    local entry="$1"
+    
+    local domain="${entry#http://}"
+    domain="${domain#https://}"
+    domain="${domain%%/*}"
+    
+    if [ -z "${domain}" ]; then
+        echo "empty after removing protocol/path"
+        return 0
+    fi
+    if [[ "${domain}" =~ [[:space:]] ]]; then
+        echo "contains spaces"
+        return 0
+    fi
+    if ! [[ "${domain}" =~ ^[a-zA-Z0-9.*_-]+$ ]]; then
+        echo "invalid characters"
+        return 0
+    fi
+    if [[ "${domain}" == *".."* ]]; then
+        echo "consecutive dots"
+        return 0
+    fi
+    return 0
+}
+
 # Strip partition prefix from datagroup name (e.g., /Common/mygroup -> mygroup)
 strip_partition_prefix() {
     echo "$1" | sed 's/^\/[^/]*\///g'
 }
 
 # Prompt user to select a datagroup from a partition
-# Args: partition, prompt_text
-# Outputs: name|class on success, empty on failure/cancel
+# Names are folder-qualified (folder/name) for objects inside TMOS folders.
+# Bare-name input matching a single folder object resolves to it; multiple
+# matches list the candidates. New names accept folder/name form, but the
+# folder must already exist in TMOS - this tool creates objects, not folders
+# Args: partition, prompt_text, [mode]
+# Outputs: name|subpath|class on success (subpath empty at partition root)
 # Returns: 0 on success, 1 on failure/cancel
 select_datagroup() {
     local partition="$1"
@@ -327,8 +425,9 @@ select_datagroup() {
         return 1
     fi
     
-    # Build array and display list
+    # Build arrays and display list
     local dg_names=()
+    local dg_subpaths=()
     local dg_classes=()
     local idx=1
     
@@ -337,17 +436,29 @@ select_datagroup() {
         echo -e "${WHITE}  [INFO]  Available datagroups in partition '${partition}':${NC}" >&2
         echo -e "  ${CYAN}────────────────────────────────────────────────────────────${NC}" >&2
         
-        while IFS='|' read -r p name class; do
+        while IFS='|' read -r p subpath name class; do
             [ -z "${name}" ] && continue
             if is_protected_datagroup "${name}"; then
                 continue
             fi
             dg_names+=("${name}")
+            dg_subpaths+=("${subpath}")
             dg_classes+=("${class}")
+            
+            # Folder-qualified display name; externally managed folders tagged
+            local shown_name="${name}"
+            if [ -n "${subpath}" ]; then
+                shown_name="${subpath}/${name}"
+            fi
+            local shown_class="${class}"
+            if is_protected_folder "${subpath}"; then
+                shown_class="${class}, externally managed"
+            fi
+            
             if [ "${mode}" == "new" ]; then
-                printf "    ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}\n" "${name}" "${class}" >&2
+                printf "    ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}\n" "${shown_name}" "${shown_class}" >&2
             else
-                printf "    ${YELLOW}%3d${NC}${WHITE})${NC} ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}\n" "${idx}" "${name}" "${class}" >&2
+                printf "    ${YELLOW}%3d${NC}${WHITE})${NC} ${WHITE}%-35s${NC} ${WHITE}(%s)${NC}\n" "${idx}" "${shown_name}" "${shown_class}" >&2
             fi
             idx=$((idx + 1))
         done <<< "${datagroups}"
@@ -372,9 +483,7 @@ select_datagroup() {
                     echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_names[$((dg_input - 1))]}' already exists. Enter a new name.${NC}" >&2
                     continue
                 fi
-                local sel_name="${dg_names[$((dg_input - 1))]}"
-                local sel_class="${dg_classes[$((dg_input - 1))]}"
-                echo "${sel_name}|${sel_class}"
+                echo "${dg_names[$((dg_input - 1))]}|${dg_subpaths[$((dg_input - 1))]}|${dg_classes[$((dg_input - 1))]}"
                 return 0
             else
                 echo -e "${RED}  [FAIL]${NC}  ${WHITE}Invalid selection. Try again.${NC}" >&2
@@ -382,41 +491,106 @@ select_datagroup() {
             fi
         fi
         
-        # Direct name entry
-        local dg_name
-        dg_name=$(strip_partition_prefix "${dg_input}")
+        # Direct name entry - split any folder segment from the leaf name
+        local in_subpath in_name
+        IFS='|' read -r in_subpath in_name <<< "$(split_datagroup_path "${dg_input}" "${partition}")"
         
-        # Check if name matches an existing datagroup in our list
-        local found_idx=-1
+        if [ -n "${in_subpath}" ]; then
+            # Folder-qualified input: exact folder + name match
+            local found_idx=-1
+            local ci
+            for ((ci=0; ci<${#dg_names[@]}; ci++)); do
+                if [ "${dg_names[$ci]}" == "${in_name}" ] && [ "${dg_subpaths[$ci]}" == "${in_subpath}" ]; then
+                    found_idx=$ci
+                    break
+                fi
+            done
+            
+            if [ ${found_idx} -ge 0 ]; then
+                if [ "${mode}" == "new" ]; then
+                    echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${in_subpath}/${in_name}' already exists. Enter a new name.${NC}" >&2
+                    continue
+                fi
+                echo "${dg_names[$found_idx]}|${dg_subpaths[$found_idx]}|${dg_classes[$found_idx]}"
+                return 0
+            fi
+            
+            if [ "${mode}" == "existing" ]; then
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${in_subpath}/${in_name}' does not exist in partition '${partition}'. Try again.${NC}" >&2
+                continue
+            fi
+            
+            # New folder-qualified name: validate every segment and refuse
+            # externally managed folders
+            if is_protected_folder "${in_subpath}"; then
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Folder '${in_subpath%%/*}' is externally managed. Objects there must not be created by this tool.${NC}" >&2
+                continue
+            fi
+            local seg_ok=true seg
+            while IFS= read -r seg; do
+                if ! [[ "${seg}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
+                    seg_ok=false
+                fi
+            done <<< "$(echo "${in_subpath}" | tr '/' '\n')"
+            if ! [[ "${in_name}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
+                seg_ok=false
+            fi
+            if [ "${seg_ok}" != "true" ]; then
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Invalid name. Each segment must start with a letter and contain only letters, numbers, dashes, underscores.${NC}" >&2
+                continue
+            fi
+            echo "${in_name}|${in_subpath}|"
+            return 0
+        fi
+        
+        # Bare leaf name: collect every match across folders
+        local match_idxs=()
+        local ci
         for ((ci=0; ci<${#dg_names[@]}; ci++)); do
-            if [ "${dg_names[$ci]}" == "${dg_name}" ]; then
-                found_idx=$ci
-                break
+            if [ "${dg_names[$ci]}" == "${in_name}" ]; then
+                match_idxs+=("${ci}")
             fi
         done
         
-        if [ ${found_idx} -ge 0 ]; then
-            # Name exists in list
+        if [ ${#match_idxs[@]} -eq 1 ]; then
+            local m=${match_idxs[0]}
             if [ "${mode}" == "new" ]; then
-                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_name}' already exists. Enter a new name.${NC}" >&2
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_names[$m]}' already exists. Enter a new name.${NC}" >&2
                 continue
             fi
-            echo "${dg_name}|${dg_classes[$found_idx]}"
-            return 0
-        else
-            # Name not in list
-            if [ "${mode}" == "existing" ]; then
-                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${dg_name}' does not exist in partition '${partition}'. Try again.${NC}" >&2
-                continue
-            fi
-            # Validate TMOS naming rules for new names
-            if ! [[ "${dg_name}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
-                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores.${NC}" >&2
-                continue
-            fi
-            echo "${dg_name}|"
+            echo "${dg_names[$m]}|${dg_subpaths[$m]}|${dg_classes[$m]}"
             return 0
         fi
+        
+        if [ ${#match_idxs[@]} -gt 1 ]; then
+            if [ "${mode}" == "new" ]; then
+                echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${in_name}' already exists. Enter a new name.${NC}" >&2
+                continue
+            fi
+            echo -e "${YELLOW}  [WARN]${NC}  ${WHITE}'${in_name}' matches more than one datagroup. Enter the full name:${NC}" >&2
+            local mi
+            for mi in "${match_idxs[@]}"; do
+                local cand="${dg_names[$mi]}"
+                if [ -n "${dg_subpaths[$mi]}" ]; then
+                    cand="${dg_subpaths[$mi]}/${dg_names[$mi]}"
+                fi
+                echo -e "    ${WHITE}${cand}${NC}" >&2
+            done
+            continue
+        fi
+        
+        # No match
+        if [ "${mode}" == "existing" ]; then
+            echo -e "${RED}  [FAIL]${NC}  ${WHITE}Datagroup '${in_name}' does not exist in partition '${partition}'. Try again.${NC}" >&2
+            continue
+        fi
+        # Validate TMOS naming rules for new names
+        if ! [[ "${in_name}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
+            echo -e "${RED}  [FAIL]${NC}  ${WHITE}Invalid name. Must start with a letter and contain only letters, numbers, dashes, underscores.${NC}" >&2
+            continue
+        fi
+        echo "${in_name}||"
+        return 0
     done
 }
 
@@ -456,6 +630,15 @@ api_request() {
     local url="https://${REMOTE_HOST}${endpoint}"
     local auth="${REMOTE_USER}:${REMOTE_PASS}"
     
+    # Trace the request - never the Authorization credential
+    log_debug "REQ  ${method} ${url}"
+    if [[ "${endpoint}" == *"options="* ]]; then
+        log_debug "REQ  decoded: $(printf '%s' "${endpoint}" | sed 's/%20/ /g; s/%7B/{/g; s/%7D/}/g; s/%22/"/g')"
+    fi
+    if [ -n "${data}" ]; then
+        log_debug "REQ  body: ${data}"
+    fi
+    
     local curl_opts=(
         -sk
         -u "${auth}"
@@ -471,12 +654,14 @@ api_request() {
         response=$(printf '%s' "${data}" | curl "${curl_opts[@]}" -d @- "${url}" 2>/dev/null) || {
             API_RESPONSE=""
             API_HTTP_CODE="000"
+            log_debug "RSP  transport failure (curl could not complete the request)"
             return 1
         }
     else
         response=$(curl "${curl_opts[@]}" "${url}" 2>/dev/null) || {
             API_RESPONSE=""
             API_HTTP_CODE="000"
+            log_debug "RSP  transport failure (curl could not complete the request)"
             return 1
         }
     fi
@@ -487,9 +672,14 @@ api_request() {
     
     # Check for success (2xx codes)
     if [[ "${API_HTTP_CODE}" =~ ^2[0-9]{2}$ ]]; then
+        log_debug "RSP  HTTP ${API_HTTP_CODE}"
         return 0
     fi
     
+    # BIG-IP states the reason for a rejection as JSON in the response body -
+    # curl returns it, so surface it in the trace
+    log_debug "RSP  HTTP ${API_HTTP_CODE}"
+    log_debug "RSP  body: ${API_RESPONSE}"
     return 1
 }
 
@@ -768,7 +958,7 @@ partition_exists_remote() {
 # -----------------------------------------------------------------------------
 
 # Get list of datagroups in a partition
-# Returns: partition|name|internal lines
+# Returns: partition|subpath|name|internal lines (subpath empty at partition root)
 get_internal_datagroup_list_remote() {
     local partition="$1"
     
@@ -776,12 +966,13 @@ get_internal_datagroup_list_remote() {
         return 1
     fi
     
-    # Parse JSON response - exclude app service datagroups
+    # Parse JSON response - exclude app service datagroups. subPath is absent
+    # from the REST item for objects at the partition root
     echo "${API_RESPONSE}" | jq -r --arg p "${partition}" '
         .items // [] | .[] | 
         select(.partition == $p) |
         select(.fullPath | contains(".app/") | not) |
-        "\($p)|\(.name)|internal"
+        "\($p)|\(.subPath // "")|\(.name)|internal"
     ' 2>/dev/null || true
 }
 
@@ -789,8 +980,9 @@ get_internal_datagroup_list_remote() {
 internal_datagroup_exists_remote() {
     local partition="$1"
     local dg_name="$2"
+    local subpath="${3:-}"
     
-    if api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+    if api_get "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")"; then
         return 0
     fi
     return 1
@@ -800,8 +992,9 @@ internal_datagroup_exists_remote() {
 get_internal_datagroup_type_remote() {
     local partition="$1"
     local dg_name="$2"
+    local subpath="${3:-}"
     
-    if api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+    if api_get "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")"; then
         echo "${API_RESPONSE}" | jq -r '.type // empty' 2>/dev/null
         return 0
     fi
@@ -812,8 +1005,9 @@ get_internal_datagroup_type_remote() {
 get_internal_datagroup_records_remote() {
     local partition="$1"
     local dg_name="$2"
+    local subpath="${3:-}"
     
-    if ! api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+    if ! api_get "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")"; then
         return 1
     fi
     
@@ -825,18 +1019,29 @@ get_internal_datagroup_records_remote() {
 }
 
 # Create datagroup
-# Args: partition, name, type
+# Args: partition, name, type, [subpath]
+# The folder must already exist in TMOS - this tool creates objects, not folders
 create_internal_datagroup_remote() {
     local partition="$1"
     local dg_name="$2"
     local dg_type="$3"
+    local subpath="${4:-}"
     
     local data
-    data=$(jq -n \
-        --arg name "${dg_name}" \
-        --arg partition "${partition}" \
-        --arg type "${dg_type}" \
-        '{name: $name, partition: $partition, type: $type}')
+    if [ -n "${subpath}" ]; then
+        data=$(jq -n \
+            --arg name "${dg_name}" \
+            --arg partition "${partition}" \
+            --arg subPath "${subpath}" \
+            --arg type "${dg_type}" \
+            '{name: $name, partition: $partition, subPath: $subPath, type: $type}')
+    else
+        data=$(jq -n \
+            --arg name "${dg_name}" \
+            --arg partition "${partition}" \
+            --arg type "${dg_type}" \
+            '{name: $name, partition: $partition, type: $type}')
+    fi
     
     if api_post "/mgmt/tm/ltm/data-group/internal" "${data}"; then
         return 0
@@ -851,11 +1056,12 @@ apply_internal_datagroup_records_remote() {
     local partition="$1"
     local dg_name="$2"
     local records_json="$3"
+    local subpath="${4:-}"
     
     local data
     data=$(printf '%s' "${records_json}" | jq '{records: .}')
     
-    if api_patch "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}" "${data}"; then
+    if api_patch "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")" "${data}"; then
         return 0
     fi
     return 1
@@ -906,6 +1112,85 @@ build_tmsh_records_delete() {
     echo "${result}"
 }
 
+# Build the REST tilde path for a datagroup, folder segment included
+# (e.g. ~Common~dashboard~mygroup). Objects at the partition root omit it
+build_datagroup_path() {
+    local partition="$1"
+    local dg_name="$2"
+    local subpath="${3:-}"
+    
+    if [ -n "${subpath}" ]; then
+        # The backslash stops bash tilde-expanding the replacement to $HOME
+        echo "~${partition}~${subpath//\//\~}~${dg_name}"
+    else
+        echo "~${partition}~${dg_name}"
+    fi
+}
+
+# Human-readable full path (e.g. /Common/dashboard/mygroup)
+get_datagroup_display_path() {
+    local partition="$1"
+    local dg_name="$2"
+    local subpath="${3:-}"
+    
+    if [ -n "${subpath}" ]; then
+        echo "/${partition}/${subpath}/${dg_name}"
+    else
+        echo "/${partition}/${dg_name}"
+    fi
+}
+
+# Backup filename token - the folder is folded in so datagroups with the
+# same leaf name in different folders get separate files and rotation pools
+get_datagroup_scope_token() {
+    local dg_name="$1"
+    local subpath="${2:-}"
+    
+    if [ -n "${subpath}" ]; then
+        echo "${subpath//\//_}_${dg_name}"
+    else
+        echo "${dg_name}"
+    fi
+}
+
+# Parse operator input into folder and leaf name
+# Accepts: name, folder/name, /Partition/folder/name
+# Echoes: subpath|name (subpath empty for partition-root objects)
+split_datagroup_path() {
+    local input="$1"
+    local partition="$2"
+    
+    local rest="${input}"
+    if [[ "${rest}" == /* ]]; then
+        rest="${rest#/}"
+        rest="${rest#"${partition}"/}"
+    fi
+    
+    if [[ "${rest}" == */* ]]; then
+        echo "${rest%/*}|${rest##*/}"
+    else
+        echo "|${rest}"
+    fi
+}
+
+# Check whether a folder (top segment) is externally managed
+# Returns: 0 if protected, 1 if not
+is_protected_folder() {
+    local subpath="$1"
+    
+    [ -z "${subpath}" ] && return 1
+    [ ${#PROTECTED_FOLDERS[@]} -eq 0 ] && return 1
+    
+    local top="${subpath%%/*}"
+    local folder
+    for folder in "${PROTECTED_FOLDERS[@]}"; do
+        if [ "${top}" == "${folder}" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Gate for tmsh merge mode: keys and values are embedded unquoted in the tmsh
 # options string. Whitespace splits tokens (a multi-word delete key would delete
 # other records); braces, quotes, backslash, ';', and '#' corrupt the parse.
@@ -921,36 +1206,108 @@ urlencode_options() {
     echo "$1" | sed 's/ /%20/g; s/{/%7B/g; s/}/%7D/g; s/"/%22/g'
 }
 
+# Last incremental error detail (BIG-IP JSON message when available)
+INCREMENTAL_ERROR_MSG=""
+
+# After a tmsh passthrough reports failure, read the datagroup back and check
+# whether the change actually landed - the device sometimes applies the change
+# while the client-side transport reports an error, and retrying is unsafe
+# because tmsh refuses to add an existing record or delete a missing one
+# Args: partition, name, subpath, op (add|delete), verify_keys (newline list)
+# Returns: 0 if every key is in the expected end state, 1 otherwise
+test_incremental_result() {
+    local partition="$1"
+    local dg_name="$2"
+    local subpath="$3"
+    local op="$4"
+    local verify_keys="$5"
+    
+    local present
+    present=$(get_internal_datagroup_records_remote "${partition}" "${dg_name}" "${subpath}" | cut -d'|' -f1) || return 1
+    
+    local key
+    while IFS= read -r key; do
+        [ -z "${key}" ] && continue
+        if [ "${op}" == "add" ]; then
+            printf '%s\n' "${present}" | grep -Fxq -- "${key}" || return 1
+        else
+            printf '%s\n' "${present}" | grep -Fxq -- "${key}" && return 1
+        fi
+    done <<< "${verify_keys}"
+    return 0
+}
+
 # Add records to datagroup incrementally using ?options=records add
-# Args: partition, name, tmsh_records (from build_tmsh_records_add)
-# Returns: 0 on success, 1 on failure
+# Args: partition, name, tmsh_records (from build_tmsh_records_add), [subpath], [verify_keys]
+# tmsh resolves the target from the request body, so subPath goes there as
+# well as in the URI. verify_keys (newline list) enables the read-back check
+# Returns: 0 on success, 1 on failure; sets INCREMENTAL_ERROR_MSG on failure
 add_datagroup_records_incremental() {
     local partition="$1"
     local dg_name="$2"
     local tmsh_records="$3"
+    local subpath="${4:-}"
+    local verify_keys="${5:-}"
+    
+    INCREMENTAL_ERROR_MSG=""
     
     local options
     options=$(urlencode_options "records add {${tmsh_records} }")
+    log_debug "TMSH records add {${tmsh_records} }"
     
-    if api_patch "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}?options=${options}" "{\"name\":\"${dg_name}\",\"partition\":\"${partition}\"}"; then
+    local body="{\"name\":\"${dg_name}\",\"partition\":\"${partition}\"}"
+    if [ -n "${subpath}" ]; then
+        body="{\"name\":\"${dg_name}\",\"partition\":\"${partition}\",\"subPath\":\"${subpath}\"}"
+    fi
+    
+    if api_patch "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")?options=${options}" "${body}"; then
         return 0
+    fi
+    
+    INCREMENTAL_ERROR_MSG=$(echo "${API_RESPONSE}" | jq -r '.message // empty' 2>/dev/null || true)
+    
+    # Read back and let the device state settle the disagreement
+    if [ -n "${verify_keys}" ]; then
+        if test_incremental_result "${partition}" "${dg_name}" "${subpath}" "add" "${verify_keys}"; then
+            log_warn "Device reported an error but the records are present - treating as applied."
+            return 0
+        fi
     fi
     return 1
 }
 
 # Delete records from datagroup incrementally using ?options=records delete
-# Args: partition, name, tmsh_keys (from build_tmsh_records_delete)
-# Returns: 0 on success, 1 on failure
+# Args: partition, name, tmsh_keys (from build_tmsh_records_delete), [subpath], [verify_keys]
+# Returns: 0 on success, 1 on failure; sets INCREMENTAL_ERROR_MSG on failure
 delete_datagroup_records_incremental() {
     local partition="$1"
     local dg_name="$2"
     local tmsh_keys="$3"
+    local subpath="${4:-}"
+    local verify_keys="${5:-}"
+    
+    INCREMENTAL_ERROR_MSG=""
     
     local options
     options=$(urlencode_options "records delete {${tmsh_keys} }")
+    log_debug "TMSH records delete {${tmsh_keys} }"
     
-    if api_patch "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}?options=${options}" "{\"name\":\"${dg_name}\",\"partition\":\"${partition}\"}"; then
+    local body="{\"name\":\"${dg_name}\",\"partition\":\"${partition}\"}"
+    if [ -n "${subpath}" ]; then
+        body="{\"name\":\"${dg_name}\",\"partition\":\"${partition}\",\"subPath\":\"${subpath}\"}"
+    fi
+    
+    if api_patch "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")?options=${options}" "${body}"; then
         return 0
+    fi
+    
+    INCREMENTAL_ERROR_MSG=$(echo "${API_RESPONSE}" | jq -r '.message // empty' 2>/dev/null || true)
+    
+    if [ -n "${verify_keys}" ]; then
+        if test_incremental_result "${partition}" "${dg_name}" "${subpath}" "delete" "${verify_keys}"; then
+            log_warn "Device reported an error but the records are gone - treating as applied."
+            return 0
+        fi
     fi
     return 1
 }
@@ -1122,8 +1479,9 @@ build_urls_json_remote() {
 delete_internal_datagroup_remote() {
     local partition="$1"
     local dg_name="$2"
+    local subpath="${3:-}"
     
-    if api_delete "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+    if api_delete "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")"; then
         return 0
     fi
     return 1
@@ -1146,7 +1504,8 @@ delete_url_category_remote() {
 delete_internal_datagroup() {
     local partition="$1"
     local dg_name="$2"
-    delete_internal_datagroup_remote "${partition}" "${dg_name}"
+    local subpath="${3:-}"
+    delete_internal_datagroup_remote "${partition}" "${dg_name}" "${subpath}"
     return $?
 }
 # Delete URL category
@@ -1453,12 +1812,13 @@ verify_remote_internal_datagroup() {
     local host="$1"
     local partition="$2"
     local dg_name="$3"
+    local subpath="${4:-}"
     
     local orig_host="${REMOTE_HOST}"
     REMOTE_HOST="${host}"
     
     local result=1
-    if internal_datagroup_exists_remote "${partition}" "${dg_name}"; then
+    if internal_datagroup_exists_remote "${partition}" "${dg_name}" "${subpath}"; then
         result=0
     fi
     
@@ -1494,13 +1854,14 @@ backup_remote_internal_datagroup() {
     local partition="$2"
     local dg_name="$3"
     local site_id="$4"
+    local subpath="${5:-}"
     
     local orig_host="${REMOTE_HOST}"
     REMOTE_HOST="${host}"
     
     # Verified single GET - a backup written from a failed read would look
     # valid but contain zero records, worse than no backup at all
-    if ! api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+    if ! api_get "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")"; then
         REMOTE_HOST="${orig_host}"
         return 0
     fi
@@ -1519,12 +1880,18 @@ backup_remote_internal_datagroup() {
     backup_ts=$(date +%Y%m%d_%H%M%S)
     # Same name shape as connected-host backups (including the internal class
     # segment) so both paths share one rotation pool per host and object
-    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_${partition}_${dg_name}_internal_${backup_ts}.csv"
+    local scope_token
+    scope_token=$(get_datagroup_scope_token "${dg_name}" "${subpath}")
+    scope_token=$(echo "${scope_token}" | sed 's/\//_/g')
+    local backup_file="${BACKUP_DIR}/${site_id}/${safe_hostname}_${partition}_${scope_token}_internal_${backup_ts}.csv"
     
     {
-        echo "# Datagroup Backup: /${partition}/${dg_name}"
+        echo "# Datagroup Backup: $(get_datagroup_display_path "${partition}" "${dg_name}" "${subpath}")"
         echo "# Host: ${host}"
         echo "# Site: ${site_id}"
+        if [ -n "${subpath}" ]; then
+            echo "# Folder: ${subpath}"
+        fi
         echo "# Type: ${dg_type}"
         echo "# Created: $(date)"
         echo "# Reason: Pre-deploy backup"
@@ -1534,7 +1901,7 @@ backup_remote_internal_datagroup() {
         fi
     } > "${backup_file}" 2>/dev/null || return 0
     
-    cleanup_old_backups "${safe_hostname}_${partition}_${dg_name}_internal" "${BACKUP_DIR}/${site_id}"
+    cleanup_old_backups "${safe_hostname}_${partition}_${scope_token}_internal" "${BACKUP_DIR}/${site_id}"
     echo "${backup_file}"
     return 0
 }
@@ -1712,6 +2079,7 @@ deploy_internal_datagroup_to_host() {
     local deploy_mode="${7:-replace}"
     local additions_json="${8:-[]}"
     local deletions_list="${9:-}"
+    local subpath="${10:-}"
     
     DEPLOY_ERROR_MSG=""
     
@@ -1727,7 +2095,7 @@ deploy_internal_datagroup_to_host() {
             local add_tmsh
             add_tmsh=$(echo "${additions_json}" | jq -r '.[] | .name + "|" + (.data // "")' | build_tmsh_records_add)
             if [ -n "${add_tmsh}" ]; then
-                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}"; then
+                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${subpath}" "$(echo "${additions_json}" | jq -r '.[].name' 2>/dev/null || true)"; then
                     echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Adding records${NC}"
                     merge_errors=$((merge_errors + 1))
                 fi
@@ -1739,7 +2107,7 @@ deploy_internal_datagroup_to_host() {
             local del_tmsh
             del_tmsh=$(echo "${deletions_list}" | build_tmsh_records_delete)
             if [ -n "${del_tmsh}" ]; then
-                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}"; then
+                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${subpath}" "${deletions_list}"; then
                     echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Deleting records${NC}"
                     merge_errors=$((merge_errors + 1))
                 fi
@@ -1755,7 +2123,7 @@ deploy_internal_datagroup_to_host() {
         echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
     else
         # Full replace mode
-        if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+        if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}" "${subpath}"; then
             echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Applying changes${NC}"
             DEPLOY_ERROR_MSG="Failed to apply records (HTTP ${API_HTTP_CODE})"
             REMOTE_HOST="${orig_host}"
@@ -1854,6 +2222,7 @@ run_predeploy_validation_datagroup() {
     local partition="$1"
     local dg_name="$2"
     local targets="$3"
+    local subpath="${4:-}"
     
     local all_passed=true
     local -a validation_results=()
@@ -1877,7 +2246,7 @@ run_predeploy_validation_datagroup() {
         fi
         
         # Verify object exists
-        if ! verify_remote_internal_datagroup "${host}" "${partition}" "${dg_name}"; then
+        if ! verify_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${subpath}"; then
             echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site_id})${NC} - Datagroup not found" >&2
             validation_results+=("${host}|${site_id}|FAIL|Datagroup not found")
             continue
@@ -1996,6 +2365,7 @@ execute_deploy_datagroup() {
     local deploy_mode="${9:-replace}"
     local additions_json="${10:-[]}"
     local deletions_list="${11:-}"
+    local subpath="${12:-}"
     
     local success_count=0
     local fail_count=0
@@ -2030,7 +2400,7 @@ execute_deploy_datagroup() {
         # Backup
         if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
             local backup_file
-            backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${site_id}")
+            backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${dg_name}" "${site_id}" "${subpath}")
             if [ -z "${backup_file}" ]; then
                 echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
                 deploy_results+=("${host}|${site_id}|FAIL|Backup failed")
@@ -2053,7 +2423,7 @@ execute_deploy_datagroup() {
         fi
         
         # Deploy (apply + save with verbose output)
-        if deploy_internal_datagroup_to_host "${host}" "${partition}" "${dg_name}" "${dg_type}" "${records_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}"; then
+        if deploy_internal_datagroup_to_host "${host}" "${partition}" "${dg_name}" "${dg_type}" "${records_json}" "${site_id}" "${deploy_mode}" "${additions_json}" "${deletions_list}" "${subpath}"; then
             deploy_results+=("${host}|${site_id}|OK|Deployed and saved")
             success_count=$((success_count + 1))
             last_error=""
@@ -2355,7 +2725,7 @@ get_internal_datagroup_list() {
         if partition_exists "${partition}"; then
             get_internal_datagroup_list_remote "${partition}"
         fi
-    done | sort -t'|' -k1,1 -k2,2
+    done | sort -t'|' -k1,1 -k2,2 -k3,3
 }
 # Get list of all datagroups
 # Returns: partition|name|class lines
@@ -2366,7 +2736,8 @@ get_all_datagroup_list() {
 internal_datagroup_exists() {
     local partition="$1"
     local dg_name="$2"
-    internal_datagroup_exists_remote "${partition}" "${dg_name}"
+    local subpath="${3:-}"
+    internal_datagroup_exists_remote "${partition}" "${dg_name}" "${subpath}"
     return $?
 }
 # Check if datagroup exists
@@ -2374,8 +2745,9 @@ internal_datagroup_exists() {
 datagroup_exists() {
     local partition="$1"
     local dg_name="$2"
+    local subpath="${3:-}"
     
-    if internal_datagroup_exists "${partition}" "${dg_name}"; then
+    if internal_datagroup_exists "${partition}" "${dg_name}" "${subpath}"; then
         echo "internal"
         return 0
     fi
@@ -2386,25 +2758,31 @@ datagroup_exists() {
 get_internal_datagroup_type() {
     local partition="$1"
     local dg_name="$2"
-    get_internal_datagroup_type_remote "${partition}" "${dg_name}"
+    local subpath="${3:-}"
+    get_internal_datagroup_type_remote "${partition}" "${dg_name}" "${subpath}"
 }
 # Get datagroup type
+# Args: partition, name, class (unused, kept for caller compatibility), [subpath]
 get_datagroup_type() {
     local partition="$1"
     local dg_name="$2"
-    get_internal_datagroup_type "${partition}" "${dg_name}"
+    local subpath="${4:-}"
+    get_internal_datagroup_type "${partition}" "${dg_name}" "${subpath}"
 }
 # Get datagroup records as "key|value" lines
 get_internal_datagroup_records() {
     local partition="$1"
     local dg_name="$2"
-    get_internal_datagroup_records_remote "${partition}" "${dg_name}"
+    local subpath="${3:-}"
+    get_internal_datagroup_records_remote "${partition}" "${dg_name}" "${subpath}"
 }
 # Get datagroup records
+# Args: partition, name, class (unused, kept for caller compatibility), [subpath]
 get_datagroup_records() {
     local partition="$1"
     local dg_name="$2"
-    get_internal_datagroup_records "${partition}" "${dg_name}"
+    local subpath="${4:-}"
+    get_internal_datagroup_records "${partition}" "${dg_name}" "${subpath}"
 }
 
 # Backup a datagroup to CSV file
@@ -2412,10 +2790,11 @@ backup_datagroup() {
     local partition="$1"
     local dg_name="$2"
     local dg_class="${3:-internal}"
+    local subpath="${4:-}"
 
     # Verified single GET - a backup written from a failed read would look
     # valid but contain zero records, worse than no backup at all
-    if ! api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${dg_name}"; then
+    if ! api_get "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")"; then
         return 0
     fi
     local dg_type records
@@ -2432,13 +2811,22 @@ backup_datagroup() {
     local backup_path
     backup_path=$(get_connected_backup_dir)
 
+    # Folder folded into the filename token so same-named datagroups in
+    # different folders keep separate files and rotation pools
+    local scope_token
+    scope_token=$(get_datagroup_scope_token "${dg_name}" "${subpath}")
+    scope_token=$(echo "${scope_token}" | sed 's/\//_/g')
+
     local backup_ts
     backup_ts=$(date +%Y%m%d_%H%M%S)
-    local backup_file="${backup_path}/${safe_hostname}_${safe_partition}_${dg_name}_${dg_class}_${backup_ts}.csv"
+    local backup_file="${backup_path}/${safe_hostname}_${safe_partition}_${scope_token}_${dg_class}_${backup_ts}.csv"
 
     {
-        echo "# Datagroup Backup: /${partition}/${dg_name}"
+        echo "# Datagroup Backup: $(get_datagroup_display_path "${partition}" "${dg_name}" "${subpath}")"
         echo "# Partition: ${partition}"
+        if [ -n "${subpath}" ]; then
+            echo "# Folder: ${subpath}"
+        fi
         echo "# Class: ${dg_class}"
         echo "# Type: ${dg_type}"
         echo "# Created: $(date)"
@@ -2449,7 +2837,7 @@ backup_datagroup() {
         fi
     } > "${backup_file}" 2>/dev/null || return 0
 
-    cleanup_old_backups "${safe_hostname}_${safe_partition}_${dg_name}_${dg_class}" "${backup_path}"
+    cleanup_old_backups "${safe_hostname}_${safe_partition}_${scope_token}_${dg_class}" "${backup_path}"
     echo "${backup_file}"
     return 0
 }
@@ -2494,7 +2882,8 @@ create_internal_datagroup() {
     local partition="$1"
     local dg_name="$2"
     local dg_type="$3"
-    create_internal_datagroup_remote "${partition}" "${dg_name}" "${dg_type}"
+    local subpath="${4:-}"
+    create_internal_datagroup_remote "${partition}" "${dg_name}" "${dg_type}" "${subpath}"
     return $?
 }
 # Save system configuration
@@ -2821,7 +3210,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.5                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.6                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -2886,8 +3275,9 @@ menu_create_empty_datagroup() {
         return
     fi
     
-    local dg_name
+    local dg_name dg_subpath
     dg_name=$(echo "${selection}" | cut -d'|' -f1)
+    dg_subpath=$(echo "${selection}" | cut -d'|' -f2)
     
     if is_protected_datagroup "${dg_name}"; then
         log_error "The name '${dg_name}' is reserved for a BIG-IP system datagroup."
@@ -2921,9 +3311,11 @@ menu_create_empty_datagroup() {
     [ "${dg_type}" == "ip" ] && display_type="address"
     
     # Confirm
+    local dg_display_path
+    dg_display_path=$(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")
     echo ""
     log_info "Ready to create:"
-    log_info "  Path: /${partition}/${dg_name}"
+    log_info "  Path: ${dg_display_path}"
     log_info "  Type: ${display_type}"
     echo ""
     local confirm
@@ -2934,12 +3326,15 @@ menu_create_empty_datagroup() {
         return
     fi
     
-    log_step "Creating datagroup '/${partition}/${dg_name}'..."
-    if create_internal_datagroup "${partition}" "${dg_name}" "${dg_type}"; then
-        log_ok "Datagroup '/${partition}/${dg_name}' created successfully (empty)."
+    log_step "Creating datagroup '${dg_display_path}'..."
+    if create_internal_datagroup "${partition}" "${dg_name}" "${dg_type}" "${dg_subpath}"; then
+        log_ok "Datagroup '${dg_display_path}' created successfully (empty)."
         prompt_save_config
     else
         log_error "Failed to create datagroup. HTTP ${API_HTTP_CODE}"
+        if [ -n "${dg_subpath}" ]; then
+            log_info "Verify that folder '/${partition}/${dg_subpath}' exists on the BIG-IP."
+        fi
     fi
     
     press_enter_to_continue
@@ -3081,10 +3476,17 @@ menu_create_datagroup() {
         return
     fi
     
-    local dg_name
+    local dg_name dg_subpath selection_class
     dg_name=$(echo "${selection}" | cut -d'|' -f1)
-    local selection_class
-    selection_class=$(echo "${selection}" | cut -d'|' -f2)
+    dg_subpath=$(echo "${selection}" | cut -d'|' -f2)
+    selection_class=$(echo "${selection}" | cut -d'|' -f3)
+    
+    if is_protected_folder "${dg_subpath}"; then
+        log_error "Folder '${dg_subpath%%/*}' is externally managed (AS3 / Service Discovery)."
+        log_error "Objects there must not be modified by this tool."
+        press_enter_to_continue
+        return
+    fi
     
     # Check if this name matches a protected system datagroup
     if is_protected_datagroup "${dg_name}"; then
@@ -3102,10 +3504,10 @@ menu_create_datagroup() {
     if [ -n "${selection_class}" ]; then
         # Datagroup exists - this is a restore operation
         dg_class="${selection_class}"
-        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
+        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
         
         local current_count
-        current_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" 2>/dev/null | wc -l)
+        current_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}" 2>/dev/null | wc -l)
         
         log_info "Datagroup '${dg_name}' exists in partition '${partition}'."
         log_info "  Class: ${dg_class}"
@@ -3133,7 +3535,7 @@ menu_create_datagroup() {
         if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
             log_step "Creating backup of existing datagroup..."
             local backup_file
-            backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+            backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
             if [ -n "${backup_file}" ]; then
                 log_ok "Backup saved: ${backup_file}"
             else
@@ -3374,7 +3776,7 @@ menu_create_datagroup() {
         while IFS='|' read -r key value; do
             [ -z "${key}" ] && continue
             merged_data["${key}"]="${value}"
-        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}")
+        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
         
         local existing_count=${#merged_data[@]}
         
@@ -3430,9 +3832,12 @@ menu_create_datagroup() {
     
     if [ -z "${restore_mode}" ]; then
         # Create new datagroup
-        log_step "Creating datagroup '/${partition}/${dg_name}'..."
-        if ! create_internal_datagroup_remote "${partition}" "${dg_name}" "${api_type}"; then
+        log_step "Creating datagroup '$(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")'..."
+        if ! create_internal_datagroup_remote "${partition}" "${dg_name}" "${api_type}" "${dg_subpath}"; then
             log_error "Failed to create datagroup. HTTP ${API_HTTP_CODE}"
+            if [ -n "${dg_subpath}" ]; then
+                log_info "Verify that folder '/${partition}/${dg_subpath}' exists on the BIG-IP."
+            fi
             [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
             press_enter_to_continue
             return
@@ -3441,14 +3846,14 @@ menu_create_datagroup() {
     
     # Apply records
     log_step "Applying ${#FINAL_KEYS[@]} entries to datagroup..."
-    if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+    if ! apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}" "${dg_subpath}"; then
         log_error "Failed to apply records to datagroup. HTTP ${API_HTTP_CODE}"
         [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
         press_enter_to_continue
         return
     fi
     
-    log_ok "Datagroup '/${partition}/${dg_name}' saved with ${#FINAL_KEYS[@]} entries."
+    log_ok "Datagroup '$(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")' saved with ${#FINAL_KEYS[@]} entries."
     
     prompt_save_config
     
@@ -3506,9 +3911,8 @@ menu_delete_datagroup_only() {
         return
     fi
     
-    local dg_name dg_class
-    dg_name=$(echo "${selection}" | cut -d'|' -f1)
-    dg_class=$(echo "${selection}" | cut -d'|' -f2)
+    local dg_name dg_subpath dg_class
+    IFS='|' read -r dg_name dg_subpath dg_class <<< "${selection}"
     
     # Check if this is a protected system datagroup
     if is_protected_datagroup "${dg_name}"; then
@@ -3519,15 +3923,23 @@ menu_delete_datagroup_only() {
         return
     fi
     
+    # Externally managed folders are off limits
+    if is_protected_folder "${dg_subpath}"; then
+        log_error "Datagroup '${dg_subpath}/${dg_name}' lives in an externally managed folder (AS3 / Service Discovery)."
+        log_error "Deleting it from this tool would be reverted or would break the managing system."
+        press_enter_to_continue
+        return
+    fi
+    
     # Show current contents
     local dg_type record_count
-    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
-    record_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" 2>/dev/null | wc -l)
+    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
+    record_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}" 2>/dev/null | wc -l)
     
     
     echo ""
     log_warn "You are about to delete the following datagroup:"
-    log_info "  Path:    /${partition}/${dg_name}"
+    log_info "  Path:    $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")"
     log_info "  Class:   ${dg_class}"
     log_info "  Type:    ${dg_type}"
     log_info "  Records: ${record_count}"
@@ -3538,7 +3950,7 @@ menu_delete_datagroup_only() {
     if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
         log_step "Creating backup before deletion..."
         local backup_file
-        backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+        backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
         if [ -n "${backup_file}" ]; then
             log_ok "Backup saved: ${backup_file}"
         else
@@ -3564,7 +3976,7 @@ menu_delete_datagroup_only() {
     
     # Delete the datagroup
     log_step "Deleting datagroup '/${partition}/${dg_name}'..."
-    if delete_internal_datagroup "${partition}" "${dg_name}"; then
+    if delete_internal_datagroup "${partition}" "${dg_name}" "${dg_subpath}"; then
         log_ok "Datagroup '/${partition}/${dg_name}' deleted successfully."
     else
         log_error "Failed to delete datagroup. HTTP ${API_HTTP_CODE}"
@@ -3759,18 +4171,21 @@ menu_export_datagroup() {
     fi
     
     # Select datagroup
-    local selection dg_name dg_class
+    local selection dg_name dg_subpath dg_class
     selection=$(select_datagroup "${partition}" "Enter datagroup name to export") || true
     if [ -z "${selection}" ]; then
         press_enter_to_continue
         return
     fi
-    IFS='|' read -r dg_name dg_class <<< "${selection}"
+    IFS='|' read -r dg_name dg_subpath dg_class <<< "${selection}"
     
-    # Default export path (include partition and class in filename)
+    # Default export path (include partition, folder, and class in filename)
     local safe_partition
     safe_partition=$(echo "${partition}" | sed 's/\//_/g')
-    local default_path="${BACKUP_DIR}/${safe_partition}_${dg_name}_${dg_class}_${TIMESTAMP}.csv"
+    local export_token
+    export_token=$(get_datagroup_scope_token "${dg_name}" "${dg_subpath}")
+    export_token=$(echo "${export_token}" | sed 's/\//_/g')
+    local default_path="${BACKUP_DIR}/${safe_partition}_${export_token}_${dg_class}_${TIMESTAMP}.csv"
     echo ""
     read -rp "  Export path [${default_path}]: " export_path
     export_path="${export_path:-${default_path}}"
@@ -3790,10 +4205,10 @@ menu_export_datagroup() {
     # Export
     log_step "Exporting ${dg_class} datagroup..."
     local dg_type
-    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
+    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
     
     {
-        echo "# Datagroup Export: /${partition}/${dg_name}"
+        echo "# Datagroup Export: $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")"
         echo "# Partition: ${partition}"
         echo "# Class: ${dg_class}"
         echo "# Type: ${dg_type}"
@@ -4502,13 +4917,14 @@ display_entries_page() {
 
 # Unified editor for datagroups and URL categories
 # All edits are staged in memory and applied atomically on user request
-# Args for datagroup:  "datagroup" partition dg_name dg_class
+# Args for datagroup:  "datagroup" partition dg_name dg_class [dg_subpath]
 # Args for URL cat:    "urlcat" cat_name
 editor_submenu() {
     local edit_type="$1"
     
     # Type-specific variables
     local partition="" dg_name="" dg_class="" dg_type="" cat_name=""
+    local dg_subpath=""
     local display_title="" display_info1="" display_info2=""
     local entry_label="Entries"
     
@@ -4516,9 +4932,10 @@ editor_submenu() {
         partition="$2"
         dg_name="$3"
         dg_class="$4"
-        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}")
+        dg_subpath="${5:-}"
+        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
         display_title="DGCat-Admin Editor"
-        display_info1="Path:  /${partition}/${dg_name}"
+        display_info1="Path:  $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")"
         display_info2="Class: ${dg_class}  |  Type: ${dg_type}"
     else
         cat_name="$2"
@@ -4545,7 +4962,7 @@ editor_submenu() {
             working_values+=("${value}")
             original_keys+=("${key}")
             original_values+=("${value}")
-        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}")
+        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
     else
         while IFS= read -r url; do
             [ -z "${url}" ] && continue
@@ -4594,6 +5011,49 @@ editor_submenu() {
             fi
         done
         return 1
+    }
+    
+    # Render a staged value change for the pending-change summaries.
+    # Shows the value being applied; a prior value is only mentioned when one
+    # actually existed (replaced or cleared). Reads the orig_lookup and
+    # work_lookup tables built by the calling handler
+    format_value_change() {
+        local fv_key="$1"
+        local fv_old="${orig_lookup[${fv_key}]:-}"
+        local fv_new="${work_lookup[${fv_key}]:-}"
+        if [ -z "${fv_old}" ]; then
+            echo "${fv_key} : ${fv_new}"
+        elif [ -z "${fv_new}" ]; then
+            echo "${fv_key} : (value cleared)"
+        else
+            echo "${fv_key} : ${fv_old} -> ${fv_new}"
+        fi
+    }
+    
+    # Decide whether a change set can ride the tmsh passthrough. Two things
+    # disqualify it - records add/delete cannot alter an existing record's
+    # value, and keys and values are embedded unquoted in the options string.
+    # Evaluated before the apply and deploy menus are drawn so a mode that
+    # cannot work is never presented as a choice
+    # Args: value_change_count; gate strings (keys and values) on stdin
+    # Sets: TMSH_ELIGIBLE (1/0), TMSH_INELIGIBLE_REASON
+    check_tmsh_eligibility() {
+        local vc_count="$1"
+        TMSH_ELIGIBLE=1
+        TMSH_INELIGIBLE_REASON=""
+        
+        if [ "${vc_count}" -gt 0 ]; then
+            TMSH_ELIGIBLE=0
+            TMSH_INELIGIBLE_REASON="${vc_count} record(s) have changed values, which records add/delete cannot apply"
+            cat > /dev/null
+            return 0
+        fi
+        
+        if ! tmsh_safe_strings; then
+            TMSH_ELIGIBLE=0
+            TMSH_INELIGIBLE_REASON="keys or values contain characters unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')"
+        fi
+        return 0
     }
     
     # Function to build entries string from working arrays for display
@@ -4653,7 +5113,8 @@ editor_submenu() {
         echo -e "  ${YELLOW}n${NC}${WHITE})${NC} Next page    ${YELLOW}p${NC}${WHITE})${NC} Previous page    ${YELLOW}g${NC}${WHITE})${NC} Go to page"
         echo -e "  ${YELLOW}f${NC}${WHITE})${NC} Filter       ${YELLOW}c${NC}${WHITE})${NC} Clear filter     ${YELLOW}s${NC}${WHITE})${NC} Change sort"
         echo ""
-        echo -e "  ${YELLOW}a${NC}${WHITE})${NC} Add entry    ${YELLOW}d${NC}${WHITE})${NC} Delete entry     ${YELLOW}x${NC}${WHITE})${NC} Delete by pattern"
+        echo -e "  ${YELLOW}a${NC}${WHITE})${NC} Add entry    ${YELLOW}e${NC}${WHITE})${NC} Edit entry       ${YELLOW}d${NC}${WHITE})${NC} Delete entry"
+        echo -e "  ${YELLOW}x${NC}${WHITE})${NC} Delete by pattern"
         echo ""
         echo -e "  ${YELLOW}w${NC}${WHITE})${NC} Apply changes (write to current device)"
         if fleet_available; then
@@ -4735,38 +5196,12 @@ editor_submenu() {
                     fi
                     
                     # Validate entry format based on datagroup type
-                    if [ "${dg_type}" == "address" ] || [ "${dg_type}" == "ip" ]; then
-                        if [[ "${new_key}" == *":"* ]]; then
-                            log_error "IPv6 is not supported. Use an IPv4 address or CIDR."
-                            press_enter_to_continue
-                            continue
-                        fi
-                        if [[ "${new_key}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(/([0-9]{1,2}))?$ ]]; then
-                            local a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}" d="${BASH_REMATCH[4]}"
-                            local prefix="${BASH_REMATCH[6]}"
-                            if [ "${a}" -gt 255 ] || [ "${b}" -gt 255 ] || [ "${c}" -gt 255 ] || [ "${d}" -gt 255 ]; then
-                                log_error "Invalid IPv4 address: octet exceeds 255."
-                                press_enter_to_continue
-                                continue
-                            fi
-                            if [ -n "${prefix}" ] && [ "${prefix}" -gt 32 ]; then
-                                log_error "Invalid CIDR: prefix exceeds /32."
-                                press_enter_to_continue
-                                continue
-                            fi
-                        else
-                            log_error "Invalid entry. Expected IPv4 address (N.N.N.N) or CIDR (N.N.N.N/M)."
-                            press_enter_to_continue
-                            continue
-                        fi
-                    fi
-                    
-                    if [ "${dg_type}" == "integer" ]; then
-                        if ! [[ "${new_key}" =~ ^-?[0-9]+$ ]]; then
-                            log_error "Invalid entry. Expected an integer value."
-                            press_enter_to_continue
-                            continue
-                        fi
+                    local key_err
+                    key_err=$(validate_datagroup_key_format "${new_key}" "${dg_type}")
+                    if [ -n "${key_err}" ]; then
+                        log_error "${key_err}"
+                        press_enter_to_continue
+                        continue
                     fi
                     
                     local new_value=""
@@ -4788,26 +5223,10 @@ editor_submenu() {
                     fi
                     
                     # Validate domain format before conversion
-                    local check_domain="${new_url#http://}"
-                    check_domain="${check_domain#https://}"
-                    check_domain="${check_domain%%/*}"
-                    if [ -z "${check_domain}" ]; then
-                        log_error "Invalid entry: empty after removing protocol/path."
-                        press_enter_to_continue
-                        continue
-                    fi
-                    if [[ "${check_domain}" =~ [[:space:]] ]]; then
-                        log_error "Invalid entry: contains spaces."
-                        press_enter_to_continue
-                        continue
-                    fi
-                    if ! [[ "${check_domain}" =~ ^[a-zA-Z0-9.*_-]+$ ]]; then
-                        log_error "Invalid entry: contains invalid characters."
-                        press_enter_to_continue
-                        continue
-                    fi
-                    if [[ "${check_domain}" == *".."* ]]; then
-                        log_error "Invalid entry: consecutive dots."
+                    local url_err
+                    url_err=$(validate_url_entry_format "${new_url}")
+                    if [ -n "${url_err}" ]; then
+                        log_error "Invalid entry: ${url_err}."
                         press_enter_to_continue
                         continue
                     fi
@@ -4844,6 +5263,176 @@ editor_submenu() {
                     working_keys+=("${formatted_url}")
                     working_values+=("")
                     log_ok "URL staged for addition: ${formatted_url}"
+                fi
+                press_enter_to_continue
+                ;;
+            e)
+                # Edit an entry in place. Delete-then-add would move the record
+                # to the end of the set and lose its position, so the working
+                # arrays are updated at the original index instead
+                echo ""
+                read -rp "  Enter entry number or key to edit (or 'q' to cancel): " edit_input
+                
+                if [ -z "${edit_input}" ] || [ "${edit_input}" == "q" ] || [ "${edit_input}" == "Q" ]; then
+                    log_info "Cancelled."
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                # A number indexes the filtered and sorted view the operator
+                # can see, not the underlying working array - same as d)
+                local eview_entries="${entries}"
+                if [ -n "${current_filter}" ]; then
+                    eview_entries=$(echo "${entries}" | grep -i "${current_filter}" 2>/dev/null || true)
+                fi
+                case "${current_sort}" in
+                    "asc")  eview_entries=$(echo "${eview_entries}" | sort -f) ;;
+                    "desc") eview_entries=$(echo "${eview_entries}" | sort -rf) ;;
+                esac
+                
+                local edit_key=""
+                if [[ "${edit_input}" =~ ^[0-9]+$ ]]; then
+                    edit_key=$(echo "${eview_entries}" | sed -n "${edit_input}p")
+                    if [ "${edit_type}" == "datagroup" ] && [[ "${edit_key}" == *"|"* ]]; then
+                        edit_key=$(echo "${edit_key}" | cut -d'|' -f1)
+                    fi
+                    if [ -z "${edit_key}" ]; then
+                        log_error "Entry number ${edit_input} not found."
+                        press_enter_to_continue
+                        continue
+                    fi
+                else
+                    edit_key="${edit_input}"
+                fi
+                
+                # Locate in the working arrays
+                local efound_idx=-1
+                local ei
+                for ((ei=0; ei<${#working_keys[@]}; ei++)); do
+                    if [ "${working_keys[$ei]}" == "${edit_key}" ]; then
+                        efound_idx=$ei
+                        break
+                    fi
+                done
+                
+                if [ ${efound_idx} -eq -1 ]; then
+                    log_error "Entry not found: ${edit_key}"
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                local ecurrent_key="${working_keys[$efound_idx]}"
+                local ecurrent_value="${working_values[$efound_idx]:-}"
+                local eshown_value="${ecurrent_value}"
+                [ -z "${eshown_value}" ] && eshown_value="(none)"
+                
+                echo ""
+                log_info "Editing entry:"
+                if [ "${edit_type}" == "datagroup" ]; then
+                    log_info "  Key:   ${ecurrent_key}"
+                    log_info "  Value: ${eshown_value}"
+                else
+                    log_info "  URL: ${ecurrent_key}"
+                fi
+                echo ""
+                echo -e "  ${WHITE}Press Enter at a prompt to keep the current setting.${NC}"
+                echo ""
+                
+                local enew_key="${ecurrent_key}"
+                local enew_value="${ecurrent_value}"
+                
+                if [ "${edit_type}" == "datagroup" ]; then
+                    local ekey_input
+                    read -rp "  New key [${ecurrent_key}]: " ekey_input
+                    if [ -n "${ekey_input}" ]; then
+                        enew_key="${ekey_input}"
+                    fi
+                    
+                    local ekey_err
+                    ekey_err=$(validate_datagroup_key_format "${enew_key}" "${dg_type}")
+                    if [ -n "${ekey_err}" ]; then
+                        log_error "${ekey_err}"
+                        press_enter_to_continue
+                        continue
+                    fi
+                    
+                    local evalue_input
+                    read -rp "  New value [${eshown_value}] ('-' to clear): " evalue_input
+                    if [ -n "${evalue_input}" ]; then
+                        if [ "${evalue_input}" == "-" ]; then
+                            # '-' is the clear sentinel; confirm it so a literal
+                            # dash remains reachable as a value
+                            local eclear_confirm
+                            read -rp "  Clear the value? (yes/no) [yes]: " eclear_confirm
+                            eclear_confirm="${eclear_confirm:-yes}"
+                            if [ "${eclear_confirm}" == "yes" ]; then
+                                enew_value=""
+                            else
+                                enew_value="-"
+                            fi
+                        else
+                            enew_value="${evalue_input}"
+                        fi
+                    fi
+                else
+                    # URL categories carry no value; an edit replaces the URL
+                    local eurl_input
+                    read -rp "  New domain or URL [${ecurrent_key}]: " eurl_input
+                    if [ -z "${eurl_input}" ]; then
+                        eurl_input="${ecurrent_key}"
+                    fi
+                    
+                    local eurl_err
+                    eurl_err=$(validate_url_entry_format "${eurl_input}")
+                    if [ -n "${eurl_err}" ]; then
+                        log_error "Invalid entry: ${eurl_err}."
+                        press_enter_to_continue
+                        continue
+                    fi
+                    enew_key=$(format_domain_for_url_category "${eurl_input}")
+                    enew_value=""
+                fi
+                
+                if [ "${enew_key}" == "${ecurrent_key}" ] && [ "${enew_value}" == "${ecurrent_value}" ]; then
+                    log_info "No changes made."
+                    press_enter_to_continue
+                    continue
+                fi
+                
+                # Exact-match duplicate check (BIG-IP keys are case-sensitive,
+                # so a case-only rename is a real change, not a self-collision)
+                if [ "${enew_key}" != "${ecurrent_key}" ]; then
+                    local edup=false
+                    for ((ei=0; ei<${#working_keys[@]}; ei++)); do
+                        if [ "${working_keys[$ei]}" == "${enew_key}" ]; then
+                            edup=true
+                            break
+                        fi
+                    done
+                    if [ "${edup}" == "true" ]; then
+                        log_error "Entry '${enew_key}' already exists."
+                        press_enter_to_continue
+                        continue
+                    fi
+                fi
+                
+                # Staged in the working arrays only - no confirmation here.
+                # The BIG-IP is untouched until Apply, where the full change
+                # set is summarized and confirmed once
+                working_keys[$efound_idx]="${enew_key}"
+                working_values[$efound_idx]="${enew_value}"
+                log_ok "Entry staged for edit: ${enew_key}"
+                if [ "${enew_key}" != "${ecurrent_key}" ]; then
+                    log_info "  Key:   ${ecurrent_key} -> ${enew_key}"
+                fi
+                if [ "${enew_value}" != "${ecurrent_value}" ]; then
+                    if [ -z "${ecurrent_value}" ]; then
+                        log_info "  Value: ${enew_value}"
+                    elif [ -z "${enew_value}" ]; then
+                        log_info "  Value: (cleared)"
+                    else
+                        log_info "  Value: ${ecurrent_value} -> ${enew_value}"
+                    fi
                 fi
                 press_enter_to_continue
                 ;;
@@ -5074,7 +5663,7 @@ editor_submenu() {
                     fi
                     echo -e "  ${YELLOW}Value changes (${#value_changes[@]}):${NC}"
                     for entry in "${value_changes[@]}"; do
-                        echo -e "    ${YELLOW}~ ${entry}${NC}"
+                        echo -e "    ${YELLOW}~ $(format_value_change "${entry}")${NC}"
                     done
                 fi
                 
@@ -5094,7 +5683,7 @@ editor_submenu() {
                     log_step "Creating backup before applying changes..."
                     local backup_file=""
                     if [ "${edit_type}" == "datagroup" ]; then
-                        backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+                        backup_file=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
                     else
                         backup_file=$(backup_url_category "${cat_name}")
                     fi
@@ -5112,45 +5701,56 @@ editor_submenu() {
                 
                 # Apply changes
                 if [ "${edit_type}" == "datagroup" ]; then
-                    # Select apply mode for datagroups
+                    # Decide tmsh eligibility before the menu is drawn. When
+                    # the change set contains edited records or tmsh syntax
+                    # characters the passthrough cannot apply it, so tmsh
+                    # Modify is not offered at all - Full Replace is the only
+                    # mode listed
+                    local wgate_check=""
+                    local wg_i wgv_i
+                    for ((wg_i=0; wg_i<${#additions[@]}; wg_i++)); do
+                        wgate_check="${wgate_check}${additions[$wg_i]}"$'\n'
+                        for ((wgv_i=0; wgv_i<${#working_keys[@]}; wgv_i++)); do
+                            if [ "${working_keys[$wgv_i]}" == "${additions[$wg_i]}" ]; then
+                                wgate_check="${wgate_check}${working_values[$wgv_i]:-}"$'\n'
+                                break
+                            fi
+                        done
+                    done
+                    for ((wg_i=0; wg_i<${#deletions[@]}; wg_i++)); do
+                        wgate_check="${wgate_check}${deletions[$wg_i]}"$'\n'
+                    done
+                    check_tmsh_eligibility ${#value_changes[@]} <<< "${wgate_check}"
+                    
                     echo ""
                     echo -e "  ${WHITE}Select apply mode:${NC}"
-                    echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}tmsh Modify   - Add/delete only changed records (tmsh passthrough)${NC}"
-                    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Full Replace  - PATCH entire record set via REST${NC}"
-                    echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
-                    echo ""
                     local apply_mode_choice
-                    read -rp "  Select [0-2]: " apply_mode_choice
+                    if [ "${TMSH_ELIGIBLE}" -eq 1 ]; then
+                        echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}tmsh Modify   - Add/delete only changed records (tmsh passthrough)${NC}"
+                        echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Full Replace  - PATCH entire record set via REST${NC}"
+                        echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
+                        echo ""
+                        read -rp "  Select [0-2]: " apply_mode_choice
+                    else
+                        echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Full Replace  - PATCH entire record set via REST${NC}"
+                        echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
+                        echo ""
+                        read -rp "  Select [0-1]: " apply_mode_choice
+                        # 1 selects Full Replace in the reduced menu; mapped
+                        # onto the value the shared case below expects
+                        if [ "${apply_mode_choice}" == "1" ]; then
+                            apply_mode_choice="2"
+                        fi
+                    fi
                     
                     case "${apply_mode_choice}" in
                         1)
-                            # Gate: tmsh records add/delete cannot change an existing record's value
-                            if [ ${#value_changes[@]} -gt 0 ]; then
-                                log_error "tmsh Modify unavailable: ${#value_changes[@]} record(s) have changed values,"
-                                log_error "which records add/delete cannot apply."
-                                log_error "Use Full Replace mode for this change set. No changes have been made."
-                                press_enter_to_continue
-                                continue
-                            fi
-                            # Gate: tmsh passthrough embeds keys/values unquoted
-                            local wgate_check=""
-                            local wg_i wgv_i
-                            for ((wg_i=0; wg_i<${#additions[@]}; wg_i++)); do
-                                wgate_check="${wgate_check}${additions[$wg_i]}"$'\n'
-                                for ((wgv_i=0; wgv_i<${#working_keys[@]}; wgv_i++)); do
-                                    if [ "${working_keys[$wgv_i]}" == "${additions[$wg_i]}" ]; then
-                                        wgate_check="${wgate_check}${working_values[$wgv_i]:-}"$'\n'
-                                        break
-                                    fi
-                                done
-                            done
-                            for ((wg_i=0; wg_i<${#deletions[@]}; wg_i++)); do
-                                wgate_check="${wgate_check}${deletions[$wg_i]}"$'\n'
-                            done
-                            if ! printf '%s' "${wgate_check}" | tmsh_safe_strings; then
-                                log_error "tmsh Modify unavailable: one or more keys or values contain characters"
-                                log_error "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
-                                log_error "Use Full Replace mode for this change set. No changes have been made."
+                            # The reduced menu remaps 1 to Full Replace, so
+                            # this branch only runs when tmsh was offered;
+                            # kept as a guard against future menu changes
+                            if [ "${TMSH_ELIGIBLE}" -ne 1 ]; then
+                                log_error "tmsh Modify unavailable: ${TMSH_INELIGIBLE_REASON}."
+                                log_error "Use Full Replace for this change set. No changes have been made."
                                 press_enter_to_continue
                                 continue
                             fi
@@ -5173,10 +5773,13 @@ editor_submenu() {
                                         echo "${add_key}|${add_val}"
                                     done | build_tmsh_records_add
                                 )
-                                if add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}"; then
+                                if add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${dg_subpath}" "$(printf '%s\n' "${additions[@]}")"; then
                                     log_ok "${#additions[@]} record(s) added."
                                 else
                                     log_error "Failed to add records. HTTP ${API_HTTP_CODE}"
+                                    if [ -n "${INCREMENTAL_ERROR_MSG}" ]; then
+                                        log_error "${INCREMENTAL_ERROR_MSG}"
+                                    fi
                                     inc_errors=$((inc_errors + 1))
                                 fi
                             fi
@@ -5185,10 +5788,13 @@ editor_submenu() {
                             if [ ${#deletions[@]} -gt 0 ]; then
                                 local del_tmsh
                                 del_tmsh=$(printf '%s\n' "${deletions[@]}" | build_tmsh_records_delete)
-                                if delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}"; then
+                                if delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${dg_subpath}" "$(printf '%s\n' "${deletions[@]}")"; then
                                     log_ok "${#deletions[@]} record(s) deleted."
                                 else
                                     log_error "Failed to delete records. HTTP ${API_HTTP_CODE}"
+                                    if [ -n "${INCREMENTAL_ERROR_MSG}" ]; then
+                                        log_error "${INCREMENTAL_ERROR_MSG}"
+                                    fi
                                     inc_errors=$((inc_errors + 1))
                                 fi
                             fi
@@ -5208,7 +5814,7 @@ editor_submenu() {
                                     echo "${working_keys[$i]}|${working_values[$i]:-}"
                                 done | build_records_json_remote "${dg_type}"
                             )
-                            if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}"; then
+                            if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${records_json}" "${dg_subpath}"; then
                                 log_ok "Changes applied successfully."
                             else
                                 log_error "Failed to apply changes. HTTP ${API_HTTP_CODE}"
@@ -5383,7 +5989,7 @@ editor_submenu() {
                         local show_count=0
                         for entry in "${deploy_value_changes[@]}"; do
                             if [ ${show_count} -lt 10 ]; then
-                                echo -e "    ${YELLOW}~ ${entry}${NC}"
+                                echo -e "    ${YELLOW}~ $(format_value_change "${entry}")${NC}"
                             fi
                             show_count=$((show_count + 1))
                         done
@@ -5404,14 +6010,44 @@ editor_submenu() {
                         continue
                     fi
                     
-                    # Select deploy mode
+                    # Decide tmsh eligibility before the menu is drawn. Merge
+                    # rides the same tmsh passthrough as apply, so when the
+                    # change set cannot be expressed that way it is not offered
+                    # - Full Replace is the only mode listed. URL category
+                    # merge does not use tmsh, so it is always offered
+                    TMSH_ELIGIBLE=1
+                    TMSH_INELIGIBLE_REASON=""
+                    if [ "${edit_type}" == "datagroup" ]; then
+                        local dgate_check=""
+                        local dg_i dgv_i
+                        for ((dg_i=0; dg_i<${#deploy_additions[@]}; dg_i++)); do
+                            dgate_check="${dgate_check}${deploy_additions[$dg_i]}"$'\n'
+                            for ((dgv_i=0; dgv_i<${#working_keys[@]}; dgv_i++)); do
+                                if [ "${working_keys[$dgv_i]}" == "${deploy_additions[$dg_i]}" ]; then
+                                    dgate_check="${dgate_check}${working_values[$dgv_i]:-}"$'\n'
+                                    break
+                                fi
+                            done
+                        done
+                        for ((dg_i=0; dg_i<${#deploy_deletions[@]}; dg_i++)); do
+                            dgate_check="${dgate_check}${deploy_deletions[$dg_i]}"$'\n'
+                        done
+                        check_tmsh_eligibility ${#deploy_value_changes[@]} <<< "${dgate_check}"
+                    fi
+                    
                     echo ""
                     echo -e "  ${WHITE}Select deployment mode:${NC}"
                     echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Full Replace - Overwrite target with exact state from current device${NC}"
-                    echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge        - Apply only additions/deletions, preserve target-specific entries${NC}"
+                    if [ "${TMSH_ELIGIBLE}" -eq 1 ]; then
+                        echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge        - Apply only additions/deletions, preserve target-specific entries${NC}"
+                    fi
                     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                     echo ""
-                    read -rp "  Select [0-2]: " deploy_mode_choice
+                    if [ "${TMSH_ELIGIBLE}" -eq 1 ]; then
+                        read -rp "  Select [0-2]: " deploy_mode_choice
+                    else
+                        read -rp "  Select [0-1]: " deploy_mode_choice
+                    fi
                     
                     local deploy_mode="replace"
                     case "${deploy_mode_choice}" in
@@ -5429,37 +6065,14 @@ editor_submenu() {
                             ;;
                     esac
                     
-                    # Gate: merge mode embeds keys/values unquoted in tmsh; reject
-                    # unsafe change sets before any device is modified
-                    if [ "${deploy_mode}" == "merge" ] && [ "${edit_type}" == "datagroup" ]; then
-                        if [ ${#deploy_value_changes[@]} -gt 0 ]; then
-                            log_error "Merge mode unavailable: ${#deploy_value_changes[@]} record(s) have changed values,"
-                            log_error "which tmsh records add/delete cannot apply."
-                            log_error "Use Full Replace mode to deploy this change set. No changes have been made."
-                            press_enter_to_continue
-                            continue
-                        fi
-                        local dgate_check=""
-                        local dg_i dgv_i
-                        for ((dg_i=0; dg_i<${#deploy_additions[@]}; dg_i++)); do
-                            dgate_check="${dgate_check}${deploy_additions[$dg_i]}"$'\n'
-                            for ((dgv_i=0; dgv_i<${#working_keys[@]}; dgv_i++)); do
-                                if [ "${working_keys[$dgv_i]}" == "${deploy_additions[$dg_i]}" ]; then
-                                    dgate_check="${dgate_check}${working_values[$dgv_i]:-}"$'\n'
-                                    break
-                                fi
-                            done
-                        done
-                        for ((dg_i=0; dg_i<${#deploy_deletions[@]}; dg_i++)); do
-                            dgate_check="${dgate_check}${deploy_deletions[$dg_i]}"$'\n'
-                        done
-                        if ! printf '%s' "${dgate_check}" | tmsh_safe_strings; then
-                            log_error "Merge mode unavailable: one or more keys or values contain characters"
-                            log_error "unsafe for tmsh passthrough (whitespace, braces, quotes, backslash, ';', '#')."
-                            log_error "Use Full Replace mode to deploy this change set. No changes have been made."
-                            press_enter_to_continue
-                            continue
-                        fi
+                    # Merge is withheld from the menu when ineligible;
+                    # re-asserted here so a typed 2 cannot reach the
+                    # passthrough regardless
+                    if [ "${deploy_mode}" == "merge" ] && [ "${TMSH_ELIGIBLE}" -ne 1 ]; then
+                        log_error "Merge unavailable: ${TMSH_INELIGIBLE_REASON}."
+                        log_error "Use Full Replace to deploy this change set. No changes have been made."
+                        press_enter_to_continue
+                        continue
                     fi
                 else
                     # No pending changes - deploy current state as full replace
@@ -5470,7 +6083,7 @@ editor_submenu() {
                 # Select deploy scope
                 local deploy_targets
                 if [ "${edit_type}" == "datagroup" ]; then
-                    deploy_targets=$(select_deploy_scope "datagroup" "/${partition}/${dg_name}")
+                    deploy_targets=$(select_deploy_scope "datagroup" "$(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")")
                 else
                     deploy_targets=$(select_deploy_scope "urlcat" "${cat_name}")
                 fi
@@ -5491,7 +6104,7 @@ editor_submenu() {
                 echo -e "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
                 echo ""
                 if [ "${edit_type}" == "datagroup" ]; then
-                    echo -e "  ${WHITE}Object:  /${partition}/${dg_name} (${dg_type})${NC}"
+                    echo -e "  ${WHITE}Object:  $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}") (${dg_type})${NC}"
                 else
                     echo -e "  ${WHITE}Object:  ${cat_name}${NC}"
                 fi
@@ -5550,7 +6163,7 @@ editor_submenu() {
                 # Run pre-deploy validation on fleet BEFORE making any changes
                 local validation_results
                 if [ "${edit_type}" == "datagroup" ]; then
-                    validation_results=$(run_predeploy_validation_datagroup "${partition}" "${dg_name}" "${deploy_targets}") || true
+                    validation_results=$(run_predeploy_validation_datagroup "${partition}" "${dg_name}" "${deploy_targets}" "${dg_subpath}") || true
                 else
                     validation_results=$(run_predeploy_validation_urlcat "${cat_name}" "${deploy_targets}") || true
                 fi
@@ -5601,7 +6214,7 @@ editor_submenu() {
                 if [ "${BACKUPS_ENABLED}" -eq 1 ]; then
                     local current_backup=""
                     if [ "${edit_type}" == "datagroup" ]; then
-                        current_backup=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}")
+                        current_backup=$(backup_datagroup "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}")
                     else
                         current_backup=$(backup_url_category "${cat_name}")
                     fi
@@ -5640,7 +6253,7 @@ editor_submenu() {
                                 done | build_tmsh_records_add
                             )
                             if [ -n "${add_tmsh}" ]; then
-                                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}"; then
+                                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${dg_subpath}" "$(printf '%s\n' "${deploy_additions[@]}")"; then
                                     inc_errors=$((inc_errors + 1))
                                 fi
                             fi
@@ -5649,7 +6262,7 @@ editor_submenu() {
                             local del_tmsh
                             del_tmsh=$(printf '%s\n' "${deploy_deletions[@]}" | build_tmsh_records_delete)
                             if [ -n "${del_tmsh}" ]; then
-                                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}"; then
+                                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${dg_subpath}" "$(printf '%s\n' "${deploy_deletions[@]}")"; then
                                     inc_errors=$((inc_errors + 1))
                                 fi
                             fi
@@ -5673,7 +6286,7 @@ editor_submenu() {
                                 echo "${working_keys[$i]}|${working_values[$i]:-}"
                             done | build_records_json_remote "${dg_type}"
                         )
-                        if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${current_records_json}"; then
+                        if apply_internal_datagroup_records_remote "${partition}" "${dg_name}" "${current_records_json}" "${dg_subpath}"; then
                             echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Applying changes${NC}"
                             if save_config_remote; then
                                 echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Saving configuration${NC}"
@@ -5788,7 +6401,7 @@ editor_submenu() {
                         done | build_records_json_remote "${dg_type}"
                     )
                     
-                    execute_deploy_datagroup "${partition}" "${dg_name}" "${dg_type}" "${deploy_records_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
+                    execute_deploy_datagroup "${partition}" "${dg_name}" "${dg_type}" "${deploy_records_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" "${dg_subpath}" || true
                 else
                     local deploy_urls_json
                     if [ ${#working_keys[@]} -gt 0 ]; then
@@ -5845,6 +6458,7 @@ menu_fleet_looking_glass() {
     
     local object_type=""
     local object_name=""
+    local object_subpath=""
     local partition=""
     
     case "${type_choice}" in
@@ -5863,6 +6477,7 @@ menu_fleet_looking_glass() {
                 return
             fi
             object_name=$(echo "${dg_selection}" | cut -d'|' -f1)
+            object_subpath=$(echo "${dg_selection}" | cut -d'|' -f2)
             ;;
         2)
             object_type="urlcat"
@@ -6009,7 +6624,7 @@ menu_fleet_looking_glass() {
         local count=0
         
         if [ "${object_type}" == "datagroup" ]; then
-            if ! api_get "/mgmt/tm/ltm/data-group/internal/~${partition}~${object_name}" >/dev/null 2>&1; then
+            if ! api_get "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${object_name}" "${object_subpath}")" >/dev/null 2>&1; then
                 echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Object not found${NC}"
                 continue
             fi
@@ -6023,7 +6638,7 @@ menu_fleet_looking_glass() {
                 fi
                 entry_values["${host}|${entry}"]="${value}"
                 count=$((count + 1))
-            done < <(get_internal_datagroup_records_remote "${partition}" "${object_name}")
+            done < <(get_internal_datagroup_records_remote "${partition}" "${object_name}" "${object_subpath}")
         else
             if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${object_name}" >/dev/null 2>&1; then
                 echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Object not found${NC}"
@@ -6311,6 +6926,7 @@ menu_fleet_backup() {
     
     local object_type=""
     local object_name=""
+    local object_subpath=""
     local partition=""
     
     case "${type_choice}" in
@@ -6328,6 +6944,7 @@ menu_fleet_backup() {
                 return
             fi
             object_name=$(echo "${dg_selection}" | cut -d'|' -f1)
+            object_subpath=$(echo "${dg_selection}" | cut -d'|' -f2)
             ;;
         2)
             object_type="urlcat"
@@ -6458,7 +7075,7 @@ menu_fleet_backup() {
         # Create backup
         local backup_file=""
         if [ "${object_type}" == "datagroup" ]; then
-            backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${object_name}" "${site}")
+            backup_file=$(backup_remote_internal_datagroup "${host}" "${partition}" "${object_name}" "${site}" "${object_subpath}")
         else
             backup_file=$(backup_remote_url_category "${host}" "${object_name}" "${site}")
         fi
@@ -6509,13 +7126,13 @@ menu_edit_datagroup_or_category() {
                 return
             fi
             
-            local selection dg_name dg_class
+            local selection dg_name dg_subpath dg_class
             selection=$(select_datagroup "${partition}" "Enter datagroup name to edit") || true
             if [ -z "${selection}" ]; then
                 press_enter_to_continue
                 return
             fi
-            IFS='|' read -r dg_name dg_class <<< "${selection}"
+            IFS='|' read -r dg_name dg_subpath dg_class <<< "${selection}"
             
             # Check if protected
             if is_protected_datagroup "${dg_name}"; then
@@ -6525,7 +7142,15 @@ menu_edit_datagroup_or_category() {
                 return
             fi
             
-            editor_submenu "datagroup" "${partition}" "${dg_name}" "${dg_class}"
+            # Externally managed folders are off limits
+            if is_protected_folder "${dg_subpath}"; then
+                log_error "Datagroup '${dg_subpath}/${dg_name}' lives in an externally managed folder (AS3 / Service Discovery)."
+                log_error "Editing it from this tool would be reverted or would break the managing system."
+                press_enter_to_continue
+                return
+            fi
+            
+            editor_submenu "datagroup" "${partition}" "${dg_name}" "${dg_class}" "${dg_subpath}"
             ;;
         2)
             # Edit URL category
@@ -7025,7 +7650,7 @@ main() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.5                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.6                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
