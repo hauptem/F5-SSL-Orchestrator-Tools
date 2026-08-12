@@ -1,10 +1,10 @@
-## b7.3.15.0-devel (Beta 7 - July 19 2026)
+## b7.3.14.0-devel (Beta 7 - July 19 2026)
 
 - Poll timeout no longer reports a deployment as failed without checking for it. The gc processor does not stop when the poll gives up, and a completed operation block self-destructs 120 seconds after BOUND - so re-checking the operation block later is ambiguous (absent means succeeded-and-gone or never-bound). On timeout the tool now checks for the deployment's component block, the durable evidence that the deployment landed. Applies to CREATE operations only; a component block that predates a MODIFY or DELETE proves nothing. Late-verified objects count as replayed and reset the circuit breaker, so slow deployments can no longer trip the systemic-failure prompt
 - Timed-out objects that cannot be verified now report that the gc processor may still complete, and that a re-replay will safely skip anything that lands
 - Policy swap validates the target policy name with the same rule as replay-time renaming: 1-20 characters after ssloP_, letters, numbers, underscores. An unvalidated name previously flowed into OData filter queries, operation block names, and gc processor config data
 
-## b6.3.15.0-devel (Beta 6 - July 17 2026)
+## b6.3.14.0-devel (Beta 6 - July 17 2026)
 
 - Snapshot block field backupType renamed to captureType. **SSLO Snapshots recorded by Beta 5 and earlier will fail import validation using Beta 6 - re-record your SSLO's using Beta 6**. The updated snapshot format version remains at 1.0 since we are still in beta.
 - Windows PowerShell 5.1 is enforced at startup. PowerShell 7+ ignores the ServicePointManager certificate bypass, so every connection would fail with opaque TLS errors. The tool now exits with the correct powershell.exe invocation instead
@@ -20,7 +20,7 @@
   metadata
     snapshotVersion     "1.0"
     tool                "sslo-replay"
-    toolVersion         "0.3.15-devel"
+    toolVersion         "0.3.14-devel"
     repository          github URL
     source
       hostname          source device hostname
@@ -48,7 +48,7 @@ sslo-snapshot_{hostname}_{yyyyMMdd-HHmmss}.json
 
 sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
 
-## b5.3.15.0-devel (Beta 5 - June 12 2026)
+## b5.3.14.0-devel (Beta 5 - June 12 2026)
 
 - Replay aborts when the target inventory cannot be read. A failed read previously disabled collision detection and the full snapshot would deploy onto a populated device
 - Key passphrase prompt for SSL settings replay. Passphrases are not recoverable from state blocks and were restored blank. 
@@ -61,14 +61,14 @@ sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
 - Snapshots are verified after writing: round-trip parse and block count check. Import warns when metadata blockCount does not match contents
 - Dynamic naming on scoped topology replay. The detected base name can be replaced at replay time. Renaming applies to the topology, its SSL settings, and its security policy. New base names can contain 1-20 characters, letters, numbers, underscores. 
 
-## b4.3.15.0-devel (Beta 4 - June 1 2026)
+## b4.3.14.0-devel (Beta 4 - June 1 2026)
 
 - Project scope refined to SSLO configuration backup and replay. Removed the ability to install LTM dependencies
 - Dependencies removed from snapshot JSON. The .json file is now pure SSLO blocks and metadata
 - Dependency manifest exported as a separate human-readable .txt file alongside the snapshot, grouped by type with full configs for reference
 - Dead code removed: New-DependencyOnTarget, Apply-SubstitutionMap, Get-DependencyObject, Get-CipherRuleDependencies, DEP_TYPE_ENDPOINTS, DEP_CREATE_ORDER
 
-## b3.3.15.0-devel (Beta 3 - May 31 2026)
+## b3.3.14.0-devel (Beta 3 - May 31 2026)
 
 - Snapshot format v1.0 specification finalized. Defines the JSON structure as a contract independent of script changes
 - snapshotVersion field added (string, currently "1.0"). The script rejects newer formats it cannot parse
@@ -81,7 +81,7 @@ sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
 - Dedup key changed from path to type:path. Certs and keys with the same name no longer collide
 - Version-lock removed. Snapshots are rejected only for snapshot format incompatibility, not tool version mismatch
 
-## b2.3.15.0-devel (Beta 2 - May 29 2026)
+## b2.3.14.0-devel (Beta 2 - May 29 2026)
 
 - New feature: Redeploy SSLO Topology. Pushes a selected topology back through the gc processor as a MODIFY to force a fresh deployment pass. Resolves "not initialized" warnings after replay. Does not clear GUI-level pending drafts
 - Security policy prereq validation for datagroups (existence and type match) and custom URL categories
@@ -90,11 +90,11 @@ sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
 - MODIFY operation blocks excluded from replayable category. Fixes duplicate policy on replay after policy swap
 - mcpBlockIO block database save added alongside tmsh save, an undocumented feature pulled from F5's sslofix script
 
-## b1.3.15.0-devel (Beta 1 - May 28 2026)
+## b1.3.14.0-devel (Beta 1 - May 28 2026)
 
 - Initial beta release. Snapshot and replay of SSLO iAppsLX configuration across BIG-IP devices
 - Captures all SSLO deployment types: SSL settings, services, service chains, security policies, topologies
-- State-to-CREATE transformation with per-type inputProperties from F5 Ansible collection f5networks.f5_bigip 3.15.0-devel
+- State-to-CREATE transformation with per-type inputProperties from F5 Ansible collection f5networks.f5_bigip 3.14.0-devel
 - Scoped replay: select a single topology and the tool resolves its full dependency tree
 - Policy swap: apply a snapshot policy to an existing topology with rename and overwrite support
 - Prerequisite validation for all service types (L3, HTTP, ICAP, Layer 2, TAP)
