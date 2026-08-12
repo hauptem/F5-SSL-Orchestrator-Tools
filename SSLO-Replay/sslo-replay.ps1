@@ -1,20 +1,20 @@
 ﻿# =============================================================================
 # SSLO-Replay - F5 SSL Orchestrator Snapshot and Replay Tool
 # =============================================================================
-# Version: vb7.3.15-devel (Beta 7 July 19 2026)
+# Version: vb7.3.14-devel (Beta 8 August 12 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
-# Requirements: Windows PowerShell 5.1 (Desktop edition only - pwsh 7+ is
-#               not supported), BIG-IP TMOS 17.x+ with SSLO 12.x+
+# Requirements: Windows PowerShell 5.1 (pwsh 7+ is not supported), 
+# BIG-IP TMOS 17.x+ with SSLO 12.x+
 #
 # REFERENCE:
 #   State-to-CREATE transformation logic, per-type inputProperty templates,
 #   passphrase token handling, and prerequisite field paths are derived from
 #   the F5 Ansible SSLO collection module source code:
 #   https://github.com/F5Networks/f5-ansible-bigip
-#   Collection: f5networks.f5_bigip 3.15.0-devel
+#   Collection: f5networks.f5_bigip 3.14.0-devel
 #
 # PURPOSE:
 #   Captures F5 SSL Orchestrator iAppsLX configuration as a portable JSON
@@ -60,7 +60,7 @@
 # =============================================================================
 
 # Tool version - aligned to the F5 Ansible collection version used as API reference
-$script:TOOL_VERSION = "0.3.15-devel"
+$script:TOOL_VERSION = "0.3.14-devel"
 
 # Snapshot format version - increments only when the JSON structure changes
 $script:SNAPSHOT_FORMAT_VERSION = "1.0"
