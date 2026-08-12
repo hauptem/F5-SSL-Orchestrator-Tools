@@ -1,4 +1,4 @@
-# SSLO-Replay 0.3.15.0-devel (Beta) - F5 SSLO Configuration Snapshot and Replay Tool
+# SSLO-Replay 0.3.14.0-devel (Beta) - F5 SSLO Configuration Snapshot and Replay Tool
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
@@ -80,7 +80,7 @@ Snapshots and dependency manifests are written to a `sslo-replay-snapshots` fold
 
 The gc processor input/output contract, per-type inputProperty templates, passphrase token handling, and prerequisite field paths are derived from the F5 Ansible SSLO collection:
 
-- **Collection:** f5networks.f5_bigip 3.15.0-devel
+- **Collection:** f5networks.f5_bigip 3.14.0-devel
 - **Repository:** https://github.com/F5Networks/f5-ansible-bigip
 
 ## License
