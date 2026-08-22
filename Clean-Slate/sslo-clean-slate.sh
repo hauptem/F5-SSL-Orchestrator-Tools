@@ -7,15 +7,6 @@
 # Based on: Kevin Stewart's original "sslo nuclear delete" script v7.0 from 
 #           https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete
 #
-# v1.2 Changes:
-#   - Excluded datagroups (ltm data-group) and custom URL categories
-#     (sys url-db url-category) from the tmsh deletion candidate list.
-#
-# v1.1 Changes:
-#   - Excluded the cm namespace from the tmsh deletion candidate list. The
-#     "grep sslo" selection could match cm device objects when a hostname
-#     contains "sslo" (e.g. cm device sslo1.lab.local). 
-#
 # Requirements:  SSL Orchestrator 12.0 or higher / TMOS 17.x, 21.x
 #
 # PURPOSE:
