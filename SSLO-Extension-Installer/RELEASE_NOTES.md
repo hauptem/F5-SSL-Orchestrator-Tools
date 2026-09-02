@@ -1,5 +1,11 @@
 # Release Notes
 
+## v1.4
+
+- Fixed the install-then-uninstall path for Advanced Blocking Pages: when existing components were detected during install and the user proceeded to uninstall using the cached discovery, the `ssloSC_Block_Page` block ID and state were never captured, so the uninstaller issued PATCH and DELETE requests against `/mgmt/shared/iapp/blocks/` with an empty ID
+- Install-path discovery now matches the `ssloSC_Block_Page` block by exact name; the previous substring match could also pick up the `sslo_ob_SERVICE_CHAIN_CREATE_ssloSC_Block_Page` operation block
+- Corrected attribution in embedded iRule headers: `sslo-tls-verify-rule` and `doh-guardian-rule` are Kevin Stewart's work and now say so; the `doh-guardian-rule` header records the one changed default (`DOH_LOG_LOCAL` 0, was 1)
+
 ## v1.3
 
 - Updated both uninstallers to also remove the application services specific to Block Page or DoH Guard which remained as orphans in previous versions

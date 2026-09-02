@@ -1,6 +1,6 @@
 #!/bin/bash
 # F5 SSL Orchestrator Service Extension Installer
-# Version 1.3
+# Version 1.4
 # Author: Eric Haupt
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
@@ -448,6 +448,8 @@ install_blocking_page() {
     HAS_CE_RULE=0
     HAS_TLS_RULE=0
     HAS_SC_BLOCK=0
+    SC_BLOCK_ID=""
+    SC_BLOCK_STATE=""
     HAS_LTM_IFILE=0
     HAS_SYS_IFILE=0
 
@@ -502,9 +504,11 @@ install_blocking_page() {
     fi
     sc_block_json=$(curl -sk -u "${BIGUSER}" \
         "https://localhost/mgmt/shared/iapp/blocks" \
-        | jq -r '.items[]? | select(.name | test("ssloSC_Block_Page")) | .id' 2>/dev/null | head -1)
+        | jq -r '.items[]? | select(.name=="ssloSC_Block_Page") | "\(.id) \(.state)"' 2>/dev/null)
     if [[ -n "${sc_block_json}" ]]; then
         HAS_SC_BLOCK=1
+        SC_BLOCK_ID="${sc_block_json%% *}"
+        SC_BLOCK_STATE="${sc_block_json##* }"
     fi
 
     EXISTING=()
@@ -599,9 +603,10 @@ EOF
 # Date: October 2025
 # Author: Kevin Stewart, F5 Networks
 #
-# License: MIT
-# Copyright (c) 2025 Eric Haupt
-# Released under the MIT License.
+# Unmodified from the original at
+# https://github.com/f5devcentral/sslo-service-extensions/tree/main/advanced-blocking-pages
+# Redistributed as part of the SSLO Extension Installer (MIT). The iRule body
+# remains the work of its original author.
 #
 # Description:
 #   Captures the server-side TLS certificate verification result into the ctx(tlsverify)
@@ -1934,7 +1939,12 @@ install_doh_guardian() {
     cat > "doh-guardian-rule" << 'DOH_GUARDIAN_RULE_EOF'
 ## SSL Orchestrator Service Extension - DNS-over-HTTP Guardian
 ## Version: 1.0
-## Based on Kevin Stewart's 1.0 extensions
+## Date: 2025 Aug 06
+## Author: Kevin Stewart, F5 Networks
+##
+## Redistributed as part of the SSLO Extension Installer (MIT).
+## https://github.com/f5devcentral/sslo-service-extensions/tree/main/doh-guardian
+## Changes from the original: DOH_LOG_LOCAL default set to 0 (was 1).
 
 when RULE_INIT {
     ## ===========================================
