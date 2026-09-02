@@ -2,19 +2,21 @@
 # =============================================================================
 # SSL Orchestrator Tools - Clean Slate Script
 # =============================================================================
-# Version:  1.2 June 11 2026
+# Version:  1.3 September 2 2026
 # Created by: Eric Haupt
-# Based on: Kevin Stewart's original "sslo nuclear delete" script v7.0 from 
+# Based on: Kevin Stewart's "sslo nuclear delete" script v7.0
 #           https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete
 #
 # Requirements:  SSL Orchestrator 12.0 or higher / TMOS 17.x, 21.x
 #
 # PURPOSE:
-#   Forcibly removes all SSL Orchestrator (SSLO) configuration objects,
-#   clears REST storage, and reinstalls the SSLO RPM for a clean slate install.
+#   Forcibly removes all SSL Orchestrator (SSLO) configuration objects and
+#   clears REST storage so the SSLO RPM can be reinstalled on a clean slate.
+#   The installed RPM is copied to /shared/tmp before deletion begins; the
+#   reinstall itself is a manual step through the GUI.
 #
 # WARNING:
-#   THIS SCRIPT IS DESTRUCTIVE. It will permanently delete ALL SSLO configuration 
+#   THIS SCRIPT IS DESTRUCTIVE. It permanently deletes ALL SSLO configuration
 #   on this device. This action cannot be undone.
 #   Do NOT run this on a device with active production SSLO traffic.
 #
@@ -33,7 +35,7 @@ set -euo pipefail
 # =============================================================================
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOGFILE="/var/log/sslo-clean-${TIMESTAMP}.log"
-RPM_BACKUP_DIR="/var/tmp"
+RPM_BACKUP_DIR="/shared/tmp"
 RPM_DOWNLOAD_DIR="/var/config/rest/downloads"
 ERRORS=0
 
@@ -73,7 +75,7 @@ log_step() {
 }
 
 # =============================================================================
-# Pre-flight: Confirm running as root on a BIG-IP
+# Pre-flight: root, required tools, TMOS version, installed SSLO RPM
 # =============================================================================
 preflight_checks() {
     log_section "Pre-Flight Checks"
@@ -107,7 +109,7 @@ preflight_checks() {
     log_ok "TMOS Version: ${tmos_version}"
 
     local sslo_rpm
-    sslo_rpm=$(restcurl shared/iapp/installed-packages 2>/dev/null | grep "packageName" | grep -iE 'sslo|ssl.orchestrator' | awk -F'"' '{print $4}' || true)
+    sslo_rpm=$(restcurl shared/iapp/installed-packages 2>/dev/null | jq -r '.items[]?.packageName // empty' 2>/dev/null | grep -iE 'sslo|ssl.orchestrator' | head -1 || true)
     if [ -z "${sslo_rpm}" ]; then
         log_warn "No SSLO RPM detected in installed packages. Proceeding anyway."
     else
@@ -154,8 +156,8 @@ confirm_execution() {
     log_warn "This script will PERMANENTLY DELETE all SSL Orchestrator"
     log_warn "configuration on this BIG-IP. This cannot be undone."
     log ""
-    # Device identity for the wrong-box guard. Fall back through tmsh and
-    # uname so this line can never print blank (observed once in the field).
+    # Device identity for the wrong-box guard. Falls back through tmsh and
+    # uname so the line never prints blank.
     local device_name
     device_name=$(hostname 2>/dev/null || true)
     if [ -z "${device_name}" ]; then
@@ -171,10 +173,10 @@ confirm_execution() {
     echo ""
     echo "  !! WARNING: ALL SSLO CONFIGURATION WILL BE DESTROYED !!"
     echo ""
-    read -rp "  Type CONFIRM to proceed, or anything else to abort: " confirm
+    read -rp "  Type CLEAN to proceed, or anything else to abort: " confirm
     echo ""
 
-    if [ "${confirm}" != "CONFIRM" ]; then
+    if [ "${confirm}" != "CLEAN" ]; then
         log_info "Aborted by user. No changes were made."
         exit 0
     fi
@@ -182,13 +184,13 @@ confirm_execution() {
 }
 
 # =============================================================================
-# Step 1: Back up the RPM before anything is deleted
+# Step 1: Back up the installed RPM before anything is deleted
 # =============================================================================
 backup_rpm() {
     log_section "Step 1 of 7: Backing Up Installed SSLO RPM"
 
     INSTALLED_RPM=$(restcurl shared/iapp/installed-packages 2>/dev/null \
-        | grep "packageName" | grep -iE 'sslo|ssl.orchestrator' | awk -F'"' '{print $4}' || true)
+        | jq -r '.items[]?.packageName // empty' 2>/dev/null | grep -iE 'sslo|ssl.orchestrator' | head -1 || true)
 
     if [ -z "${INSTALLED_RPM}" ]; then
         log_warn "Could not detect an installed SSLO RPM. RPM backup skipped."
@@ -203,7 +205,7 @@ backup_rpm() {
         log_warn "RPM file not found at ${rpm_src}"
         log_warn "Searching for RPM elsewhere on the filesystem..."
         local found_rpm
-        found_rpm=$(find / -name "${INSTALLED_RPM}.rpm" 2>/dev/null | head -1 || true)
+        found_rpm=$(find /var /shared /config /root -name "${INSTALLED_RPM}.rpm" 2>/dev/null | head -1 || true)
         if [ -n "${found_rpm}" ]; then
             rpm_src="${found_rpm}"
             log_ok "Found RPM at: ${rpm_src}"
@@ -233,7 +235,7 @@ delete_iapp_blocks_and_packages() {
 
     local blocks
     blocks=$(restcurl shared/iapp/blocks 2>/dev/null \
-        | grep "      \"id\":" | grep -v "       \"id\":" | awk -F'"' '{print $4}' || true)
+        | jq -r '.items[]?.id // empty' 2>/dev/null || true)
 
     if [ -z "${blocks}" ]; then
         log_info "No iApp blocks found."
@@ -253,7 +255,7 @@ delete_iapp_blocks_and_packages() {
 
     local packages
     packages=$(restcurl shared/iapp/installed-packages 2>/dev/null \
-        | grep "      \"id\":" | grep -v "       \"id\":" | awk -F'"' '{print $4}' || true)
+        | jq -r '.items[]?.id // empty' 2>/dev/null || true)
 
     if [ -z "${packages}" ]; then
         log_info "No installed packages found."
@@ -273,14 +275,14 @@ delete_iapp_blocks_and_packages() {
 }
 
 # =============================================================================
-# Step 3: Delete SSLO application services
+# Step 3: Delete SSLO application services (run twice: before and after Step 5)
 # =============================================================================
 delete_app_services() {
     local pass_label="$1"
     log_section "${pass_label}: Deleting SSLO Application Services"
 
     local appsvcs
-    appsvcs=$(restcurl -u "${USER_PASS}" mgmt/tm/sys/application/service 2>/dev/null \
+    appsvcs=$(restcurl -u "${USER_PASS}" tm/sys/application/service 2>/dev/null \
         | jq -r '.items[].fullPath' 2>/dev/null \
         | sed 's/\/Common\///g' \
         | grep "^sslo" || true)
@@ -310,7 +312,7 @@ delete_app_services() {
 }
 
 # =============================================================================
-# Step 4: Unbind SSLO blocks
+# Step 4: Unbind and delete SSLO blocks (run twice: before and after Step 5)
 # =============================================================================
 unbind_sslo_blocks() {
     local pass_label="$1"
@@ -351,22 +353,27 @@ unbind_sslo_blocks() {
 }
 
 # =============================================================================
-# Step 5: Delete SSLO tmsh objects
+# Step 5: Delete remaining SSLO tmsh objects (run twice)
 # =============================================================================
 delete_sslo_objects() {
-    log_section "Step 5 of 7: Deleting SSLO tmsh Objects"
+    local pass_label="$1"
+    log_section "${pass_label}: Deleting SSLO tmsh Objects"
 
-    # NOTE: SSLO never creates objects in the cm namespace. Any "cm ..." line
-    # matched here is an over-match caused by a device/device-group NAME that
-    # contains "sslo" (e.g. a hostname like sslo1.lab.local). Deleting cm
-    # objects can destroy device trust on an HA peer, so the entire cm
-    # namespace is excluded from the candidate list.
+    # The candidate list is every top-level tmsh object whose listing contains
+    # "sslo". Three classes are excluded because SSLO references them but does
+    # not create them, so a name match is an operator object, not SSLO state:
     #
-    # Datagroups and URL categories are excluded because they are operator-managed
-    # objects that may be named with "sslo" patterns. SSLO references these by
-    # name but does not create them. Any SSLO-generated datagroups inside .app/
-    # folders are already removed by delete_app_services (Step 3) before this
-    # step runs.
+    #   cm namespace: a device or device-group name containing "sslo" (for
+    #   example a hostname of sslo1.lab.local). Deleting cm objects breaks
+    #   device trust with an HA peer.
+    #
+    #   ltm data-group and sys url-db url-category: operator-managed lists
+    #   commonly named after the SSLO policy that consumes them. SSLO-generated
+    #   datagroups live inside .app/ folders and are removed with the
+    #   application service in Step 3.
+    #
+    #   sys crypto, sys file ssl-*, and auth user: a forward-proxy CA imported
+    #   as "sslo-ca" cannot be recovered once deleted.
     local sslo_objects
     sslo_objects=$(tmsh list 2>/dev/null \
         | grep -v "^\s" \
@@ -375,13 +382,16 @@ delete_sslo_objects() {
         | grep -v "^cm " \
         | grep -v "^ltm data-group " \
         | grep -v "^sys url-db url-category " \
+        | grep -v "^sys crypto " \
+        | grep -v "^sys file ssl-" \
+        | grep -v "^auth user " \
         | grep -v "apm profile access /Common/ssloDefault_accessProfile" \
         | grep -v "apm log-setting /Common/default-sslo-log-setting" \
         | grep -v "net dns-resolver /Common/ssloGS_global.app/ssloGS-net-resolver" \
         | grep -v "sys application service /Common/ssloGS_global.app/ssloGS_global" \
         | grep -v "sys provision sslo" || true)
 
-    # Delete explicit named objects first
+    # Delete the objects with fixed names first, in dependency order
     local explicit_objects=(
         "apm profile access /Common/ssloDefault_accessProfile"
         "net dns-resolver /Common/ssloGS_global.app/ssloGS-net-resolver"
@@ -422,7 +432,11 @@ delete_sslo_objects() {
 clear_rest_storage() {
     log_section "Step 6 of 7: Clearing REST Storage"
     log_warn "This will wipe /var/config/rest/downloads and all REST-persisted data."
-    log_info "RPM has already been backed up to ${RPM_BACKUP_DIR} — safe to proceed."
+    if [ "${RPM_BACKED_UP}" == "true" ]; then
+        log_info "RPM has already been backed up to ${RPM_BACKUP_DIR}/${INSTALLED_RPM}.rpm"
+    else
+        log_warn "No RPM backup exists. The RPM must be sourced manually after this step."
+    fi
 
     if clear-rest-storage -l > /dev/null 2>&1; then
         log_ok "REST storage cleared successfully"
@@ -430,9 +444,27 @@ clear_rest_storage() {
         log_error "clear-rest-storage returned an error. Check logs."
     fi
 
-    log_info "Waiting 10 seconds for REST framework to stabilise..."
-    sleep 10
-    log_ok "REST framework stabilisation wait complete"
+    wait_for_rest
+}
+
+# Poll restjavad until it answers an authenticated request. It restarts after
+# clear-rest-storage and typically takes 30 to 90 seconds to accept requests.
+# Verification against a daemon that is still starting returns empty results
+# that are indistinguishable from a successful clean-up.
+wait_for_rest() {
+    local deadline=$((SECONDS + 180))
+    local http_code
+    log_step "Waiting for REST framework to accept requests (up to 180s)..."
+    while [ "${SECONDS}" -lt "${deadline}" ]; do
+        http_code=$(curl -sk -o /dev/null -w "%{http_code}" \
+            -u "${USER_PASS}" "https://localhost/mgmt/shared/echo" 2>/dev/null || true)
+        if [ "${http_code}" == "200" ]; then
+            log_ok "REST framework is responding"
+            return
+        fi
+        sleep 5
+    done
+    log_error "REST framework did not respond within 180 seconds. Post-run verification results are unreliable."
 }
 
 # =============================================================================
@@ -442,7 +474,7 @@ post_run_verification() {
     log_section "Step 7 of 7: Post-Run Verification"
 
     local remaining_appsvcs
-    remaining_appsvcs=$(restcurl -u "${USER_PASS}" mgmt/tm/sys/application/service 2>/dev/null \
+    remaining_appsvcs=$(restcurl -u "${USER_PASS}" tm/sys/application/service 2>/dev/null \
         | jq -r '.items[].fullPath' 2>/dev/null | grep "^/Common/sslo" || true)
     if [ -z "${remaining_appsvcs}" ]; then
         log_ok "No SSLO application services remain"
@@ -470,7 +502,7 @@ post_run_verification() {
 
     local reinstalled_rpm
     reinstalled_rpm=$(restcurl shared/iapp/installed-packages 2>/dev/null \
-        | grep "packageName" | grep -iE 'sslo|ssl.orchestrator' | awk -F'"' '{print $4}' || true)
+        | jq -r '.items[]?.packageName // empty' 2>/dev/null | grep -iE 'sslo|ssl.orchestrator' | head -1 || true)
     if [ -z "${reinstalled_rpm}" ] && [ "${RPM_BACKED_UP}" == "true" ]; then
         log_ok "SSLO RPM is not installed (expected). Backed up to: ${RPM_BACKUP_DIR}/${INSTALLED_RPM}.rpm"
         log_info "Manual reinstall required via GUI: iApps > Package Management LX > Import"
@@ -512,8 +544,8 @@ print_summary() {
 # Main
 # =============================================================================
 main() {
-    # Initialise log
-    echo "SSL Orchestrator Clean Slate - v1.2" | tee "${LOGFILE}"
+    # Initialize the log
+    echo "SSL Orchestrator Clean Slate - v1.3" | tee "${LOGFILE}"
     echo "Started: $(date)" | tee -a "${LOGFILE}"
 
     RPM_BACKED_UP=false
@@ -527,9 +559,10 @@ main() {
     delete_iapp_blocks_and_packages
     delete_app_services  "Step 3 of 7 (Pass 1)"
     unbind_sslo_blocks   "Step 4 of 7 (Pass 1)"
-    delete_sslo_objects
+    delete_sslo_objects  "Step 5 of 7 (Pass 1)"
     delete_app_services  "Step 3 of 7 (Pass 2)"
     unbind_sslo_blocks   "Step 4 of 7 (Pass 2)"
+    delete_sslo_objects  "Step 5 of 7 (Pass 2)"
     clear_rest_storage
     post_run_verification
     print_summary
