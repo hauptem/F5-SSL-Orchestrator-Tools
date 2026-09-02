@@ -24,9 +24,11 @@
 #
 #   The snapshot captures all SSLO objects from the iAppsLX block database,
 #   classifies them by deployment type, strips instance-specific fields,
-#   captures full configuration of external dependencies (datagroups, URL
-#   categories, monitors, profiles, etc.), and writes a single portable
-#   JSON file.
+#   and writes a single portable JSON file. External dependencies
+#   (datagroups, URL categories, monitors, profiles, etc.) are written to a
+#   companion text manifest for reference when recreating them on the
+#   target; the manifest is not read by the tool. Replay re-derives
+#   dependencies from the snapshot blocks.
 #
 #   On replay, the tool validates prerequisites and external dependencies,
 #   transforms state blocks into gc processor CREATE format with correct
@@ -1618,29 +1620,49 @@ function Invoke-DependencyCapture {
 # DEPENDENCY FIELD STRIPPING
 # =============================================================================
 
-# Strip instance-specific fields from dependency configs for clean storage
+# Strip instance-specific fields from dependency configs for clean storage.
+# Applied recursively: nested collection members (cipher group allow[],
+# log publisher destinations[], etc.) carry their own nameReference links
+# with the source TMOS version in the query string.
 function Remove-DepRuntimeFields {
     param([object]$Config)
     
     $clean = $Config | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    Remove-DepRuntimeFieldsRecursive -Node $clean
+    return $clean
+}
+
+function Remove-DepRuntimeFieldsRecursive {
+    param([object]$Node)
+    
+    if ($Node -is [System.Collections.IList]) {
+        foreach ($item in $Node) { Remove-DepRuntimeFieldsRecursive -Node $item }
+        return
+    }
+    if (-not ($Node -is [PSCustomObject])) { return }
     
     # Remove known instance-specific fields
     foreach ($field in $script:DEP_STRIP_FIELDS) {
-        if ($clean.PSObject.Properties[$field]) {
-            $clean.PSObject.Properties.Remove($field)
+        if ($Node.PSObject.Properties[$field]) {
+            $Node.PSObject.Properties.Remove($field)
         }
     }
     
     # Remove REST API reference link objects (*Reference fields with a link property)
     # These are just REST navigation links, not configuration data
-    $refFields = @($clean.PSObject.Properties | Where-Object { 
+    $refFields = @($Node.PSObject.Properties | Where-Object { 
         $_.Name -match "Reference$" -and $_.Value -is [PSCustomObject] -and $_.Value.PSObject.Properties["link"]
     } | ForEach-Object { $_.Name })
     foreach ($field in $refFields) {
-        $clean.PSObject.Properties.Remove($field)
+        $Node.PSObject.Properties.Remove($field)
     }
     
-    return $clean
+    # Recurse into remaining object and array values
+    foreach ($prop in @($Node.PSObject.Properties)) {
+        if ($prop.Value -is [PSCustomObject] -or $prop.Value -is [System.Collections.IList]) {
+            Remove-DepRuntimeFieldsRecursive -Node $prop.Value
+        }
+    }
 }
 
 # Map internal dependency type to user-facing label
@@ -1959,7 +1981,7 @@ function Invoke-SsloRecord {
                         }
                     } elseif ($dep.type -eq "url_category") {
                         $configJson = $dep.config | ConvertTo-Json -Depth 10
-                        foreach ($cl in ($configJson -split "`n")) {
+                        foreach ($cl in ($configJson -split "`r?`n")) {
                             $lines += "    $cl"
                         }
                     } elseif ($dep.type -eq "vlan" -and $dep.config.tag) {
@@ -1976,7 +1998,7 @@ function Invoke-SsloRecord {
                     } else {
                         # Generic: dump as indented JSON
                         $configJson = $dep.config | ConvertTo-Json -Depth 10
-                        foreach ($cl in ($configJson -split "`n")) {
+                        foreach ($cl in ($configJson -split "`r?`n")) {
                             $lines += "    $cl"
                         }
                     }
