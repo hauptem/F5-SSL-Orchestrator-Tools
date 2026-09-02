@@ -88,7 +88,7 @@ Folders listed in the `PROTECTED_FOLDERS` configuration (default: `appsvcs`, `Se
 
 **Bash version:** `curl` and `jq` must be available on the machine where you run the script. Both are available in the default package repositories for most Linux distributions and macOS. The tool checks for these at startup and will not proceed without them.
 
-**PowerShell version:** PowerShell 5.1 or later, which ships with Windows 10 and 11. No additional modules or packages are required.
+**PowerShell version:** Windows PowerShell 5.1 (Desktop edition), which ships with Windows 10 and 11. No additional modules or packages are required. PowerShell 7 (`pwsh`) is not supported: it ignores the certificate policy the script uses to accept self-signed BIG-IP management certificates, so the script exits with instructions if launched there.
 
 On the BIG-IP side, you need a user account with administrative API access (typically the `admin` role) and network reachability to the management interface on port 443.
 
@@ -104,7 +104,7 @@ chmod +x dgcat-admin.sh
 **PowerShell:**
 
 ```powershell
-.\dgcat-admin.ps1
+powershell.exe -File .\dgcat-admin.ps1
 ```
 
 There is no installation process, no dependencies beyond the above, and no configuration files required to get started. The tool creates its backup directory automatically on first run.
@@ -224,7 +224,7 @@ Protected system datagroups cannot be deleted. The tool blocks the operation.
 
 Exports a datagroup or URL category to a CSV file.
 
-For datagroups, the export includes a comment header with metadata (partition, type, export date) followed by `key,value` lines. The default export path is in the backup directory with a timestamped filename, but you can specify any path.
+For datagroups, the export includes a comment header with metadata (partition, type, export date) followed by `key,value` lines. The default export path is in the backup directory with a filename stamped at the moment of export, so repeated exports of the same object in one session produce separate files. You can specify any path. If the datagroup cannot be read (for example, the session has timed out), the tool reports the HTTP error and writes nothing rather than producing an empty file.
 
 For URL categories, you choose between domain-only format (stripped of protocol and path) or full URL format (as stored by BIG-IP). 
 
@@ -258,13 +258,13 @@ Press `a` to add an entry. For datagroups, you enter a key and optionally a valu
 
 ### Editing Entries
 
-Press `e` to change an existing entry in place. You can specify the entry by its line number (as shown in the current view) or by typing the key directly. The tool shows the current key and value, then prompts for each - press Enter to keep the current setting, or enter `-` at the value prompt to clear the value. For URL categories, an edit replaces the URL.
+Press `e` to change an existing entry in place. You can specify the entry by its line number (as shown in the current view) or by typing the key directly. If the input matches an existing key exactly, the key wins; this matters in integer datagroups, where typing `3` selects the key `3` rather than row 3. The tool shows the current key and value, then prompts for each - press Enter to keep the current setting, or enter `-` at the value prompt to clear the value. For URL categories, an edit replaces the URL; pressing Enter keeps the stored URL exactly as it is, including any path or `http://` scheme, and only a new value is normalized.
 
 The record keeps its original position in the set, unlike deleting and re-adding it. Edits stage in memory like every other editor change, so there is no per-edit confirmation - the single confirmation happens at apply, which keeps bulk editing fast.
 
 ### Deleting Entries
 
-Press `d` to delete a single entry. You can specify the entry by its line number (as shown in the current view) or by typing the key directly.
+Press `d` to delete a single entry. You can specify the entry by its line number (as shown in the current view) or by typing the key directly. As with editing, an exact key match takes precedence over a row number.
 
 Press `x` to delete by pattern. Enter a search string and the tool shows all matching entries with a count. Confirm to delete all matches at once. This is useful for removing all entries from a specific domain or subnet range.
 
@@ -273,6 +273,8 @@ Press `x` to delete by pattern. Enter a search string and the tool shows all mat
 Press `w` to apply your changes to the current device. The tool shows a summary of all additions, deletions, and value changes, creates a backup of the current state, and asks for confirmation before applying. Value changes are shown with the value being applied (`key : value`, or `key : old -> new` when replacing an existing value).
 
 For datagroups, you then select an apply mode. **tmsh Modify** adds and deletes only the changed records. **Full Replace** writes the entire record set via REST. tmsh cannot apply value changes to existing records, or keys and values containing characters unsafe for tmsh (whitespace, braces, quotes, backslash, `;`, `#`) - when the change set includes any of these, the menu offers Full Replace as the only mode. The same rule governs fleet Merge mode.
+
+For URL categories, deletions and additions are sent as two separate requests. If either fails, the editor reports the error and keeps the change set pending so you can retry after resolving the cause; the original state is only reset once both succeed.
 
 After a successful apply, the tool offers to save the BIG-IP configuration.
 
@@ -338,7 +340,7 @@ After confirming your intent to deploy, you select a deployment mode:
 
 **Full Replace** overwrites the target object on each fleet host with the exact state from the current device. After deployment, every device has an identical copy. This is the right choice when you want strict parity across your fleet.
 
-**Merge** applies only your additions and deletions to each target, preserving any entries that are specific to that device. For datagroups, the tool sends incremental tmsh `records add` and `records delete` operations to each target; the rest of the record set is never touched. For URL categories, the tool uses the API's native add and delete operations. This is the right choice when different sites have intentional differences - such as site-specific bypass entries or local address ranges - and you only want to propagate the changes you made, not overwrite everything.
+**Merge** applies only your additions and deletions to each target, preserving any entries that are specific to that device. For datagroups, the tool sends incremental tmsh `records add` and `records delete` operations to each target; the rest of the record set is never touched. Large change sets are sent in batches of `TMSH_CHUNK_SIZE` records (default 500) because the record list travels in the request URI, and each batch is verified against the device if BIG-IP reports an error after applying it. For URL categories, the tool uses the API's native add and delete operations. This is the right choice when different sites have intentional differences - such as site-specific bypass entries or local address ranges - and you only want to propagate the changes you made, not overwrite everything.
 
 The selected mode governs every device in the deployment, including the one you're connected to - a Merge deploy applies only the staged delta to the current device as well. Because datagroup Merge uses the same tmsh passthrough as tmsh Modify, it is only offered when the change set can be expressed that way; change sets containing edited values or tmsh-unsafe characters show Full Replace as the only mode.
 
@@ -655,6 +657,10 @@ Attempting to modify or delete these datagroups will produce an error message.
 
 Datagroups inside the TMOS folders listed in `PROTECTED_FOLDERS` are treated as externally managed. The defaults are the folders used by AS3 (`appsvcs`) and Service Discovery (`ServiceDiscovery`). These objects appear in listings tagged "externally managed", but create, edit, and delete are blocked - changes made outside the managing system would be reverted or would break it. Remove entries from the list to disable the guard.
 
+### tmsh Batch Size
+
+`TMSH_CHUNK_SIZE` sets how many records are sent per request when the tool uses the tmsh passthrough (editor tmsh Modify and fleet Merge for datagroups). The default of 500 keeps each request well inside URI length limits on the BIG-IP REST service and the HTTP client. Lower it if a BIG-IP behind a proxy or WAF rejects long URLs; raising it saves round trips on very large change sets but increases the chance of a rejected request.
+
 ### Debug Tracing
 
 Set `DEBUG_ENABLED` to `1` in the script configuration to trace every API request and response: method, URL, decoded tmsh options, request body, HTTP status, and the BIG-IP error body on failures. Credentials are never traced. Debug output is the fastest way to diagnose a rejected API call, since BIG-IP states the actual reason in the response body. The default is `0` (disabled).
@@ -731,6 +737,9 @@ The editor compares your working state against the state that was loaded when yo
 
 **Bash editor warning: "This dataset has X entries"**
 Datasets over 8,000 entries will cause the bash editor to become very slow or unresponsive due to interpreter limitations. Import, export, and deploy operations are unaffected. Use the PowerShell version for interactive editing of large datasets. PowerShell has been tested with 20,000 entries without performance issues.
+
+**URL category options missing after a connection hiccup.**
+The tool checks once per session whether the URL category database is provisioned. A definitive "not provisioned" answer is remembered for the session; a timeout or server error is not, and the check is repeated on the next URL category operation. If URL category options are absent, reconnect with option `0` from the main menu or confirm the URL filtering module is provisioned on the target.
 
 ### General Issues
 
