@@ -1,3 +1,9 @@
+## b9.3.14.0-devel (Beta 9 - September 2 2026)
+
+- Dependency manifest JSON blocks no longer contain doubled carriage returns. ConvertTo-Json emits CRLF on Windows PowerShell and the line split matched LF only, so every line kept a trailing CR that the final CRLF join doubled. Profile, cipher, log publisher, and URL category dumps rendered with a blank line between every line in Notepad
+- Dependency config cleaning is now recursive. The *Reference link strip and instance-field strip previously applied at the top level only, so nested collection members (cipher group allow[], log publisher destinations[]) kept nameReference links carrying the source TMOS version in the query string
+- Script header corrected to describe the current design: dependency configs go to the companion text manifest, which the tool does not read, and replay re-derives dependencies from the snapshot blocks. The header still described the Beta 3 behavior of embedding dependencies in the snapshot JSON, removed in Beta 4
+
 ## b7.3.14.0-devel (Beta 8 - August 12 2026)
 
 - Corrected all references to F5's ansible collection numbering from 3.15 to 3.14 which represents the current F5 release.
