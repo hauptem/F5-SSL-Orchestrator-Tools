@@ -41,7 +41,7 @@ Option 1 records from the connected device. Option 2 reads a snapshot file and p
 
 ## Recording a Snapshot
 
-Menu option 1. Pulls all iAppsLX blocks from the connected device, classifies them, captures dependencies, and writes a JSON file.
+Menu option 1. Pulls all iAppsLX blocks from the connected device, classifies them, captures dependencies, and writes a snapshot and a dependency manifest.
 
 The tool captures every SSLO object on the device: SSL settings, services, service chains, security policies, and topologies. It also captures all external dependencies those objects reference such as datagroups with their records, custom URL categories, monitors, profiles, cipher groups, iRules, and cert/key names.
 
