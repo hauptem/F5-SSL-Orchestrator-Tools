@@ -45,7 +45,7 @@ The tool handles the details that make these operations error-prone when done ma
   
 ### PowerShell Version
 
-- PowerShell 5.1 or later
+- Windows PowerShell 5.1 (Desktop edition). PowerShell 7 (`pwsh`) is not supported: the script relies on `ServicePointManager.CertificatePolicy` to accept self-signed BIG-IP management certificates, which PowerShell 7 ignores, so it exits with instructions if launched there
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
 - Note: PowerShell works fast even with 20k URL records - just set API_TIMEOUT accordingly for large datasets
@@ -69,8 +69,8 @@ chmod +x /shared/scripts/dgcat-admin.sh
 
 ```powershell
 # Copy to a directory on your Windows management host
-# Run
-.\dgcat-admin.ps1
+# Run under Windows PowerShell 5.1 (not pwsh)
+powershell.exe -File .\dgcat-admin.ps1
 ```
 
 ## Documentation
