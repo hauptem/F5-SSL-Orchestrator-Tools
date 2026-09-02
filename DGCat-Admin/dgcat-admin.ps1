@@ -66,8 +66,8 @@ $script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol", "sys_APM_MS_Off
 $script:PROTECTED_FOLDERS = @("appsvcs", "ServiceDiscovery")
 
 # tmsh passthrough chunk size (records per request)
-# Merge-mode adds and deletes ride in the request URI; keep each request
-# well under URI limits on restjavad and the .NET client
+# tmsh Modify and Merge adds/deletes ride in the request URI; keep each
+# request well under URI limits on restjavad and the .NET client
 $script:TMSH_CHUNK_SIZE = 500
 
 # CSV preview lines
@@ -3523,8 +3523,9 @@ function Invoke-ExportDatagroup {
     }
     
     Write-LogStep "Exporting datagroup..."
-    # Verified single GET - the record helper returns an empty set on a
-    # failed read, which would export as a header-only file reporting 0 records
+    # Verified single GET - see Backup-Datagroup. The record helper returns
+    # an empty set on a failed read, which would export as a header-only
+    # file reporting 0 records
     $objectPath = Get-DatagroupPath -Partition $partition -Name $dgName -SubPath $dgSubPath
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
     if (-not $result.Success) {

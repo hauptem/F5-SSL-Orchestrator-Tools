@@ -48,8 +48,8 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
 
 # tmsh passthrough chunk size (records per request)
-# Merge-mode adds and deletes ride in the request URI; keep each request
-# well under URI limits on restjavad and curl
+# tmsh Modify and Merge adds/deletes ride in the request URI; keep each
+# request well under URI limits on restjavad and curl
 TMSH_CHUNK_SIZE=500
 
 # Partitions to manage (comma-separated, no spaces)
@@ -2129,10 +2129,10 @@ deploy_internal_datagroup_to_host() {
         
         # Additions first
         if [ "${additions_json}" != "[]" ] && [ -n "${additions_json}" ]; then
-            local add_tmsh
-            add_tmsh=$(echo "${additions_json}" | jq -r '.[] | .name + "|" + (.data // "")')
-            if [ -n "${add_tmsh}" ]; then
-                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${subpath}"; then
+            local add_records
+            add_records=$(echo "${additions_json}" | jq -r '.[] | .name + "|" + (.data // "")')
+            if [ -n "${add_records}" ]; then
+                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_records}" "${subpath}"; then
                     echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Adding records${NC}"
                     merge_errors=$((merge_errors + 1))
                 fi
@@ -2141,13 +2141,9 @@ deploy_internal_datagroup_to_host() {
         
         # Deletions second
         if [ -n "${deletions_list}" ]; then
-            local del_tmsh
-            del_tmsh="${deletions_list}"
-            if [ -n "${del_tmsh}" ]; then
-                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${subpath}"; then
-                    echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Deleting records${NC}"
-                    merge_errors=$((merge_errors + 1))
-                fi
+            if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${deletions_list}" "${subpath}"; then
+                echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Deleting records${NC}"
+                merge_errors=$((merge_errors + 1))
             fi
         fi
         
@@ -5825,8 +5821,8 @@ editor_submenu() {
                             
                             # Additions first
                             if [ ${#additions[@]} -gt 0 ]; then
-                                local add_tmsh
-                                add_tmsh=$(
+                                local add_records
+                                add_records=$(
                                     for add_key in "${additions[@]}"; do
                                         # Look up value from working arrays
                                         local add_val=""
@@ -5839,7 +5835,7 @@ editor_submenu() {
                                         echo "${add_key}|${add_val}"
                                     done
                                 )
-                                if add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${dg_subpath}"; then
+                                if add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_records}" "${dg_subpath}"; then
                                     log_ok "${#additions[@]} record(s) added."
                                 else
                                     log_error "Failed to add records. HTTP ${API_HTTP_CODE}"
@@ -5852,9 +5848,9 @@ editor_submenu() {
                             
                             # Deletions second
                             if [ ${#deletions[@]} -gt 0 ]; then
-                                local del_tmsh
-                                del_tmsh=$(printf '%s\n' "${deletions[@]}")
-                                if delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${dg_subpath}"; then
+                                local del_keys
+                                del_keys=$(printf '%s\n' "${deletions[@]}")
+                                if delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_keys}" "${dg_subpath}"; then
                                     log_ok "${#deletions[@]} record(s) deleted."
                                 else
                                     log_error "Failed to delete records. HTTP ${API_HTTP_CODE}"
@@ -6305,8 +6301,8 @@ editor_submenu() {
                         # tmsh modify: add then delete
                         local inc_errors=0
                         if [ ${#deploy_additions[@]} -gt 0 ]; then
-                            local add_tmsh
-                            add_tmsh=$(
+                            local add_records
+                            add_records=$(
                                 for add_key in "${deploy_additions[@]}"; do
                                     local add_val=""
                                     for ((vi=0; vi<${#working_keys[@]}; vi++)); do
@@ -6318,17 +6314,17 @@ editor_submenu() {
                                     echo "${add_key}|${add_val}"
                                 done
                             )
-                            if [ -n "${add_tmsh}" ]; then
-                                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${dg_subpath}"; then
+                            if [ -n "${add_records}" ]; then
+                                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_records}" "${dg_subpath}"; then
                                     inc_errors=$((inc_errors + 1))
                                 fi
                             fi
                         fi
                         if [ ${#deploy_deletions[@]} -gt 0 ]; then
-                            local del_tmsh
-                            del_tmsh=$(printf '%s\n' "${deploy_deletions[@]}")
-                            if [ -n "${del_tmsh}" ]; then
-                                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${dg_subpath}"; then
+                            local del_keys
+                            del_keys=$(printf '%s\n' "${deploy_deletions[@]}")
+                            if [ -n "${del_keys}" ]; then
+                                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_keys}" "${dg_subpath}"; then
                                     inc_errors=$((inc_errors + 1))
                                 fi
                             fi
