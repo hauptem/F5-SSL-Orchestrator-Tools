@@ -65,6 +65,11 @@ $script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol", "sys_APM_MS_Off
 # segment only; AS3 nests its tenants below its own folder
 $script:PROTECTED_FOLDERS = @("appsvcs", "ServiceDiscovery")
 
+# tmsh passthrough chunk size (records per request)
+# Merge-mode adds and deletes ride in the request URI; keep each request
+# well under URI limits on restjavad and the .NET client
+$script:TMSH_CHUNK_SIZE = 500
+
 # CSV preview lines
 $script:PREVIEW_LINES = 5
 
@@ -980,62 +985,81 @@ function Test-IncrementalResult {
 }
 
 # Add records to datagroup incrementally using ?options=records add
-# VerifyKeys enables read-back confirmation when the request reports failure;
-# omitting it preserves the original take-the-response-at-face-value behavior
+# Records are sent in chunks of TMSH_CHUNK_SIZE; the options string rides in
+# the request URI. Each chunk that reports failure is read back before it is
+# counted as failed: the tmsh passthrough can report an error after TMOS has
+# already applied the change, and a re-add of an existing key is rejected
+# Returns: $true only if every chunk was applied or confirmed present
 function Add-DatagroupRecordsIncremental {
-    param([string]$Partition, [string]$Name, [string]$TmshRecords, [string]$SubPath = "", [string[]]$VerifyKeys = @())
+    param([string]$Partition, [string]$Name, [string[]]$Keys, [string[]]$Values, [string]$SubPath = "")
     
     $script:IncrementalErrorMsg = ""
     $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
-    $options = [System.Uri]::EscapeDataString("records add {$TmshRecords }")
     # tmsh resolves the object from the body rather than the URI, so a folder
     # object has to declare subPath here too or the passthrough is applied
     # against the partition root
     $body = @{ name = $Name; partition = $Partition }
     if (-not [string]::IsNullOrWhiteSpace($SubPath)) { $body.subPath = $SubPath.Trim('/') }
     
-    Write-LogDebug "TMSH records add {$TmshRecords }"
-    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/${objectPath}?options=$options" -Body $body
-    if ($result.Success) { return $true }
-    
-    $webNote = $(if ($result.WebStatus) { " / $($result.WebStatus)" } else { "" })
-    $script:IncrementalErrorMsg = "HTTP $($result.StatusCode)$webNote - $($result.Error)"
-    if ($VerifyKeys.Count -eq 0) { return $false }
-    
-    if (Test-IncrementalResult -Partition $Partition -Name $Name -Keys $VerifyKeys -Expect "present" -SubPath $SubPath) {
-        Write-LogWarn "Record add reported an error but the records are present on the device."
-        Write-LogWarn "  $($script:IncrementalErrorMsg)"
-        return $true
+    $chunk = [math]::Max(1, [int]$script:TMSH_CHUNK_SIZE)
+    for ($start = 0; $start -lt $Keys.Count; $start += $chunk) {
+        $end = [math]::Min($start + $chunk - 1, $Keys.Count - 1)
+        $chunkKeys = @($Keys[$start..$end])
+        $chunkValues = @($Values[$start..$end])
+        $tmshRecords = ConvertTo-TmshRecordsAdd -Keys $chunkKeys -Values $chunkValues
+        if (-not $tmshRecords) { continue }
+        
+        $options = [System.Uri]::EscapeDataString("records add {$tmshRecords }")
+        Write-LogDebug "TMSH records add {$tmshRecords }"
+        $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/${objectPath}?options=$options" -Body $body
+        if ($result.Success) { continue }
+        
+        $webNote = $(if ($result.WebStatus) { " / $($result.WebStatus)" } else { "" })
+        $script:IncrementalErrorMsg = "HTTP $($result.StatusCode)$webNote - $($result.Error)"
+        if (Test-IncrementalResult -Partition $Partition -Name $Name -Keys $chunkKeys -Expect "present" -SubPath $SubPath) {
+            Write-LogWarn "Record add reported an error but the records are present on the device."
+            Write-LogWarn "  $($script:IncrementalErrorMsg)"
+            continue
+        }
+        return $false
     }
-    return $false
+    return $true
 }
 
 # Delete records from datagroup incrementally using ?options=records delete
-# VerifyKeys enables read-back confirmation when the request reports failure
+# Chunked and read-back verified as in Add-DatagroupRecordsIncremental
+# Returns: $true only if every chunk was applied or confirmed absent
 function Remove-DatagroupRecordsIncremental {
-    param([string]$Partition, [string]$Name, [string]$TmshKeys, [string]$SubPath = "", [string[]]$VerifyKeys = @())
+    param([string]$Partition, [string]$Name, [string[]]$Keys, [string]$SubPath = "")
     
     $script:IncrementalErrorMsg = ""
     $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
-    $options = [System.Uri]::EscapeDataString("records delete {$TmshKeys }")
     # See Add-DatagroupRecordsIncremental: tmsh resolves from the body
     $body = @{ name = $Name; partition = $Partition }
     if (-not [string]::IsNullOrWhiteSpace($SubPath)) { $body.subPath = $SubPath.Trim('/') }
     
-    Write-LogDebug "TMSH records delete {$TmshKeys }"
-    $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/${objectPath}?options=$options" -Body $body
-    if ($result.Success) { return $true }
-    
-    $webNote = $(if ($result.WebStatus) { " / $($result.WebStatus)" } else { "" })
-    $script:IncrementalErrorMsg = "HTTP $($result.StatusCode)$webNote - $($result.Error)"
-    if ($VerifyKeys.Count -eq 0) { return $false }
-    
-    if (Test-IncrementalResult -Partition $Partition -Name $Name -Keys $VerifyKeys -Expect "absent" -SubPath $SubPath) {
-        Write-LogWarn "Record delete reported an error but the records are gone from the device."
-        Write-LogWarn "  $($script:IncrementalErrorMsg)"
-        return $true
+    $chunk = [math]::Max(1, [int]$script:TMSH_CHUNK_SIZE)
+    for ($start = 0; $start -lt $Keys.Count; $start += $chunk) {
+        $end = [math]::Min($start + $chunk - 1, $Keys.Count - 1)
+        $chunkKeys = @($Keys[$start..$end])
+        $tmshKeys = ConvertTo-TmshRecordsDelete -Keys $chunkKeys
+        if (-not $tmshKeys) { continue }
+        
+        $options = [System.Uri]::EscapeDataString("records delete {$tmshKeys }")
+        Write-LogDebug "TMSH records delete {$tmshKeys }"
+        $result = Invoke-F5Patch -Endpoint "/mgmt/tm/ltm/data-group/internal/${objectPath}?options=$options" -Body $body
+        if ($result.Success) { continue }
+        
+        $webNote = $(if ($result.WebStatus) { " / $($result.WebStatus)" } else { "" })
+        $script:IncrementalErrorMsg = "HTTP $($result.StatusCode)$webNote - $($result.Error)"
+        if (Test-IncrementalResult -Partition $Partition -Name $Name -Keys $chunkKeys -Expect "absent" -SubPath $SubPath) {
+            Write-LogWarn "Record delete reported an error but the records are gone from the device."
+            Write-LogWarn "  $($script:IncrementalErrorMsg)"
+            continue
+        }
+        return $false
     }
-    return $false
+    return $true
 }
 
 # -----------------------------------------------------------------------------
@@ -1183,7 +1207,12 @@ function Test-UrlCategoryDbAvailable {
         $script:UrlCategoryDbCached = "yes"
         return $true
     }
-    $script:UrlCategoryDbCached = "no"
+    # Only a definitive 4xx (module not provisioned) is cached; a timeout or
+    # 5xx is retried on the next call rather than disabling URL features for
+    # the whole session
+    if ($result.StatusCode -ge 400 -and $result.StatusCode -lt 500) {
+        $script:UrlCategoryDbCached = "no"
+    }
     return $false
 }
 
@@ -1824,23 +1853,17 @@ function Deploy-DatagroupToHost {
                 $addKeys += $rec.name
                 $addValues += $(if ($rec.data) { $rec.data } else { "" })
             }
-            $addTmsh = ConvertTo-TmshRecordsAdd -Keys $addKeys -Values $addValues
-            if ($addTmsh) {
-                if (-not (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshRecords $addTmsh -SubPath $SubPath -VerifyKeys $addKeys)) {
-                    Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Adding records" -ForegroundColor White
-                    $mergeErrors++
-                }
+            if (-not (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -Keys $addKeys -Values $addValues -SubPath $SubPath)) {
+                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Adding records" -ForegroundColor White
+                $mergeErrors++
             }
         }
         
         # Deletions second
         if ($DeletionsList.Count -gt 0) {
-            $delTmsh = ConvertTo-TmshRecordsDelete -Keys $DeletionsList
-            if ($delTmsh) {
-                if (-not (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshKeys $delTmsh -SubPath $SubPath -VerifyKeys $DeletionsList)) {
-                    Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Deleting records" -ForegroundColor White
-                    $mergeErrors++
-                }
+            if (-not (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -Keys $DeletionsList -SubPath $SubPath)) {
+                Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Deleting records" -ForegroundColor White
+                $mergeErrors++
             }
         }
         
@@ -3486,7 +3509,8 @@ function Invoke-ExportDatagroup {
     # Folder is folded into the scope token so exports of two same-named
     # datagroups in different folders do not overwrite each other
     $safePartition = Get-DatagroupScopeToken -Partition $partition -SubPath $dgSubPath
-    $defaultPath = Join-Path $script:BACKUP_DIR "${safePartition}_${dgName}_internal_$($script:Timestamp).csv"
+    $ts = Get-Date -Format "yyyyMMdd_HHmmss"
+    $defaultPath = Join-Path $script:BACKUP_DIR "${safePartition}_${dgName}_internal_${ts}.csv"
     Write-Host ""
     $exportPath = Read-Host "  Export path [$defaultPath]"
     if ([string]::IsNullOrWhiteSpace($exportPath)) { $exportPath = $defaultPath }
@@ -3499,8 +3523,23 @@ function Invoke-ExportDatagroup {
     }
     
     Write-LogStep "Exporting datagroup..."
-    $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
-    $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
+    # Verified single GET - the record helper returns an empty set on a
+    # failed read, which would export as a header-only file reporting 0 records
+    $objectPath = Get-DatagroupPath -Partition $partition -Name $dgName -SubPath $dgSubPath
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
+    if (-not $result.Success) {
+        Write-LogError "Could not read datagroup. HTTP $($result.StatusCode) - $($result.Error)"
+        Write-LogError "Nothing exported."
+        Wait-EnterKey
+        return
+    }
+    $dgType = $result.Response.type
+    $records = @()
+    if ($result.Response.records) {
+        foreach ($rec in $result.Response.records) {
+            $records += @{ Key = $rec.name; Value = $(if ($rec.data) { $rec.data } else { "" }) }
+        }
+    }
     
     $lines = @(
         "# Datagroup Export: $(Get-DatagroupDisplayPath -Partition $partition -Name $dgName -SubPath $dgSubPath)",
@@ -3590,7 +3629,8 @@ function Invoke-ExportUrlCategory {
     Write-LogInfo "URLs in category: $urlCount"
     
     $safeName = $selectedCategory -replace '[^a-zA-Z0-9_-]', '_'
-    $defaultPath = Join-Path $script:BACKUP_DIR "urlcat_${safeName}_$($script:Timestamp).csv"
+    $ts = Get-Date -Format "yyyyMMdd_HHmmss"
+    $defaultPath = Join-Path $script:BACKUP_DIR "urlcat_${safeName}_${ts}.csv"
     Write-Host ""
     $exportPath = Read-Host "  Export path [$defaultPath]"
     if ([string]::IsNullOrWhiteSpace($exportPath)) { $exportPath = $defaultPath }
@@ -3785,8 +3825,10 @@ function Invoke-FleetLookingGlass {
     
     $origHost = $script:RemoteHost
     
-    $entryHosts = @{}       # entry -> list of hosts
-    $entryValues = @{}      # entry -> @{ host -> value } (datagroups only)
+    # Ordinal maps: BIG-IP datagroup keys and URL names are case-sensitive.
+    # A @{} literal folds case and would report Foo and foo as one entry
+    $entryHosts = [System.Collections.Hashtable]::new()    # entry -> list of hosts
+    $entryValues = [System.Collections.Hashtable]::new()   # entry -> @{ host -> value } (datagroups only)
     $pulledHosts = @()
     $hostCounts = @{}
     $hostSites = @{}
@@ -3883,7 +3925,7 @@ function Invoke-FleetLookingGlass {
     # Classify each entry: consistent (same key AND value everywhere),
     # missing (absent on some hosts), valuedrift (present everywhere but
     # values differ - datagroups only; URL categories have no values)
-    $entryStatus = @{}
+    $entryStatus = [System.Collections.Hashtable]::new()
     foreach ($entry in $entryHosts.Keys) {
         if ($entryHosts[$entry].Count -lt $totalPulled) {
             $entryStatus[$entry] = "missing"
@@ -4546,27 +4588,30 @@ function Invoke-EditorSubmenu {
         Write-Host "  ${entryLabel}: $($workingKeys.Count)" -ForegroundColor White
         if (Test-PendingChanges) { Write-Host "  (Pending changes - not yet applied)" -ForegroundColor Yellow }
         
-        # Build display entries
-        $displayEntries = @()
+        # Build display entries. Each item carries the working key alongside
+        # its rendered text so a row number resolves to the key directly,
+        # rather than by splitting the rendered "key|value" string (a key
+        # containing '|' would resolve to the wrong record)
+        $displayEntries = [System.Collections.Generic.List[object]]::new($workingKeys.Count)
         for ($i = 0; $i -lt $workingKeys.Count; $i++) {
+            $text = [string]$workingKeys[$i]
             if ($EditType -eq "datagroup" -and $workingValues[$i]) {
-                $displayEntries += "$($workingKeys[$i])|$($workingValues[$i])"
-            } else {
-                $displayEntries += $workingKeys[$i]
+                $text = "$($workingKeys[$i])|$($workingValues[$i])"
             }
+            $displayEntries.Add([pscustomobject]@{ Key = [string]$workingKeys[$i]; Text = $text })
         }
         
         # Apply filter
         $filteredEntries = @($displayEntries)
         if ($currentFilter) {
-            $filteredEntries = @($displayEntries | Where-Object { $_ -match [regex]::Escape($currentFilter) })
+            $filteredEntries = @($displayEntries | Where-Object { $_.Text -match [regex]::Escape($currentFilter) })
         }
         
         # Apply sort
         if ($currentSort -eq "asc") {
-            $sortedEntries = @($filteredEntries | Sort-Object)
+            $sortedEntries = @($filteredEntries | Sort-Object -Property Text)
         } elseif ($currentSort -eq "desc") {
-            $sortedEntries = @($filteredEntries | Sort-Object -Descending)
+            $sortedEntries = @($filteredEntries | Sort-Object -Property Text -Descending)
         } else {
             $sortedEntries = @($filteredEntries)
         }
@@ -4590,7 +4635,7 @@ function Invoke-EditorSubmenu {
             Write-Host "  (No matching entries)" -ForegroundColor White
         } else {
             for ($i = $startIdx; $i -le $endIdx; $i++) {
-                $entry = $sortedEntries[$i]
+                $entry = $sortedEntries[$i].Text
                 $displayEntry = $(if ($entry.Length -gt 66) { $entry.Substring(0, 63) + "..." } else { $entry })
                 Write-Host ("  {0,-6}  {1,-66}" -f ($i + 1), $displayEntry) -ForegroundColor White
             }
@@ -4701,14 +4746,15 @@ function Invoke-EditorSubmenu {
                 if ([string]::IsNullOrWhiteSpace($editInput) -or $editInput -eq 'q') { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
                 
                 # A number indexes the filtered and sorted view the operator can
-                # see, not the underlying working array
+                # see, not the underlying working array. An exact key match is
+                # checked first so a numeric key in an integer datagroup is
+                # reachable by key rather than always read as a row number
                 $editKey = ""
                 $num = 0
-                if ([int]::TryParse($editInput, [ref]$num)) {
-                    if ($num -ge 1 -and $num -le $totalCount) {
-                        $entry = $sortedEntries[$num - 1]
-                        $editKey = $(if ($EditType -eq "datagroup" -and $entry.Contains('|')) { ($entry -split '\|')[0] } else { $entry })
-                    }
+                if ($workingKeys -ccontains $editInput) {
+                    $editKey = $editInput
+                } elseif ([int]::TryParse($editInput, [ref]$num)) {
+                    if ($num -ge 1 -and $num -le $totalCount) { $editKey = $sortedEntries[$num - 1].Key }
                 } else {
                     $editKey = $editInput
                 }
@@ -4759,12 +4805,17 @@ function Invoke-EditorSubmenu {
                 } else {
                     # URL categories carry no value; an edit replaces the URL
                     $urlInput = Read-Host "  New domain or URL [$currentKey]"
-                    if ([string]::IsNullOrWhiteSpace($urlInput)) { $urlInput = $currentKey }
-                    
-                    $urlError = Test-UrlEntryFormat -Entry $urlInput
-                    if ($urlError) { Write-LogError "Invalid entry: $urlError."; Wait-EnterKey; continue }
-                    $newKey = Format-DomainForUrlCategory -Domain $urlInput
                     $newValue = ""
+                    if ([string]::IsNullOrWhiteSpace($urlInput) -or $urlInput -ceq $currentKey) {
+                        # Keep the stored entry verbatim. Normalizing it would
+                        # strip a path or rewrite http:// and stage a rename
+                        # the operator did not ask for
+                        $newKey = $currentKey
+                    } else {
+                        $urlError = Test-UrlEntryFormat -Entry $urlInput
+                        if ($urlError) { Write-LogError "Invalid entry: $urlError."; Wait-EnterKey; continue }
+                        $newKey = Format-DomainForUrlCategory -Domain $urlInput
+                    }
                 }
                 
                 if ($newKey -ceq $currentKey -and $newValue -ceq $currentValue) {
@@ -4798,14 +4849,13 @@ function Invoke-EditorSubmenu {
                 $delInput = Read-Host "  Enter entry number or key to delete (or 'q' to cancel)"
                 if ([string]::IsNullOrWhiteSpace($delInput) -or $delInput -eq 'q') { Write-LogInfo "Cancelled."; Wait-EnterKey; continue }
                 
+                # Exact key first, then row number - see the edit handler
                 $delKey = ""
                 $num = 0
-                if ([int]::TryParse($delInput, [ref]$num)) {
-                    # Lookup from filtered/sorted view
-                    if ($num -ge 1 -and $num -le $totalCount) {
-                        $entry = $sortedEntries[$num - 1]
-                        $delKey = $(if ($EditType -eq "datagroup" -and $entry.Contains('|')) { ($entry -split '\|')[0] } else { $entry })
-                    }
+                if ($workingKeys -ccontains $delInput) {
+                    $delKey = $delInput
+                } elseif ([int]::TryParse($delInput, [ref]$num)) {
+                    if ($num -ge 1 -and $num -le $totalCount) { $delKey = $sortedEntries[$num - 1].Key }
                 } else {
                     $delKey = $delInput
                 }
@@ -4955,8 +5005,7 @@ function Invoke-EditorSubmenu {
                                     $addKeys += $addKey
                                     $addValues += $(if ($idx -ge 0) { $workingValues[$idx] } else { "" })
                                 }
-                                $addTmsh = ConvertTo-TmshRecordsAdd -Keys $addKeys -Values $addValues
-                                if (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshRecords $addTmsh -SubPath $DgSubPath -VerifyKeys $addKeys) {
+                                if (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -Keys $addKeys -Values $addValues -SubPath $DgSubPath) {
                                     Write-LogOk "$($changes.Additions.Count) record(s) added."
                                 } else {
                                     Write-LogError "Failed to add records."
@@ -4967,8 +5016,7 @@ function Invoke-EditorSubmenu {
                             
                             # Deletions second
                             if ($changes.Deletions.Count -gt 0) {
-                                $delTmsh = ConvertTo-TmshRecordsDelete -Keys $changes.Deletions
-                                if (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -TmshKeys $delTmsh -SubPath $DgSubPath -VerifyKeys $changes.Deletions) {
+                                if (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -Keys $changes.Deletions -SubPath $DgSubPath) {
                                     Write-LogOk "$($changes.Deletions.Count) record(s) deleted."
                                 } else {
                                     Write-LogError "Failed to delete records."
@@ -5014,8 +5062,13 @@ function Invoke-EditorSubmenu {
                         if (-not (Add-UrlCategoryEntriesRemote -Name $CatName -NewUrls $addObjects)) { $applyErrors++ }
                     }
                     
-                    if ($applyErrors -eq 0) { Write-LogOk "Changes applied successfully." }
-                    else { Write-LogWarn "Changes applied with $applyErrors error(s)." }
+                    if ($applyErrors -gt 0) {
+                        # Pending state is kept so the failed half can be retried
+                        Write-LogError "Changes applied with $applyErrors error(s). Unapplied changes remain pending."
+                        Wait-EnterKey
+                        continue
+                    }
+                    Write-LogOk "Changes applied successfully."
                 }
                 
                 # Update original arrays

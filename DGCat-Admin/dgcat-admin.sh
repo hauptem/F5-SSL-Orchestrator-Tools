@@ -47,6 +47,11 @@ API_REQUEST_TIMEOUT=60
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOGFILE="${BACKUP_DIR}/dgcat-admin-${TIMESTAMP}.log"
 
+# tmsh passthrough chunk size (records per request)
+# Merge-mode adds and deletes ride in the request URI; keep each request
+# well under URI limits on restjavad and curl
+TMSH_CHUNK_SIZE=500
+
 # Partitions to manage (comma-separated, no spaces)
 # Add additional partitions as needed, e.g., "Common,SSLO_Partition,DMZ"
 # WARNING: Only include partitions you intend to manage with this tool
@@ -1237,78 +1242,111 @@ test_incremental_result() {
 }
 
 # Add records to datagroup incrementally using ?options=records add
-# Args: partition, name, tmsh_records (from build_tmsh_records_add), [subpath], [verify_keys]
-# tmsh resolves the target from the request body - subPath goes in body and
-# URI. verify_keys (newline list) enables the read-back check
-# Returns: 0 on success, 1 on failure; sets INCREMENTAL_ERROR_MSG on failure
+# Args: partition, name, records (key|value lines), [subpath]
+# Records are sent in chunks of TMSH_CHUNK_SIZE; the options string rides in
+# the request URI. tmsh resolves the target from the request body - subPath
+# goes in body and URI. A chunk that reports failure is read back before it
+# is counted as failed: the passthrough can report an error after TMOS has
+# applied the change, and a re-add of an existing key is rejected
+# Returns: 0 if every chunk was applied or confirmed present, 1 otherwise;
+# sets INCREMENTAL_ERROR_MSG on failure
 add_datagroup_records_incremental() {
     local partition="$1"
     local dg_name="$2"
-    local tmsh_records="$3"
+    local records="$3"
     local subpath="${4:-}"
-    local verify_keys="${5:-}"
     
     INCREMENTAL_ERROR_MSG=""
-    
-    local options
-    options=$(urlencode_options "records add {${tmsh_records} }")
-    log_debug "TMSH records add {${tmsh_records} }"
     
     local body="{\"name\":\"${dg_name}\",\"partition\":\"${partition}\"}"
     if [ -n "${subpath}" ]; then
         body="{\"name\":\"${dg_name}\",\"partition\":\"${partition}\",\"subPath\":\"${subpath}\"}"
     fi
+    local endpoint="/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")"
     
-    if api_patch "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")?options=${options}" "${body}"; then
-        return 0
-    fi
+    local chunk_size="${TMSH_CHUNK_SIZE:-500}"
+    [ "${chunk_size}" -lt 1 ] 2>/dev/null && chunk_size=1
     
-    INCREMENTAL_ERROR_MSG=$(echo "${API_RESPONSE}" | jq -r '.message // empty' 2>/dev/null || true)
-    
-    # Read back and let the device state settle the disagreement
-    if [ -n "${verify_keys}" ]; then
-        if test_incremental_result "${partition}" "${dg_name}" "${subpath}" "add" "${verify_keys}"; then
-            log_warn "Device reported an error but the records are present - treating as applied."
-            return 0
+    local total
+    total=$(printf '%s\n' "${records}" | grep -c . || true)
+    local start=1
+    while [ "${start}" -le "${total}" ]; do
+        local chunk chunk_keys tmsh_records
+        chunk=$(printf '%s\n' "${records}" | grep . | sed -n "${start},$((start + chunk_size - 1))p")
+        chunk_keys=$(printf '%s\n' "${chunk}" | cut -d'|' -f1)
+        tmsh_records=$(printf '%s\n' "${chunk}" | build_tmsh_records_add)
+        start=$((start + chunk_size))
+        [ -z "${tmsh_records}" ] && continue
+        
+        local options
+        options=$(urlencode_options "records add {${tmsh_records} }")
+        log_debug "TMSH records add {${tmsh_records} }"
+        
+        if api_patch "${endpoint}?options=${options}" "${body}"; then
+            continue
         fi
-    fi
-    return 1
+        
+        INCREMENTAL_ERROR_MSG=$(echo "${API_RESPONSE}" | jq -r '.message // empty' 2>/dev/null || true)
+        
+        # Read back and let the device state settle the disagreement
+        if test_incremental_result "${partition}" "${dg_name}" "${subpath}" "add" "${chunk_keys}"; then
+            log_warn "Device reported an error but the records are present - treating as applied."
+            continue
+        fi
+        return 1
+    done
+    return 0
 }
 
 # Delete records from datagroup incrementally using ?options=records delete
-# Args: partition, name, tmsh_keys (from build_tmsh_records_delete), [subpath], [verify_keys]
-# Returns: 0 on success, 1 on failure; sets INCREMENTAL_ERROR_MSG on failure
+# Args: partition, name, keys (one per line), [subpath]
+# Chunked and read-back verified as in add_datagroup_records_incremental
+# Returns: 0 if every chunk was applied or confirmed absent, 1 otherwise;
+# sets INCREMENTAL_ERROR_MSG on failure
 delete_datagroup_records_incremental() {
     local partition="$1"
     local dg_name="$2"
-    local tmsh_keys="$3"
+    local keys="$3"
     local subpath="${4:-}"
-    local verify_keys="${5:-}"
     
     INCREMENTAL_ERROR_MSG=""
-    
-    local options
-    options=$(urlencode_options "records delete {${tmsh_keys} }")
-    log_debug "TMSH records delete {${tmsh_keys} }"
     
     local body="{\"name\":\"${dg_name}\",\"partition\":\"${partition}\"}"
     if [ -n "${subpath}" ]; then
         body="{\"name\":\"${dg_name}\",\"partition\":\"${partition}\",\"subPath\":\"${subpath}\"}"
     fi
+    local endpoint="/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")"
     
-    if api_patch "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${subpath}")?options=${options}" "${body}"; then
-        return 0
-    fi
+    local chunk_size="${TMSH_CHUNK_SIZE:-500}"
+    [ "${chunk_size}" -lt 1 ] 2>/dev/null && chunk_size=1
     
-    INCREMENTAL_ERROR_MSG=$(echo "${API_RESPONSE}" | jq -r '.message // empty' 2>/dev/null || true)
-    
-    if [ -n "${verify_keys}" ]; then
-        if test_incremental_result "${partition}" "${dg_name}" "${subpath}" "delete" "${verify_keys}"; then
-            log_warn "Device reported an error but the records are gone - treating as applied."
-            return 0
+    local total
+    total=$(printf '%s\n' "${keys}" | grep -c . || true)
+    local start=1
+    while [ "${start}" -le "${total}" ]; do
+        local chunk_keys tmsh_keys
+        chunk_keys=$(printf '%s\n' "${keys}" | grep . | sed -n "${start},$((start + chunk_size - 1))p")
+        tmsh_keys=$(printf '%s\n' "${chunk_keys}" | build_tmsh_records_delete)
+        start=$((start + chunk_size))
+        [ -z "${tmsh_keys}" ] && continue
+        
+        local options
+        options=$(urlencode_options "records delete {${tmsh_keys} }")
+        log_debug "TMSH records delete {${tmsh_keys} }"
+        
+        if api_patch "${endpoint}?options=${options}" "${body}"; then
+            continue
         fi
-    fi
-    return 1
+        
+        INCREMENTAL_ERROR_MSG=$(echo "${API_RESPONSE}" | jq -r '.message // empty' 2>/dev/null || true)
+        
+        if test_incremental_result "${partition}" "${dg_name}" "${subpath}" "delete" "${chunk_keys}"; then
+            log_warn "Device reported an error but the records are gone - treating as applied."
+            continue
+        fi
+        return 1
+    done
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -2092,9 +2130,9 @@ deploy_internal_datagroup_to_host() {
         # Additions first
         if [ "${additions_json}" != "[]" ] && [ -n "${additions_json}" ]; then
             local add_tmsh
-            add_tmsh=$(echo "${additions_json}" | jq -r '.[] | .name + "|" + (.data // "")' | build_tmsh_records_add)
+            add_tmsh=$(echo "${additions_json}" | jq -r '.[] | .name + "|" + (.data // "")')
             if [ -n "${add_tmsh}" ]; then
-                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${subpath}" "$(echo "${additions_json}" | jq -r '.[].name' 2>/dev/null || true)"; then
+                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${subpath}"; then
                     echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Adding records${NC}"
                     merge_errors=$((merge_errors + 1))
                 fi
@@ -2104,9 +2142,9 @@ deploy_internal_datagroup_to_host() {
         # Deletions second
         if [ -n "${deletions_list}" ]; then
             local del_tmsh
-            del_tmsh=$(echo "${deletions_list}" | build_tmsh_records_delete)
+            del_tmsh="${deletions_list}"
             if [ -n "${del_tmsh}" ]; then
-                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${subpath}" "${deletions_list}"; then
+                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${subpath}"; then
                     echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Deleting records${NC}"
                     merge_errors=$((merge_errors + 1))
                 fi
@@ -4184,7 +4222,9 @@ menu_export_datagroup() {
     local export_token
     export_token=$(get_datagroup_scope_token "${dg_name}" "${dg_subpath}")
     export_token=$(echo "${export_token}" | sed 's/\//_/g')
-    local default_path="${BACKUP_DIR}/${safe_partition}_${export_token}_${dg_class}_${TIMESTAMP}.csv"
+    local export_ts
+    export_ts=$(date +"%Y%m%d_%H%M%S")
+    local default_path="${BACKUP_DIR}/${safe_partition}_${export_token}_${dg_class}_${export_ts}.csv"
     echo ""
     read -rp "  Export path [${default_path}]: " export_path
     export_path="${export_path:-${default_path}}"
@@ -4203,8 +4243,18 @@ menu_export_datagroup() {
     
     # Export
     log_step "Exporting ${dg_class} datagroup..."
-    local dg_type
-    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}")
+    # Verified single GET - the record helper yields nothing on a failed
+    # read, which would export as a header-only file (and under errexit a
+    # failed pipeline inside the redirected group would abort the tool)
+    if ! api_get "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${dg_name}" "${dg_subpath}")"; then
+        log_error "Could not read datagroup. HTTP ${API_HTTP_CODE}"
+        log_error "Nothing exported."
+        press_enter_to_continue
+        return
+    fi
+    local dg_type export_records
+    dg_type=$(echo "${API_RESPONSE}" | jq -r '.type // empty' 2>/dev/null || true)
+    export_records=$(echo "${API_RESPONSE}" | jq -r '.records // [] | .[] | "\(.name)|\(.data // "")"' 2>/dev/null || true)
     
     {
         echo "# Datagroup Export: $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")"
@@ -4214,9 +4264,11 @@ menu_export_datagroup() {
         echo "# Exported: $(date)"
         echo "# Format: key,value"
         echo "#"
-        get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" | while IFS='|' read -r key value; do
-            echo "${key},${value}"
-        done
+        if [ -n "${export_records}" ]; then
+            printf '%s\n' "${export_records}" | while IFS='|' read -r key value; do
+                echo "${key},${value}"
+            done
+        fi
     } > "${export_path}"
     
     if [ -f "${export_path}" ]; then
@@ -4335,7 +4387,9 @@ menu_export_url_category() {
     # Default export path
     local safe_name
     safe_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
-    local default_path="${BACKUP_DIR}/urlcat_${safe_name}_${TIMESTAMP}.csv"
+    local export_ts
+    export_ts=$(date +"%Y%m%d_%H%M%S")
+    local default_path="${BACKUP_DIR}/urlcat_${safe_name}_${export_ts}.csv"
     echo ""
     read -rp "  Export path [${default_path}]: " export_path
     export_path="${export_path:-${default_path}}"
@@ -4423,7 +4477,10 @@ url_category_db_available() {
     
     if [ ${result} -eq 0 ]; then
         URL_CATEGORY_DB_CACHED="yes"
-    else
+    elif [[ "${API_HTTP_CODE}" =~ ^4[0-9]{2}$ ]]; then
+        # Only a definitive 4xx (module not provisioned) is cached; a timeout
+        # or 5xx is retried on the next call rather than disabling URL
+        # features for the whole session
         URL_CATEGORY_DB_CACHED="no"
     fi
     return ${result}
@@ -5286,8 +5343,16 @@ editor_submenu() {
                     "desc") eview_entries=$(echo "${eview_entries}" | sort -rf) ;;
                 esac
                 
-                local edit_key=""
-                if [[ "${edit_input}" =~ ^[0-9]+$ ]]; then
+                # An exact key match is checked first so a numeric key in an
+                # integer datagroup is reachable by key rather than always
+                # read as a row number
+                local edit_key="" ek_i ek_exact=0
+                for ((ek_i=0; ek_i<${#working_keys[@]}; ek_i++)); do
+                    if [ "${working_keys[$ek_i]}" == "${edit_input}" ]; then ek_exact=1; break; fi
+                done
+                if [ ${ek_exact} -eq 1 ]; then
+                    edit_key="${edit_input}"
+                elif [[ "${edit_input}" =~ ^[0-9]+$ ]]; then
                     edit_key=$(echo "${eview_entries}" | sed -n "${edit_input}p")
                     if [ "${edit_type}" == "datagroup" ] && [[ "${edit_key}" == *"|"* ]]; then
                         edit_key=$(echo "${edit_key}" | cut -d'|' -f1)
@@ -5374,19 +5439,22 @@ editor_submenu() {
                     # URL categories carry no value; an edit replaces the URL
                     local eurl_input
                     read -rp "  New domain or URL [${ecurrent_key}]: " eurl_input
-                    if [ -z "${eurl_input}" ]; then
-                        eurl_input="${ecurrent_key}"
-                    fi
-                    
-                    local eurl_err
-                    eurl_err=$(validate_url_entry_format "${eurl_input}")
-                    if [ -n "${eurl_err}" ]; then
-                        log_error "Invalid entry: ${eurl_err}."
-                        press_enter_to_continue
-                        continue
-                    fi
-                    enew_key=$(format_domain_for_url_category "${eurl_input}")
                     enew_value=""
+                    if [ -z "${eurl_input}" ] || [ "${eurl_input}" == "${ecurrent_key}" ]; then
+                        # Keep the stored entry verbatim. Normalizing it would
+                        # strip a path or rewrite http:// and stage a rename
+                        # the operator did not ask for
+                        enew_key="${ecurrent_key}"
+                    else
+                        local eurl_err
+                        eurl_err=$(validate_url_entry_format "${eurl_input}")
+                        if [ -n "${eurl_err}" ]; then
+                            log_error "Invalid entry: ${eurl_err}."
+                            press_enter_to_continue
+                            continue
+                        fi
+                        enew_key=$(format_domain_for_url_category "${eurl_input}")
+                    fi
                 fi
                 
                 if [ "${enew_key}" == "${ecurrent_key}" ] && [ "${enew_value}" == "${ecurrent_value}" ]; then
@@ -5452,8 +5520,14 @@ editor_submenu() {
                     "desc") view_entries=$(echo "${view_entries}" | sort -rf) ;;
                 esac
                 
-                local del_key=""
-                if [[ "${del_input}" =~ ^[0-9]+$ ]]; then
+                # Exact key first, then row number - see the edit handler
+                local del_key="" dk_i dk_exact=0
+                for ((dk_i=0; dk_i<${#working_keys[@]}; dk_i++)); do
+                    if [ "${working_keys[$dk_i]}" == "${del_input}" ]; then dk_exact=1; break; fi
+                done
+                if [ ${dk_exact} -eq 1 ]; then
+                    del_key="${del_input}"
+                elif [[ "${del_input}" =~ ^[0-9]+$ ]]; then
                     # Lookup by line number from filtered/sorted view
                     del_key=$(echo "${view_entries}" | sed -n "${del_input}p")
                     # For datagroups with key|value format, extract just the key
@@ -5763,9 +5837,9 @@ editor_submenu() {
                                             fi
                                         done
                                         echo "${add_key}|${add_val}"
-                                    done | build_tmsh_records_add
+                                    done
                                 )
-                                if add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${dg_subpath}" "$(printf '%s\n' "${additions[@]}")"; then
+                                if add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${dg_subpath}"; then
                                     log_ok "${#additions[@]} record(s) added."
                                 else
                                     log_error "Failed to add records. HTTP ${API_HTTP_CODE}"
@@ -5779,8 +5853,8 @@ editor_submenu() {
                             # Deletions second
                             if [ ${#deletions[@]} -gt 0 ]; then
                                 local del_tmsh
-                                del_tmsh=$(printf '%s\n' "${deletions[@]}" | build_tmsh_records_delete)
-                                if delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${dg_subpath}" "$(printf '%s\n' "${deletions[@]}")"; then
+                                del_tmsh=$(printf '%s\n' "${deletions[@]}")
+                                if delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${dg_subpath}"; then
                                     log_ok "${#deletions[@]} record(s) deleted."
                                 else
                                     log_error "Failed to delete records. HTTP ${API_HTTP_CODE}"
@@ -5844,11 +5918,13 @@ editor_submenu() {
                         fi
                     fi
                     
-                    if [ ${apply_errors} -eq 0 ]; then
-                        log_ok "Changes applied successfully."
-                    else
-                        log_warn "Changes applied with ${apply_errors} error(s)."
+                    if [ ${apply_errors} -gt 0 ]; then
+                        # Pending state is kept so the failed half can be retried
+                        log_error "Changes applied with ${apply_errors} error(s). Unapplied changes remain pending."
+                        press_enter_to_continue
+                        continue
                     fi
+                    log_ok "Changes applied successfully."
                 fi
                 
                 # Update original arrays to match working (reset change tracking)
@@ -6240,19 +6316,19 @@ editor_submenu() {
                                         fi
                                     done
                                     echo "${add_key}|${add_val}"
-                                done | build_tmsh_records_add
+                                done
                             )
                             if [ -n "${add_tmsh}" ]; then
-                                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${dg_subpath}" "$(printf '%s\n' "${deploy_additions[@]}")"; then
+                                if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_tmsh}" "${dg_subpath}"; then
                                     inc_errors=$((inc_errors + 1))
                                 fi
                             fi
                         fi
                         if [ ${#deploy_deletions[@]} -gt 0 ]; then
                             local del_tmsh
-                            del_tmsh=$(printf '%s\n' "${deploy_deletions[@]}" | build_tmsh_records_delete)
+                            del_tmsh=$(printf '%s\n' "${deploy_deletions[@]}")
                             if [ -n "${del_tmsh}" ]; then
-                                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${dg_subpath}" "$(printf '%s\n' "${deploy_deletions[@]}")"; then
+                                if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_tmsh}" "${dg_subpath}"; then
                                     inc_errors=$((inc_errors + 1))
                                 fi
                             fi
