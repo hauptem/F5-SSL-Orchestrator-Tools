@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay - F5 SSL Orchestrator Snapshot and Replay Tool
 # =============================================================================
-# Version: vb7.3.14-devel (Beta 8 August 12 2026)
+# Version: vb8.3.14-devel (Beta 8 August 12 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
