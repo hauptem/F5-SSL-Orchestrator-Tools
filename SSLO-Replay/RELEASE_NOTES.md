@@ -3,8 +3,6 @@
 - Dependency config cleaning is now recursive. The *Reference link strip and instance-field strip previously applied at the top level only, so nested collection members (cipher group allow[], log publisher destinations[]) kept nameReference links carrying the source TMOS version in the query string
 - Script header corrected to describe the current design: dependency configs go to the companion text manifest, which the tool does not read, and replay re-derives dependencies from the snapshot blocks. 
 
-- Corrected all references to F5's ansible collection numbering from 3.15 to 3.14 which represents the current F5 release.
-
 ## b7.3.14.0-devel (Beta 7 - July 19 2026)
 
 - Poll timeout no longer reports a deployment as failed without checking for it. The gc processor does not stop when the poll gives up, and a completed operation block self-destructs 120 seconds after BOUND - so re-checking the operation block later is ambiguous (absent means succeeded-and-gone or never-bound). On timeout the tool now checks for the deployment's component block, the durable evidence that the deployment landed. Applies to CREATE operations only; a component block that predates a MODIFY or DELETE proves nothing. Late-verified objects count as replayed and reset the circuit breaker, so slow deployments can no longer trip the systemic-failure prompt
