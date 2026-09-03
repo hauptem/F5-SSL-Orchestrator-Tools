@@ -1,7 +1,11 @@
 ## b9.3.14.0-devel (Beta 9 - September 2 2026)
 
 - Dependency config cleaning is now recursive. The *Reference link strip and instance-field strip previously applied at the top level only, so nested collection members (cipher group allow[], log publisher destinations[]) kept nameReference links carrying the source TMOS version in the query string
-- Script header corrected to describe the current design: dependency configs go to the companion text manifest, which the tool does not read, and replay re-derives dependencies from the snapshot blocks. 
+- Script header corrected to describe the current design: dependency configs go to the companion text manifest, which the tool does not read, and replay re-derives dependencies from the snapshot blocks.
+
+## b8.3.14.0-devel (Beta 8 - August 2026)
+
+- Corrected all F5 Ansible references to 3.14.0
 
 ## b7.3.14.0-devel (Beta 7 - July 19 2026)
 
