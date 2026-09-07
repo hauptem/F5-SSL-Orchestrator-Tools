@@ -2,7 +2,7 @@
 # =============================================================================
 # SSL Orchestrator Tools - Clean Slate Script
 # =============================================================================
-# Version:  1.3 September 2 2026
+# Version:  1.4 September 7 2026
 # Created by: Eric Haupt
 # Based on: Kevin Stewart's "sslo nuclear delete" script v7.0
 #           https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete
@@ -200,6 +200,16 @@ backup_rpm() {
     fi
 
     local rpm_src="${RPM_DOWNLOAD_DIR}/${INSTALLED_RPM}.rpm"
+    local rpm_dst="${RPM_BACKUP_DIR}/${INSTALLED_RPM}.rpm"
+
+    # A copy already in the backup dir (from a previous run or a manual
+    # upload) satisfies the backup requirement. Checking this first also
+    # prevents find from returning the destination as the source.
+    if [ -f "${rpm_dst}" ]; then
+        log_ok "RPM already present at: ${rpm_dst}"
+        RPM_BACKED_UP=true
+        return
+    fi
 
     if [ ! -f "${rpm_src}" ]; then
         log_warn "RPM file not found at ${rpm_src}"
@@ -217,9 +227,9 @@ backup_rpm() {
         fi
     fi
 
-    cp "${rpm_src}" "${RPM_BACKUP_DIR}/${INSTALLED_RPM}.rpm"
-    if [ -f "${RPM_BACKUP_DIR}/${INSTALLED_RPM}.rpm" ]; then
-        log_ok "RPM backed up to: ${RPM_BACKUP_DIR}/${INSTALLED_RPM}.rpm"
+    cp "${rpm_src}" "${rpm_dst}"
+    if [ -f "${rpm_dst}" ]; then
+        log_ok "RPM backed up to: ${rpm_dst}"
         RPM_BACKED_UP=true
     else
         log_error "RPM backup failed. Aborting to prevent unrecoverable state."
@@ -545,7 +555,7 @@ print_summary() {
 # =============================================================================
 main() {
     # Initialize the log
-    echo "SSL Orchestrator Clean Slate - v1.3" | tee "${LOGFILE}"
+    echo "SSL Orchestrator Clean Slate - v1.4" | tee "${LOGFILE}"
     echo "Started: $(date)" | tee -a "${LOGFILE}"
 
     RPM_BACKED_UP=false
