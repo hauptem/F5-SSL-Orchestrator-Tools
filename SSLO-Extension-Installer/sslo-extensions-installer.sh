@@ -273,7 +273,7 @@ select_extension() {
         case "${ext_choice}" in
             1)
                 EXTENSION="blocking_page"
-                EXTENSION_TITLE="Advanced Blocking Pages v1.1"
+                EXTENSION_TITLE="Advanced Blocking Pages v1.4"
                 break
                 ;;
             2)
