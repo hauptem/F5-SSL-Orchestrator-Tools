@@ -2,6 +2,7 @@
 # F5 SSL Orchestrator Service Extension Installer
 # Version 1.4
 # Author: Eric Haupt
+# Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
 # Created for closed network organizations who cannot use Kevin's original versions.
