@@ -12,7 +12,7 @@
 
 ## v1.2
 
-- Replaced Kevin's boilerplate blocking-page-html with my own
+- Replaced Kevin's boilerplate blocking-page-html with my own to permit a more "out of box" usable end-state after install.
  <img width="918" height="635" alt="Image" src="https://github.com/user-attachments/assets/e4ca1895-2ca9-450a-9200-c9ffe584492f" />
  
 - Replaced Python rule converter with `jq -Rs` for JSON encoding of iRules
