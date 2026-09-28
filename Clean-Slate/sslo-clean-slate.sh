@@ -4,9 +4,10 @@
 # =============================================================================
 # Version:  1.4 September 7 2026
 # Created by: Eric Haupt
+# Released under the MIT License. See LICENSE file for details.
+#
 # Based on: Kevin Stewart's "sslo nuclear delete" script v7.0
 #           https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete
-#
 # Requirements:  SSL Orchestrator 12.0 or higher / TMOS 17.x, 21.x
 #
 # PURPOSE:
