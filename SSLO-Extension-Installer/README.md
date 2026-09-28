@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
-![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x-blue)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x%20%7C%2021.x-blue)
 
 Unified installer and uninstaller for F5 SSL Orchestrator service extensions, based on Kevin Stewart's original 1.0 work. These extensions have been directly incorporated into this tool and modified to provide additional functionality.
 
