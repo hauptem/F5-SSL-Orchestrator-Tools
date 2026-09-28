@@ -2,6 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x%20%7C%2021.x-blue)
 
 
 A menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems via the iControl REST API. Designed primarily for SSL Orchestrator (SSLO) policy management, but can be used for general purpose datagroup and URL category management.
