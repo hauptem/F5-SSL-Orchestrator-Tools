@@ -3,7 +3,7 @@
 # =============================================================================
 # Version: vb9.3.14-devel (Beta 9 September 2 2026)
 # Author: Eric Haupt
-# Released under the MIT License.
+# Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
 # Requirements: Windows PowerShell 5.1 (pwsh 7+ is not supported), 
