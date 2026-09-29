@@ -19,7 +19,6 @@
 - Dynamic naming substitutes names at identifier boundaries. Renaming sslo_web no longer rewrites a chain named ssloSC_sslo_web_bypass or a topology named sslo_web2. Each renamed block is verified: no other SSLO object reference and no external /Common/ dependency may change, and the new base name must not collide with existing content
 - Monitor capture probes gateway-icmp, icmp, udp, tcp-half-open, and external monitors in addition to tcp, http, and https. Gateway ICMP monitors are recorded as monitor_gateway_icmp; monitor_icmp now means /ltm/monitor/icmp
 - Custom access profiles referenced by a topology are validated during replay prerequisites. The user guide already listed them; the check was missing
-- Policy swap and redeploy list topologies excluded because their component block is not UNBOUND
 
 ## b9.3.14.0-devel (Beta 9 - September 2 2026)
 
