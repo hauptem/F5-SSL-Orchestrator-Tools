@@ -11,7 +11,6 @@
 - Replay checks every URL category a policy uses, built-in or custom, against the target's URL database. A built-in category that does not exist on the target TMOS version (a 17.5 snapshot replayed to 21.1) is reported as missing instead of failing at deploy. When the URL database cannot be read, built-ins are assumed present and custom categories are checked individually
 - Record and replay prerequisite validation share one reference walker. The two copies had drifted, which is how the Layer 2 and SNAT paths stayed wrong in both
 - Replayable SSL settings blocks go through CREATE conversion like state blocks. A CREATE operation block captured inside its 120-second BOUND window previously replayed with the source pfId tokens and no passphrase prompt
-- restrictedProperties is stripped at capture. Snapshots never carry key passphrase values
 - Record lists SSLO objects whose component block is not UNBOUND (ERROR, stuck BINDING/UNBINDING) and requires confirmation before writing a snapshot without them. They were previously dropped silently
 - Record refuses blocks nested too deep for ConvertTo-Json, and snapshot verification compares each block's nesting depth after the round trip. PS 5.1 truncation replaces deep objects with strings, which the previous count check could not detect
 - Redeploy stuck-block cleanup touches only operation blocks for the selected topology, matched by the operation context's deploymentName. The topology's own component block is never deleted; if it left UNBOUND since selection, redeploy aborts with no changes
