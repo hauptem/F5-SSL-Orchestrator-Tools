@@ -2,31 +2,45 @@
 # =============================================================================
 # SSL Orchestrator Tools - Clean Slate Script
 # =============================================================================
-# Version:  1.4 September 7 2026
-# Created by: Eric Haupt
-# Released under the MIT License. See LICENSE file for details.
-#
+# Version:  1.5 September 28 2026
+# Author:   Eric Haupt
+#           https://github.com/hauptem/F5-SSL-Orchestrator-Tools/tree/main
+# 
 # Based on: Kevin Stewart's "sslo nuclear delete" script v7.0
 #           https://github.com/f5devcentral/sslo-script-tools/tree/main/sslo-nuke-delete
-# Requirements:  SSL Orchestrator 12.0 or higher / TMOS 17.x, 21.x
+#
+# Requirements:  SSL Orchestrator 12.x or higher / TMOS 17.x, 21.x
 #
 # PURPOSE:
 #   Forcibly removes all SSL Orchestrator (SSLO) configuration objects and
 #   clears REST storage so the SSLO RPM can be reinstalled on a clean slate.
-#   The installed RPM is copied to /shared/tmp before deletion begins; the
-#   reinstall itself is a manual step through the GUI.
+#   The installed RPM is copied to /shared/tmp before deletion begins.
 #
 # WARNING:
 #   THIS SCRIPT IS DESTRUCTIVE. It permanently deletes ALL SSLO configuration
-#   on this device. This action cannot be undone.
-#   Do NOT run this on a device with active production SSLO traffic.
+#   on this device. Do NOT run this on a device with active production SSLO traffic.
 #
 # USAGE:
 #   chmod +x sslo-clean-slate.sh
-#   ./sslo-clean-slate.sh
+#   ./sslo-clean-slate.sh [-u USER] [-q] [-n] [-h]
+#
+#   -u, --user USER   REST API username (default: admin)
+#   -q, --quiet       Write output to the log file only, not the terminal
+#   -n, --nolog       Write output to the terminal only, no log file
+#   -h, --help        Show usage and exit
+#
+#   The password is read from the BIGIP_PW environment variable when set,
+#   otherwise prompted for. 
+#
+#     BIGIP_PW='yourpassword' ./sslo-clean-slate.sh -u admin 
+#
+#   The CLEAN confirmation cannot be bypassed. It is always prompted so that
+#   an accidental re-run from shell cannot occur.
 #
 # OUTPUT:
-#   A log file is written to /var/log/sslo-clean-<timestamp>.log
+#   A log file is written to /var/log/sslo-clean-<timestamp>.log 
+#   Unless -n or --nolog is given at script prompt.
+#
 # =============================================================================
 
 set -euo pipefail
@@ -40,11 +54,24 @@ RPM_BACKUP_DIR="/shared/tmp"
 RPM_DOWNLOAD_DIR="/var/config/rest/downloads"
 ERRORS=0
 
+# Set by parse_args (see USAGE)
+CLI_USER=""
+QUIET=false
+NO_LOG=false
+
 # =============================================================================
 # Logging and output helpers
 # =============================================================================
+# -q suppresses the terminal copy, -n suppresses the file copy. Both together
+# suppress everything.
 log() {
-    echo "$1" | tee -a "${LOGFILE}"
+    if [ "${NO_LOG}" == "true" ]; then
+        [ "${QUIET}" == "true" ] || echo "$1"
+    elif [ "${QUIET}" == "true" ]; then
+        echo "$1" >> "${LOGFILE}"
+    else
+        echo "$1" | tee -a "${LOGFILE}"
+    fi
 }
 
 log_section() {
@@ -119,20 +146,31 @@ preflight_checks() {
 }
 
 # =============================================================================
-# Prompt for credentials
+# Credentials: BIGIP_PW environment variable if set, otherwise prompt
 # =============================================================================
 get_credentials() {
     log_section "Credentials"
-    log_info "Enter BIG-IP admin credentials (used for REST API calls)."
-    log_info "Credentials are NOT written to the log file."
-    echo ""
 
-    read -rp "  Username [admin]: " input_user
-    ADMIN_USER="${input_user:-admin}"
+    if [ -n "${BIGIP_PW:-}" ]; then
+        ADMIN_USER="${CLI_USER:-admin}"
+        ADMIN_PASS="${BIGIP_PW}"
+        log_info "Credentials supplied via BIGIP_PW for user: ${ADMIN_USER}"
+    else
+        log_info "Enter BIG-IP admin credentials (used for REST API calls)."
+        log_info "Credentials are NOT written to the log file."
+        echo ""
 
-    read -rsp "  Password: " input_pass
-    echo ""
-    ADMIN_PASS="${input_pass}"
+        if [ -n "${CLI_USER}" ]; then
+            ADMIN_USER="${CLI_USER}"
+        else
+            read -rp "  Username [admin]: " input_user
+            ADMIN_USER="${input_user:-admin}"
+        fi
+
+        read -rsp "  Password: " input_pass
+        echo ""
+        ADMIN_PASS="${input_pass}"
+    fi
     USER_PASS="${ADMIN_USER}:${ADMIN_PASS}"
 
     # Validate credentials
@@ -552,12 +590,88 @@ print_summary() {
 }
 
 # =============================================================================
+# Command-line options
+# =============================================================================
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [-u USER] [-q] [-n] [-h]
+
+  -u, --user USER   REST API username (default: admin)
+  -q, --quiet       Write output to the log file only, not the terminal
+  -n, --nolog       Write output to the terminal only, no log file
+  -h, --help        Show this help and exit
+
+-q and -n together produce no output at all.
+
+The password is read from the BIGIP_PW environment variable when set,
+otherwise prompted for. 
+
+  BIGIP_PW='yourpassword' $(basename "$0") -u admin 
+
+The CLEAN confirmation cannot be bypassed. It is always prompted so that
+an accidental re-run from shell history cannot occur.
+EOF
+}
+
+# Parsed by hand because getopts does not support long options and the
+# util-linux getopt binary is not present on every TMOS build. 
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -u|--user)
+                if [ $# -lt 2 ] || [ -z "$2" ]; then
+                    echo "Option $1 requires an argument." >&2
+                    usage >&2
+                    exit 2
+                fi
+                CLI_USER="$2"
+                shift 2
+                ;;
+            --user=*)
+                CLI_USER="${1#--user=}"
+                if [ -z "${CLI_USER}" ]; then
+                    echo "Option --user requires an argument." >&2
+                    usage >&2
+                    exit 2
+                fi
+                shift
+                ;;
+            -q|--quiet)
+                QUIET=true
+                shift
+                ;;
+            -n|--nolog)
+                NO_LOG=true
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                usage >&2
+                exit 2
+                ;;
+        esac
+    done
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 main() {
-    # Initialize the log
-    echo "SSL Orchestrator Clean Slate - v1.4" | tee "${LOGFILE}"
-    echo "Started: $(date)" | tee -a "${LOGFILE}"
+    parse_args "$@"
+
+    # Initialize the log. With -n the path is replaced by a marker so the
+    # "Log file:" lines in the confirmation and summary stay accurate.
+    if [ "${NO_LOG}" == "true" ]; then
+        LOGFILE="(disabled by -n/--nolog)"
+    else
+        : > "${LOGFILE}"
+    fi
+    log "SSL Orchestrator Clean Slate - v1.5"
+    log "Started: $(date)"
 
     RPM_BACKED_UP=false
     INSTALLED_RPM=""
