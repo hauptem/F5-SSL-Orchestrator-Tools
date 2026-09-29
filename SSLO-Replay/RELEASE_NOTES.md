@@ -9,18 +9,13 @@
 - New topology references captured and validated: log publisher (settable since 3.15.0), DNS resolver, and the inbound application-mode pool. SSL settings OCSP and CRL validators are captured and validated
 - Record and replay prerequisite validation share one reference walker. The two copies had drifted, which is how the Layer 2 and SNAT paths stayed wrong in both
 - Replayable SSL settings blocks go through CREATE conversion like state blocks. A CREATE operation block captured inside its 120-second BOUND window previously replayed with the source pfId tokens and no passphrase prompt
-- restrictedProperties is stripped at capture. Snapshots never carry key passphrase values
 - Record lists SSLO objects whose component block is not UNBOUND (ERROR, stuck BINDING/UNBINDING) and requires confirmation before writing a snapshot without them. They were previously dropped silently
 - Record refuses blocks nested too deep for ConvertTo-Json, and snapshot verification compares each block's nesting depth after the round trip. PS 5.1 truncation replaces deep objects with strings, which the previous count check could not detect
 - Redeploy stuck-block cleanup touches only operation blocks for the selected topology, matched by the operation context's deploymentName. The topology's own component block is never deleted; if it left UNBOUND since selection, redeploy aborts with no changes
 - Dynamic naming substitutes names at identifier boundaries. Renaming sslo_web no longer rewrites a chain named ssloSC_sslo_web_bypass or a topology named sslo_web2. Each renamed block is verified: no other SSLO object reference and no external /Common/ dependency may change, and the new base name must not collide with existing content
 - Monitor capture probes gateway-icmp, icmp, udp, tcp-half-open, and external monitors in addition to tcp, http, and https. Gateway ICMP monitors are recorded as monitor_gateway_icmp; monitor_icmp now means /ltm/monitor/icmp
-- Custom access profiles referenced by a topology are validated during replay prerequisites. The user guide already listed them; the check was missing
 - Policy swap and redeploy list topologies excluded because their component block is not UNBOUND
 - Replay, policy swap, redeploy, and delete share one post/poll/verify implementation
-- Removed the unreachable SSL settings branch from the policy swap pre-flight
-- Script saved as UTF-8 with BOM. Windows PowerShell 5.1 reads BOM-less files as ANSI, and the menu's box-drawing characters then decode to curly quotes that break parsing
-- Script header version corrected. Beta 9 shipped with a Beta 8 header
 
 ## b9.3.14.0-devel (Beta 9 - September 2 2026)
 
