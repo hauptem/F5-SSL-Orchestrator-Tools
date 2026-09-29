@@ -84,7 +84,7 @@ Menu option 2. After loading and validating the snapshot, the tool presents a su
 
 ### Before you replay
 
-The target device needs:
+The target device must run the same or a newer SSLO version than the snapshot source. It also needs:
 
 1. **SSLO installed and General Settings configured** - run through the SSLO guided config at least once
 2. **Certificates and keys installed** - match the names in the snapshot (check the dependency manifest `.txt` file)

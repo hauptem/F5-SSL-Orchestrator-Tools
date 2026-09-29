@@ -2063,7 +2063,10 @@ function Invoke-SsloRecord {
     # -------------------------------------------------------------------------
     # Step 4: Deduplicate blocks by deployment name
     # -------------------------------------------------------------------------
-    # Priority: replayable over state, highest generation within same type
+    # Priority: state over replayable, highest generation within same type.
+    # The component block is the deployed configuration; a CREATE operation
+    # block is the transient request that produced it, present only until it
+    # self-destructs. Replayable is kept only when no component block exists
     $dedupMap = @{}
     foreach ($item in $ssloBlocks) {
         $name = $item.DeploymentName
@@ -2074,7 +2077,7 @@ function Invoke-SsloRecord {
             $dedupMap[$name] = $item
         } else {
             $existing = $dedupMap[$name]
-            if ($item.CaptureType -eq $script:CAT_REPLAYABLE -and $existing.CaptureType -eq $script:CAT_STATE) {
+            if ($item.CaptureType -eq $script:CAT_STATE -and $existing.CaptureType -eq $script:CAT_REPLAYABLE) {
                 $dedupMap[$name] = $item
             } elseif ($item.CaptureType -eq $existing.CaptureType) {
                 $existingGen = 0

@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
-![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x%20%7C%2014.x-blue)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x%20%7C%2021.x-blue)
 
 > **Note:** This tool is a proof of concept and currently in beta.
 
@@ -53,6 +53,7 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 - General Settings (`ssloGS_global`) are environment-specific; configure via the SSLO GUI on the target before replay
 - Per-request policy modifications made outside SSLO with strict updates disabled will not survive replay
 - Extension services (blocking page, DoH guard) must be installed separately
+- Snapshots replay to the same or a newer SSLO version. Replay to an older SSLO version is not supported: newer versions store fields that older gc processors may reject
 - Office 365 URL configuration is held by the SSLO O365 worker, not in iAppsLX blocks, and is not captured. Configure it on the target before replaying policies that use its URL categories
 - SSLO-Replay is slow, because the REST API stack in a BIG-IP is slow. It is not possible to get faster performance until F5 updates the internal processing pipeline. The benefit, however, is accuracy and the removal of human error.
 
