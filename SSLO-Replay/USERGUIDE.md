@@ -56,7 +56,9 @@ sslo-replay-snapshots\sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
 
 The `.json` file is the snapshot the tool replays. The `.txt` file is a human-readable dependency manifest: every external object referenced by the snapshot, grouped by type, with full configuration included where applicable for reference when recreating objects on a target. The tool never reads the manifest. It exists for you.
 
-After capture, the snapshot is verified (re-parsed and block-counted) and the tool displays a summary: the captured objects by type and the dependency list.
+Objects whose component block is not UNBOUND (ERROR, or stuck in BINDING/UNBINDING) are not captured, because their stored configuration may not reflect a completed deployment. The tool lists them with their state and asks before writing a snapshot without them. Anything that depends on a missing object will fail on replay, so the better answer is usually to fix the object on the source and record again.
+
+After capture, the snapshot is verified: the file is re-parsed, and every block must come back in the same order with the same nesting depth. A block nested too deeply to serialize without truncation stops the record before anything is written. The tool then displays a summary: the captured objects by type and the dependency list.
 
 ### What the snapshot contains
 
@@ -88,10 +90,11 @@ The target device needs:
 2. **Certificates and keys installed** - match the names in the snapshot (check the dependency manifest `.txt` file)
 3. **VLANs created** - the ingress and service-side VLANs referenced by topologies and services
 4. **Network infrastructure** - self IPs, routes, anything the services need to reach inspection devices
+5. **Office 365 URL configuration**, if policies use its URL categories. It lives in the SSLO O365 worker rather than in blocks, so snapshots do not carry it
 
 See [Preparing a Target Device](#preparing-a-target-device) for the full step-by-step checklist covering these prerequisites.
 
-The tool validates the named object references before touching the blocks API: certs, keys, CA bundles, cipher groups, log publishers, VLANs, SNAT pools, gateway pools, profiles, iRules, LTM policies, access profiles, datagroups (including type for subnet-match datagroups), and custom URL categories. If something is missing, it tells you what and where it is referenced. Two things it cannot pre-validate: network reachability (self IPs, routes, whether service IPs answer) and monitors, which the gc processor validates at deploy time.
+The tool validates the named object references before touching the blocks API: certs, keys, CA bundles, OCSP and CRL validators, cipher groups, log publishers, VLANs, SNAT pools, gateway and application pools, DNS resolvers, TCP, HTTP, SSL and persistence profiles, iRules (including egress iRules), LTM policies, access profiles, WAF security policies with their DoS, bot defense and log profiles, datagroups (including type for subnet-match datagroups), and custom URL categories. Record uses the same reference walk, so the dependency manifest and the prerequisite check always cover the same objects. IP reputation categories are built in and are not checked. If something is missing, it tells you what and where it is referenced. Two things it cannot pre-validate: network reachability (self IPs, routes, whether service IPs answer) and monitors, which the gc processor validates at deploy time.
 
 ### Replay modes
 
@@ -100,6 +103,8 @@ The tool validates the named object references before touching the blocks API: c
 **Scoped replay** lets you pick a single topology. The tool resolves the dependency tree: the topology's SSL settings, security policy, service chains, and services, and replays only those objects.
 
 Scoped replay also offers dynamic renaming. If the topology, its SSL settings, and its security policy share a common base name, the tool detects it and lets you supply a new one at replay time. New base names can be 1-20 characters: letters, numbers, underscores. Renaming applies only to those three objects. Services, service chains, and `/Common/` dependencies keep their names. Press Enter at the prompt to keep the original name.
+
+The rename replaces whole names only: renaming `sslo_web` leaves a chain called `ssloSC_sslo_web_bypass` or a topology called `sslo_web2` alone, while generated artifacts such as `/Common/sslo_web.app/sslo_web-in-t-4` follow the rename. Every block is checked before anything is sent to the target. If a service, chain, or external `/Common/` object would change, or the new base name already appears in the block, replay stops with no changes made and names the conflicting reference.
 
 ### What happens during replay
 
@@ -134,7 +139,7 @@ Use this when you want to push a policy from one environment to another without 
 ### How it works
 
 1. Select a source policy from the snapshot
-2. Select a target topology on the connected device
+2. Select a target topology on the connected device. Topologies whose component block is not UNBOUND are not offered; the tool lists them with their state
 3. Name the policy on the target (defaults to the target topology's naming convention). Same rule as replay-time renaming: 1-20 characters after the `ssloP_` prefix - letters, numbers, underscores
 4. The tool shows a pre-flight plan: what will be created, what will be overwritten, what already exists
 5. Confirm to proceed
@@ -158,7 +163,11 @@ Use this to:
 
 The redeploy reads the existing block state, constructs a MODIFY operation block with the current inputProperties, and POSTs it. The gc processor runs a full deployment pass. No snapshot file is needed. This operates entirely on the live device.
 
-Before the MODIFY, the tool scans for any blocks in a stuck state (BINDING, UNBINDING, ERROR) belonging to the selected topology. Stuck blocks are transitioned to ERROR and then deleted to clear the way for the fresh deployment. Matching requires the exact topology name or an operation block ending in it, so blocks of a sibling topology whose name merely contains the selected one are never touched.
+Only topologies whose component block is UNBOUND can be selected. Any others are listed with their state.
+
+Before the MODIFY, the tool re-reads the device and scans for operation blocks in a stuck state (BINDING, UNBINDING, ERROR) belonging to the selected topology. They are matched on the deployment name in their operation context, so blocks of a sibling topology whose name merely contains the selected one are never touched. Stuck operation blocks are transitioned to ERROR and then deleted to clear the way for the fresh deployment.
+
+The topology's own component block is never deleted, because it is the object the MODIFY targets. If it has left UNBOUND since you selected it, the redeploy stops with no changes. A second, unhealthy component block with the same name is reported and left in place for you to review.
 
 ---
 
@@ -221,6 +230,14 @@ The gc processor rejected the deployment. The tool prints the block's error deta
 ### Import fails with "No valid blocks found in snapshot"
 
 The snapshot was most likely recorded by Beta 5 or earlier. The block field `backupType` was renamed to `captureType` in Beta 6 and old snapshots fail validation. Re-record the snapshot with Beta 6.
+
+### Record lists objects that will not be recorded
+
+One or more SSLO objects on the source are in ERROR or stuck in BINDING/UNBINDING. Answering N cancels without writing a file. Resolve the objects on the source (redeploy the topology, or fix and re-save the object in the SSLO GUI) and record again. Recording without them produces a snapshot whose dependents will fail on replay.
+
+### Replay reports "Rename verification failed"
+
+The new base name would have changed something outside the topology stack, or it already appears in one of the blocks. The message names the block and the reference. Pick a different base name, or replay without renaming.
 
 ### Prerequisite check reports missing objects
 

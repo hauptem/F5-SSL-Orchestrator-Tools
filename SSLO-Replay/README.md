@@ -1,4 +1,4 @@
-# SSLO-Replay 0.3.14.0-devel (Beta) - Configuration Snapshot and Replay Tool
+# SSLO-Replay 0.3.15.0-devel (Beta) - Configuration Snapshot and Replay Tool
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
@@ -30,7 +30,7 @@ The snapshot is a single JSON file containing every SSLO object. External depend
 - **Policy Swap** - Apply a security policy from a snapshot to an existing topology on the target, with rename and overwrite support
 - **Redeploy** - Push an existing topology back through the gc processor to force a fresh deployment pass, no snapshot file needed
 - **Delete** - Remove a topology and its unreferenced dependents from the live device, with reference counting so shared objects are retained
-- **Dependency Capture** - Records external BIG-IP objects (iRules, monitors, cipher groups, profiles, SNAT pools, datagroups, URL categories) as a .txt manifest for reference
+- **Dependency Capture** - Records external BIG-IP objects (iRules, monitors, cipher groups, profiles, SNAT pools, pools, DNS resolvers, datagroups, URL categories, WAF policies) as a .txt manifest for reference
 
 ## How It Works
 
@@ -53,6 +53,7 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 - General Settings (`ssloGS_global`) are environment-specific; configure via the SSLO GUI on the target before replay
 - Per-request policy modifications made outside SSLO with strict updates disabled will not survive replay
 - Extension services (blocking page, DoH guard) must be installed separately
+- Office 365 URL configuration is held by the SSLO O365 worker, not in iAppsLX blocks, and is not captured. Configure it on the target before replaying policies that use its URL categories
 - SSLO-Replay is slow, because the REST API stack in a BIG-IP is slow. It is not possible to get faster performance until F5 updates the internal processing pipeline. The benefit, however, is accuracy and the removal of human error.
 
 ## Requirements
@@ -80,7 +81,7 @@ Snapshots and dependency manifests are written to a `sslo-replay-snapshots` fold
 
 The gc processor input/output contract, per-type inputProperty templates, passphrase token handling, and prerequisite field paths are derived from the F5 Ansible SSLO collection:
 
-- **Collection:** f5networks.f5_bigip 3.14.0-devel
+- **Collection:** f5networks.f5_bigip 3.15.0
 - **Repository:** https://github.com/F5Networks/f5-ansible-bigip
 
 ## License
