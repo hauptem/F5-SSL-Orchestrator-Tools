@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
-![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x%20%7C%2021.x-blue)
+![SSLO Version](https://img.shields.io/badge/SSLO-12.x%20%7C%2013.x%20%7C%2014.x-blue)
 
 > **Note:** This tool is a proof of concept and currently in beta.
 
