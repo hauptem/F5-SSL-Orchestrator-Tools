@@ -1,5 +1,4 @@
-# SSLO-Replay 0.3.15.0-devel (Beta) 
-Configuration Snapshot and Replay Tool
+# SSLO-Replay 0.3.15.0-devel Snapshot and Restore Tool
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
