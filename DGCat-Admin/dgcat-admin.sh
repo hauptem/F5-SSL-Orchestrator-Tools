@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.7
+# Version: 5.8
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -316,11 +316,14 @@ ensure_backup_dir() {
 }
 
 # Cleanup old backups beyond retention limit
+# The match is anchored on the timestamp suffix. A glob of "<prefix>_*.csv"
+# also matches every object whose name extends the prefix (urlcat_Bypass
+# matches urlcat_Bypass_Finance), so rotating one object deleted another's
 cleanup_old_backups() {
     local prefix="$1"
     local directory="${2:-${BACKUP_DIR}}"
     local backup_files
-    backup_files=$(ls -1t "${directory}/${prefix}_"*.csv 2>/dev/null || true)
+    backup_files=$(ls -1t "${directory}/${prefix}_"*.csv 2>/dev/null | grep -E "/$(printf '%s' "${prefix}" | sed 's/[][\\.*^$/]/\\&/g')_[0-9]{8}_[0-9]{6}\.csv$" || true)
     
     if [ -n "${backup_files}" ]; then
         local count=0
@@ -633,7 +636,12 @@ api_request() {
     local data="${3:-}"
     
     local url="https://${REMOTE_HOST}${endpoint}"
+    # The credential is passed as a curl config on a private fd rather than
+    # as a -u argument, which every user on the host could read from the
+    # process list. curl's config parser unescapes \\ and \" inside quotes
     local auth="${REMOTE_USER}:${REMOTE_PASS}"
+    auth="${auth//\\/\\\\}"
+    auth="${auth//\"/\\\"}"
     
     # Trace the request - never the Authorization credential
     log_debug "REQ  ${method} ${url}"
@@ -646,7 +654,6 @@ api_request() {
     
     local curl_opts=(
         -sk
-        -u "${auth}"
         -H "Content-Type: application/json"
         -X "${method}"
         -w "\n%{http_code}"
@@ -656,14 +663,14 @@ api_request() {
     
     local response
     if [ -n "${data}" ]; then
-        response=$(printf '%s' "${data}" | curl "${curl_opts[@]}" -d @- "${url}" 2>/dev/null) || {
+        response=$(printf '%s' "${data}" | curl "${curl_opts[@]}" -K <(printf 'user = "%s"\n' "${auth}") -d @- "${url}" 2>/dev/null) || {
             API_RESPONSE=""
             API_HTTP_CODE="000"
             log_debug "RSP  transport failure (curl could not complete the request)"
             return 1
         }
     else
-        response=$(curl "${curl_opts[@]}" "${url}" 2>/dev/null) || {
+        response=$(curl "${curl_opts[@]}" -K <(printf 'user = "%s"\n' "${auth}") "${url}" 2>/dev/null) || {
             API_RESPONSE=""
             API_HTTP_CODE="000"
             log_debug "RSP  transport failure (curl could not complete the request)"
@@ -1146,13 +1153,15 @@ get_datagroup_display_path() {
 }
 
 # Backup filename token - the folder is folded in so datagroups with the
-# same leaf name in different folders get separate files and rotation pools
+# same leaf name in different folders get separate files and rotation pools.
+# Folder segments are joined with a double underscore: a single underscore
+# mapped /Common/a/b and /Common/a_b to the same token
 get_datagroup_scope_token() {
     local dg_name="$1"
     local subpath="${2:-}"
     
     if [ -n "${subpath}" ]; then
-        echo "${subpath//\//_}_${dg_name}"
+        echo "${subpath//\//__}__${dg_name}"
     else
         echo "${dg_name}"
     fi
@@ -1416,6 +1425,19 @@ create_url_category_remote() {
     return 1
 }
 
+# Reduce the urls[] in API_RESPONSE to the two writable properties, for
+# PATCH-back. Echoing the server objects would carry any read-only property
+# a later TMOS adds to the collection and fail the whole request
+# Output: JSON array of {name, type}
+writable_urls_from_response() {
+    echo "${API_RESPONSE}" | jq -c '
+        .urls // [] | map({
+            name: .name,
+            type: (.type // (if (.name | contains("*")) then "glob-match" else "exact-match" end))
+        })
+    ' 2>/dev/null
+}
+
 # Add URLs to existing category
 # Args: cat_name, urls_json
 modify_url_category_add_remote() {
@@ -1428,7 +1450,7 @@ modify_url_category_add_remote() {
     fi
     
     local existing_urls
-    existing_urls=$(echo "${API_RESPONSE}" | jq -c '.urls // []' 2>/dev/null)
+    existing_urls=$(writable_urls_from_response)
     
     # Merge existing and new URLs, deduplicate by name
     local merged_urls
@@ -1455,7 +1477,7 @@ modify_url_category_delete_remote() {
     fi
     
     local existing_urls
-    existing_urls=$(echo "${API_RESPONSE}" | jq -c '.urls // []' 2>/dev/null)
+    existing_urls=$(writable_urls_from_response)
     
     # Build array of URLs to delete
     local delete_array
@@ -2127,10 +2149,34 @@ deploy_internal_datagroup_to_host() {
         # tmsh modify mode: add then delete using ?options= API
         local merge_errors=0
         
+        # The delta was computed against the source device. A target that
+        # already holds one of the added keys rejects the whole records add
+        # chunk, and the deletions would then run against a half-applied
+        # set. Read the target and reduce the delta to what it
+        # lacks or holds; a failed read aborts before anything is written
+        local target_keys
+        if ! target_keys=$(get_internal_datagroup_records_remote "${partition}" "${dg_name}" "${subpath}" | cut -d'|' -f1); then
+            echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Reading target records${NC}"
+            DEPLOY_ERROR_MSG="Could not read target records (HTTP ${API_HTTP_CODE})"
+            REMOTE_HOST="${orig_host}"
+            return 1
+        fi
+        
         # Additions first
         if [ "${additions_json}" != "[]" ] && [ -n "${additions_json}" ]; then
-            local add_records
-            add_records=$(echo "${additions_json}" | jq -r '.[] | .name + "|" + (.data // "")')
+            local add_records="" add_line add_key skipped_adds=0
+            while IFS= read -r add_line; do
+                [ -z "${add_line}" ] && continue
+                add_key="${add_line%%|*}"
+                if printf '%s\n' "${target_keys}" | grep -Fxq -- "${add_key}"; then
+                    skipped_adds=$((skipped_adds + 1))
+                    continue
+                fi
+                add_records+="${add_line}"$'\n'
+            done < <(echo "${additions_json}" | jq -r '.[] | .name + "|" + (.data // "")')
+            if [ ${skipped_adds} -gt 0 ]; then
+                log_info "${skipped_adds} record(s) already present on target, not re-added"
+            fi
             if [ -n "${add_records}" ]; then
                 if ! add_datagroup_records_incremental "${partition}" "${dg_name}" "${add_records}" "${subpath}"; then
                     echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Adding records${NC}"
@@ -2139,9 +2185,16 @@ deploy_internal_datagroup_to_host() {
             fi
         fi
         
-        # Deletions second
-        if [ -n "${deletions_list}" ]; then
-            if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${deletions_list}" "${subpath}"; then
+        # Deletions second - only keys the target holds
+        local del_keys="" del_key
+        while IFS= read -r del_key; do
+            [ -z "${del_key}" ] && continue
+            if printf '%s\n' "${target_keys}" | grep -Fxq -- "${del_key}"; then
+                del_keys+="${del_key}"$'\n'
+            fi
+        done <<< "${deletions_list}"
+        if [ -n "${del_keys}" ]; then
+            if ! delete_datagroup_records_incremental "${partition}" "${dg_name}" "${del_keys}" "${subpath}"; then
                 echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Deleting records${NC}"
                 merge_errors=$((merge_errors + 1))
             fi
@@ -3243,7 +3296,7 @@ show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.7                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.8                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -3537,10 +3590,15 @@ menu_create_datagroup() {
     if [ -n "${selection_class}" ]; then
         # Datagroup exists - this is a restore operation
         dg_class="${selection_class}"
-        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}")
+        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}") || dg_type=""
         
         local current_count
-        current_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" 2>/dev/null | wc -l)
+        if ! current_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" 2>/dev/null | wc -l); then
+            log_error "Could not read datagroup '${dg_name}'. HTTP ${API_HTTP_CODE}. No changes have been made."
+            log_info "For large datagroups, raise API_REQUEST_TIMEOUT and retry."
+            press_enter_to_continue
+            return
+        fi
         
         log_info "Datagroup '${dg_name}' exists in partition '${partition}'."
         log_info "  Class: ${dg_class}"
@@ -3805,11 +3863,22 @@ menu_create_datagroup() {
         # Use associative array for deduplication
         declare -A merged_data
         
-        # Read existing entries
+        # Read existing entries into a variable first: the exit status of a
+        # process substitution is not observable, so a failed read there
+        # would look like an empty datagroup and the merge (applied as a
+        # full replace) would replace it with the CSV contents alone
+        local existing_records
+        if ! existing_records=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}"); then
+            log_error "Could not read existing entries. No changes have been made."
+            log_info "For large datagroups, raise API_REQUEST_TIMEOUT and retry."
+            [ -n "${temp_csv}" ] && rm -f "${temp_csv}"
+            press_enter_to_continue
+            return
+        fi
         while IFS='|' read -r key value; do
             [ -z "${key}" ] && continue
             merged_data["${key}"]="${value}"
-        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}")
+        done <<< "${existing_records}"
         
         local existing_count=${#merged_data[@]}
         
@@ -3966,8 +4035,10 @@ menu_delete_datagroup_only() {
     
     # Show current contents
     local dg_type record_count
-    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}")
-    record_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" 2>/dev/null | wc -l)
+    dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}") || dg_type=""
+    if ! record_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" 2>/dev/null | wc -l); then
+        record_count="(read failed)"
+    fi
     
     
     echo ""
@@ -4417,8 +4488,14 @@ menu_export_url_category() {
     
     # Export
     log_step "Exporting URL category..."
+    # Verified read - an unchecked failure here tripped errexit and exited
+    # the tool mid-export; the count check above ran on a separate request
     local url_entries
-    url_entries=$(get_url_category_entries "${selected_category}")
+    if ! url_entries=$(get_url_category_entries "${selected_category}"); then
+        log_error "Could not read URL category. HTTP ${API_HTTP_CODE}. Nothing exported."
+        press_enter_to_continue
+        return
+    fi
     
     {
         echo "# URL Category Export: ${selected_category}"
@@ -4725,7 +4802,12 @@ menu_create_url_category() {
     if [ "${restore_mode}" == "merge" ]; then
         log_step "Reading existing URLs for merge..."
         local existing_urls
-        existing_urls=$(get_url_category_entries "${cat_name}")
+        if ! existing_urls=$(get_url_category_entries "${cat_name}"); then
+            log_error "Could not read existing URLs. No changes have been made."
+            [ -n "${temp_csv}" ] && rm -f "${temp_csv}"
+            press_enter_to_continue
+            return
+        fi
         
         # Use associative array to track existing URLs
         declare -A existing_set
@@ -4985,7 +5067,7 @@ editor_submenu() {
         dg_name="$3"
         dg_class="$4"
         dg_subpath="${5:-}"
-        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}")
+        dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}") || dg_type=""
         display_title="DGCat-Admin Editor"
         display_info1="Path:  $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")"
         display_info2="Class: ${dg_class}  |  Type: ${dg_type}"
@@ -5005,24 +5087,41 @@ editor_submenu() {
     local -a original_keys=()
     local -a original_values=()
     
-    # Load current state into working arrays (one-time fetch)
+    # Load current state into working arrays (one-time fetch). The read is
+    # captured to a variable so its exit status is checked: a process
+    # substitution hides the failure, and Full Replace and fleet Replace
+    # write the working set back verbatim, so a failed load must not open
+    # an empty editor
     log_step "Loading current entries..."
+    local loaded_entries
     if [ "${edit_type}" == "datagroup" ]; then
+        if ! loaded_entries=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}"); then
+            log_error "Could not read datagroup records. HTTP ${API_HTTP_CODE}. Editor not opened."
+            log_info "For large datagroups, raise API_REQUEST_TIMEOUT and retry."
+            press_enter_to_continue
+            return
+        fi
         while IFS='|' read -r key value; do
             [ -z "${key}" ] && continue
             working_keys+=("${key}")
             working_values+=("${value}")
             original_keys+=("${key}")
             original_values+=("${value}")
-        done < <(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}")
+        done <<< "${loaded_entries}"
     else
+        if ! loaded_entries=$(get_url_category_entries "${cat_name}"); then
+            log_error "Could not read URL category. HTTP ${API_HTTP_CODE}. Editor not opened."
+            log_info "For large categories, raise API_REQUEST_TIMEOUT and retry."
+            press_enter_to_continue
+            return
+        fi
         while IFS= read -r url; do
             [ -z "${url}" ] && continue
             working_keys+=("${url}")
             working_values+=("")
             original_keys+=("${url}")
             original_values+=("")
-        done < <(get_url_category_entries "${cat_name}")
+        done <<< "${loaded_entries}"
     fi
     log_ok "Loaded ${#working_keys[@]} entries"
     
@@ -6681,13 +6780,16 @@ menu_fleet_looking_glass() {
             continue
         fi
         
-        # Pull entries
+        # Pull entries. One verified read per host: a separate existence
+        # GET followed by an unchecked data read in a process substitution
+        # let a failed data read count the host as pulled with zero entries,
+        # which marked every entry missing there
         local entries=""
         local count=0
         
         if [ "${object_type}" == "datagroup" ]; then
-            if ! api_get "/mgmt/tm/ltm/data-group/internal/$(build_datagroup_path "${partition}" "${object_name}" "${object_subpath}")" >/dev/null 2>&1; then
-                echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Object not found${NC}"
+            if ! entries=$(get_internal_datagroup_records_remote "${partition}" "${object_name}" "${object_subpath}"); then
+                echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Object not found or read failed${NC}"
                 continue
             fi
             while IFS='|' read -r key value; do
@@ -6700,10 +6802,10 @@ menu_fleet_looking_glass() {
                 fi
                 entry_values["${host}|${entry}"]="${value}"
                 count=$((count + 1))
-            done < <(get_internal_datagroup_records_remote "${partition}" "${object_name}" "${object_subpath}")
+            done <<< "${entries}"
         else
-            if ! api_get "/mgmt/tm/sys/url-db/url-category/~Common~${object_name}" >/dev/null 2>&1; then
-                echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Object not found${NC}"
+            if ! entries=$(get_url_category_entries_remote "${object_name}"); then
+                echo -e "\033[2K\r  ${RED}[FAIL]${NC} ${WHITE}${host} (${site}) - Object not found or read failed${NC}"
                 continue
             fi
             while IFS= read -r url; do
@@ -6714,7 +6816,7 @@ menu_fleet_looking_glass() {
                     entry_hosts["${url}"]="${host}"
                 fi
                 count=$((count + 1))
-            done < <(get_url_category_entries_remote "${object_name}")
+            done <<< "${entries}"
         fi
         
         pulled_hosts+=("${host}")
@@ -7712,7 +7814,7 @@ main() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.7                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.8                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -7802,15 +7904,26 @@ main() {
                 invalid_count=$((invalid_count + 1))
             fi
         done
-        if [ ${invalid_count} -eq 0 ]; then
-            log_ok "All partitions verified"
+        if [ ${invalid_count} -gt 0 ]; then
+            log_warn "${invalid_count} configured partition(s) not found. They will be skipped."
+        else
+            log_ok "All partitions validated"
+        fi
+        
+        # Backup directory - same check as pre-flight; the directory may have
+        # been removed or lost permissions during the previous session
+        if ! ensure_backup_dir; then
+            log_warn "Cannot create or access backup directory: ${BACKUP_DIR}"
+            log_warn "Backups will be disabled. Proceed with caution."
+        else
+            log_ok "Local backup directory: ${BACKUP_DIR}"
         fi
         
         # Check URL category database
         if url_category_db_available; then
             log_ok "URL category database available"
         else
-            log_info "URL category database not available (URL category features disabled)"
+            log_info "URL category database not available (URL filtering module may not be provisioned)"
         fi
         
         sleep 2
