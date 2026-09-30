@@ -1,24 +1,35 @@
+## b11.3.15.0-devel (Beta 11 - September 30 2026)
+
+- Connecting requires SSL Orchestrator to be installed and provisioned. A device without the SSLO package previously produced a warning and the session continued, leaving replay to post blocks with no SSLO version in the operation context. The connection is now rejected when the package is missing, its release cannot be parsed, SSLO is not provisioned (matching the collection's check_sslo_provisioned), or either check cannot be read
+- Connection retry keeps what the failure did not invalidate. After an SSLO check fails, the retry reconnects to the same device with the same credentials; after a network failure, it asks for the host and keeps the credentials. Previously every retry asked for host, username, and password again
+
 ## b10.3.15.0-devel (Beta 10 - September 29 2026)
 
-- **The API reference moved from F5 Ansible collection f5networks.f5_bigip 3.14.0 to 3.15.0**. 3.15.0 extends SSLO support from 12.0 to versions below 15.0 and documents the SSLO 13 and 14 schema fields; 3.14.0 capped at 12.0. Operation block templates, per-type inputProperty sets, and pfId token format are unchanged between the two collections, so snapshots recorded by earlier betas remain valid
+- API reference moved from F5 Ansible collection f5networks.f5_bigip 3.14.0 to 3.15.0 (released September 29 2026). 3.15.0 extends SSLO support from 12.0 to versions below 15.0 and documents the SSLO 13 and 14 schema fields; 3.14.0 capped at 12.0. Tool version is now 0.3.15-devel. Operation block templates, per-type inputProperty sets, and pfId token format are unchanged between the two collections, so snapshots recorded by earlier betas remain valid
 - IP reputation conditions no longer block replay. Client/Server IP Reputation conditions store reputation categories (Spam Sources, BotNets, Tor Proxy) in options.category; they were captured and validated as custom URL categories and reported missing on every target
 - Layer 2 service VLANs are captured and validated from customService.connectionInformation.interfaces[], the path the collection reads in 3.14.0 and 3.15.0. The previous serviceSpecific.devices[] path does not exist, so Layer 2 VLANs were never checked
 - Service SNAT pools are read from customService.snatConfiguration. The previous top-level path does not exist, so service SNAT pools were never checked
 - Datagroups referenced by match-pattern conditions (server certificate subject DN, issuer DN, SANs, TLS ClientHello server name, URL branching) and entries in Client VLAN conditions are captured and validated. Client VLAN entries are resolved as VLAN or datagroup on each device
 - New service references captured and validated: egress iRules (iRuleListEgress, SSLO 13+), default persistence profile (SSLO 14+), service entry and return SSL profiles, off-box AWAF HTTP profile, and on-box WAF iRules, security policy, DoS, bot defense, and security log profiles
-- New topology references captured and validated: log publisher, DNS resolver, and the inbound application-mode pool. SSL settings OCSP and CRL validators are captured and validated
-- Built-in URL category list extended from 168 to 221 entries: the Ansible condition_category_list plus the TMOS 17.5 and 21.1 URL databases. TMOS 21.1 no longer has five 17.5 categories (Illegal or Questionable, Gay or Lesbian or Bisexual Interest, Non-Traditional Religions, Traditional Religions, Society and Lifestyles) and adds 53, including Generative AI, DNS Over HTTPS, and LGBTQIA. 
+- New topology references captured and validated: log publisher (settable since 3.15.0), DNS resolver, and the inbound application-mode pool. SSL settings OCSP and CRL validators are captured and validated
+- Built-in URL category list extended from 168 to 221 entries: the Ansible condition_category_list plus the TMOS 17.5 and 21.1 URL databases. TMOS 21.1 no longer has five 17.5 categories (Illegal or Questionable, Gay or Lesbian or Bisexual Interest, Non-Traditional Religions, Traditional Religions, Society and Lifestyles) and adds 53, including Generative AI, DNS Over HTTPS, and LGBTQIA. Both old and new names are kept
 - Replay checks every URL category a policy uses, built-in or custom, against the target's URL database. A built-in category that does not exist on the target TMOS version (a 17.5 snapshot replayed to 21.1) is reported as missing instead of failing at deploy. When the URL database cannot be read, built-ins are assumed present and custom categories are checked individually
 - Record prefers the component (state) block over a CREATE operation block when both exist for an object. A record taken within the operation block's BOUND window previously captured the transient request instead of the deployed configuration
 - Supported replay direction documented: same or newer SSLO version. Verified 17.5 (SSLO 12.4.2) to 21.1 (SSLO 14.1.5) full replay
 - Record and replay prerequisite validation share one reference walker. The two copies had drifted, which is how the Layer 2 and SNAT paths stayed wrong in both
 - Replayable SSL settings blocks go through CREATE conversion like state blocks. A CREATE operation block captured inside its 120-second BOUND window previously replayed with the source pfId tokens and no passphrase prompt
+- restrictedProperties is stripped at capture. Snapshots never carry key passphrase values
 - Record lists SSLO objects whose component block is not UNBOUND (ERROR, stuck BINDING/UNBINDING) and requires confirmation before writing a snapshot without them. They were previously dropped silently
 - Record refuses blocks nested too deep for ConvertTo-Json, and snapshot verification compares each block's nesting depth after the round trip. PS 5.1 truncation replaces deep objects with strings, which the previous count check could not detect
 - Redeploy stuck-block cleanup touches only operation blocks for the selected topology, matched by the operation context's deploymentName. The topology's own component block is never deleted; if it left UNBOUND since selection, redeploy aborts with no changes
 - Dynamic naming substitutes names at identifier boundaries. Renaming sslo_web no longer rewrites a chain named ssloSC_sslo_web_bypass or a topology named sslo_web2. Each renamed block is verified: no other SSLO object reference and no external /Common/ dependency may change, and the new base name must not collide with existing content
 - Monitor capture probes gateway-icmp, icmp, udp, tcp-half-open, and external monitors in addition to tcp, http, and https. Gateway ICMP monitors are recorded as monitor_gateway_icmp; monitor_icmp now means /ltm/monitor/icmp
 - Custom access profiles referenced by a topology are validated during replay prerequisites. The user guide already listed them; the check was missing
+- Policy swap and redeploy list topologies excluded because their component block is not UNBOUND
+- Replay, policy swap, redeploy, and delete share one post/poll/verify implementation
+- Removed the unreachable SSL settings branch from the policy swap pre-flight
+- Script saved as UTF-8 with BOM. Windows PowerShell 5.1 reads BOM-less files as ANSI, and the menu's box-drawing characters then decode to curly quotes that break parsing
+- Script header version corrected. Beta 9 shipped with a Beta 8 header
 
 ## b9.3.14.0-devel (Beta 9 - September 2 2026)
 

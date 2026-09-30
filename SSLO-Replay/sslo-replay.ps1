@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay - F5 SSL Orchestrator Snapshot and Replay Tool
 # =============================================================================
-# Version: b10.3.15.0-devel (Beta 10 September 29 2026)
+# Version: b11.3.15.0-devel (Beta 11 September 30 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -437,6 +437,7 @@ $script:PfIdRegenerated = 0
 $script:PassphraseCache = @{}
 $script:ConsecutiveFailures = 0
 $script:TargetUrlCategories = $null
+$script:ConnectFailure = ""
 
 # =============================================================================
 # SSL BYPASS (self-signed BIG-IP management certs)
@@ -656,32 +657,38 @@ function Save-F5Config {
 # =============================================================================
 
 # Prompt for target and credentials, verify connectivity, capture TMOS/SSLO versions
+# HostOnly: prompt for the host, keep existing credentials.
+# Reuse: prompt for nothing, reconnect to the same host with the same credentials.
+# Sets $script:ConnectFailure on failure: input, auth, network, or sslo
 function Initialize-RemoteConnection {
-    param([switch]$HostOnly)
+    param([switch]$HostOnly, [switch]$Reuse)
     
     Write-LogSection "SSLO-Replay Connection Setup"
     Write-Host ""
+    $script:ConnectFailure = ""
     
-    $hostInput = Read-Host "  BIG-IP hostname or IP (0 to exit)"
+    $haveCredentials = -not [string]::IsNullOrWhiteSpace($script:RemoteUser) -and -not [string]::IsNullOrWhiteSpace($script:RemotePass)
+    $reuseAll = $Reuse -and $haveCredentials -and -not [string]::IsNullOrWhiteSpace($script:RemoteHost)
     
-    if ($hostInput -eq "0") {
-        Write-Host ""
-        Write-Host "  Exiting." -ForegroundColor White
-        Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
-        Write-Host "  API reference: https://github.com/F5Networks/f5-ansible-bigip" -ForegroundColor Cyan
-        Write-Host ""
-        exit 0
+    if (-not $reuseAll) {
+        $hostInput = Read-Host "  BIG-IP hostname or IP (0 to exit)"
+        
+        if ($hostInput -eq "0") {
+            Show-ExitMessage
+            exit 0
+        }
+        
+        $script:RemoteHost = $hostInput
+        
+        if ([string]::IsNullOrWhiteSpace($script:RemoteHost)) {
+            Write-LogError "No hostname provided."
+            $script:ConnectFailure = "input"
+            return $false
+        }
     }
     
-    $script:RemoteHost = $hostInput
-    
-    if ([string]::IsNullOrWhiteSpace($script:RemoteHost)) {
-        Write-LogError "No hostname provided."
-        return $false
-    }
-    
-    # Reuse existing credentials when switching hosts
-    if (-not $HostOnly -or [string]::IsNullOrWhiteSpace($script:RemoteUser)) {
+    # Reuse existing credentials when switching hosts or reconnecting
+    if (-not $reuseAll -and (-not $HostOnly -or -not $haveCredentials)) {
         $userInput = Read-Host "  Username [admin]"
         $script:RemoteUser = if ([string]::IsNullOrWhiteSpace($userInput)) { "admin" } else { $userInput }
         
@@ -692,6 +699,7 @@ function Initialize-RemoteConnection {
         
         if ([string]::IsNullOrWhiteSpace($script:RemotePass)) {
             Write-LogError "No password provided."
+            $script:ConnectFailure = "input"
             return $false
         }
     }
@@ -729,33 +737,61 @@ function Initialize-RemoteConnection {
             Write-LogOk "TMOS version $($script:TMOSVersion)"
         }
         
-        # Retrieve SSLO version from installed packages
+        # SSLO must be installed and provisioned - every menu option operates on
+        # SSLO blocks, and the operation context requires the SSLO version.
+        # Checks match the Ansible collection (client.py sslo_version() and
+        # check_sslo_provisioned()). Any failure rejects the connection
+        $script:SSLOVersion = ""
+        $script:SSLOVersionNum = $null
         $pkgResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/installed-packages"
-        if ($pkgResult.Success -and $pkgResult.Response.items) {
-            foreach ($pkg in $pkgResult.Response.items) {
-                if ($pkg.appName -eq "f5-iappslx-ssl-orchestrator") {
-                    $script:SSLOVersion = $pkg.release
-                    break
-                }
+        if (-not $pkgResult.Success) {
+            Write-LogError "Could not read installed packages (HTTP $($pkgResult.StatusCode)). SSLO cannot be verified."
+            $script:ConnectFailure = "sslo"
+            return $false
+        }
+        foreach ($pkg in @($pkgResult.Response.items)) {
+            if ($pkg -and $pkg.appName -eq "f5-iappslx-ssl-orchestrator") {
+                $script:SSLOVersion = [string]$pkg.release
+                break
             }
         }
-        if ($script:SSLOVersion) {
-            Write-LogOk "SSLO version $($script:SSLOVersion)"
-            # Numeric major.minor for operation-context version fields, derived the
-            # same way as the Ansible collection (client.py sslo_version(): release
-            # split on '.', first two parts). InvariantCulture - never locale decimal
-            $verParts = $script:SSLOVersion -split "\."
-            if ($verParts.Count -ge 2) {
-                $parsedVer = 0.0
-                if ([double]::TryParse("$($verParts[0]).$($verParts[1])",
-                        [System.Globalization.NumberStyles]::Float,
-                        [System.Globalization.CultureInfo]::InvariantCulture,
-                        [ref]$parsedVer)) {
-                    $script:SSLOVersionNum = $parsedVer
-                }
+        if (-not $script:SSLOVersion) {
+            Write-LogError "SSL Orchestrator package (f5-iappslx-ssl-orchestrator) is not installed on $($script:RemoteHostname)."
+            $script:ConnectFailure = "sslo"
+            return $false
+        }
+        
+        # Numeric major.minor for operation-context version fields, derived the
+        # same way as the Ansible collection (release split on '.', first two
+        # parts). InvariantCulture - never locale decimal
+        $verParts = $script:SSLOVersion -split "\."
+        if ($verParts.Count -ge 2) {
+            $parsedVer = 0.0
+            if ([double]::TryParse("$($verParts[0]).$($verParts[1])",
+                    [System.Globalization.NumberStyles]::Float,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [ref]$parsedVer)) {
+                $script:SSLOVersionNum = $parsedVer
             }
-        } else {
-            Write-LogWarn "SSLO package not detected"
+        }
+        if ($null -eq $script:SSLOVersionNum) {
+            Write-LogError "SSLO package release '$($script:SSLOVersion)' could not be parsed as a version."
+            $script:ConnectFailure = "sslo"
+            return $false
+        }
+        Write-LogOk "SSLO version $($script:SSLOVersion)"
+        
+        $provResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/provision"
+        if (-not $provResult.Success) {
+            Write-LogError "Could not read module provisioning (HTTP $($provResult.StatusCode)). SSLO cannot be verified."
+            $script:ConnectFailure = "sslo"
+            return $false
+        }
+        $ssloProv = @($provResult.Response.items) | Where-Object { $_ -and $_.name -eq "sslo" } | Select-Object -First 1
+        if (-not $ssloProv -or $ssloProv.level -eq "none") {
+            Write-LogError "SSL Orchestrator is installed but not provisioned on $($script:RemoteHostname)."
+            $script:ConnectFailure = "sslo"
+            return $false
         }
         
         return $true
@@ -769,13 +805,51 @@ function Initialize-RemoteConnection {
                 $script:RemotePass = ""
                 return Initialize-RemoteConnection
             }
+            $script:ConnectFailure = "auth"
         } elseif ($result.StatusCode -eq 0) {
             Write-LogError "Connection failed. Check hostname and network connectivity."
+            $script:ConnectFailure = "network"
         } else {
             Write-LogError "Connection failed. HTTP $($result.StatusCode)"
+            $script:ConnectFailure = "network"
         }
         return $false
     }
+}
+
+# Connect with a retry loop. A retry keeps whatever the failure did not
+# invalidate: an SSLO check failure keeps host and credentials (the device
+# answered and accepted the login), a network failure keeps credentials and
+# asks for the host, anything else prompts as on the first attempt
+# Returns: $true when connected, $false when the operator declines to retry
+function Connect-WithRetry {
+    param([switch]$HostOnly)
+    
+    $mode = @{ HostOnly = [bool]$HostOnly }
+    while ($true) {
+        if (Initialize-RemoteConnection @mode) { return $true }
+        
+        Write-Host ""
+        $target = if ($script:ConnectFailure -eq "sslo") { " to $($script:RemoteHostname)" } else { "" }
+        $retry = Read-Host "  Retry connection${target}? (yes/no) [yes]"
+        if ([string]::IsNullOrWhiteSpace($retry)) { $retry = "yes" }
+        if ($retry -ne "yes") { return $false }
+        
+        switch ($script:ConnectFailure) {
+            "sslo"    { $mode = @{ Reuse = $true } }
+            "network" { $mode = @{ HostOnly = $true } }
+            default   { $mode = @{ HostOnly = [bool]$HostOnly } }
+        }
+    }
+}
+
+# Exit banner with the project and API reference links
+function Show-ExitMessage {
+    Write-Host ""
+    Write-Host "  Exiting." -ForegroundColor White
+    Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
+    Write-Host "  API reference: https://github.com/F5Networks/f5-ansible-bigip" -ForegroundColor Cyan
+    Write-Host ""
 }
 
 # =============================================================================
@@ -4733,19 +4807,9 @@ function Main {
     Initialize-SslBypass
     
     # Initial connection (with retry loop)
-    while ($true) {
-        if (Initialize-RemoteConnection) { break }
-        Write-Host ""
-        $retry = Read-Host "  Retry connection? (yes/no) [yes]"
-        if ([string]::IsNullOrWhiteSpace($retry)) { $retry = "yes" }
-        if ($retry -ne "yes") {
-            Write-Host ""
-            Write-Host "  Exiting." -ForegroundColor White
-            Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
-            Write-Host "  API reference: https://github.com/F5Networks/f5-ansible-bigip" -ForegroundColor Cyan
-            Write-Host ""
-            return
-        }
+    if (-not (Connect-WithRetry)) {
+        Show-ExitMessage
+        return
     }
     
     Start-Sleep -Seconds 2
@@ -4765,11 +4829,7 @@ function Main {
                 "4" { Invoke-TopologyDelete }
                 "5" { break }
                 "0" {
-                    Write-Host ""
-                    Write-Host "  Exiting." -ForegroundColor White
-                    Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
-                    Write-Host "  API reference: https://github.com/F5Networks/f5-ansible-bigip" -ForegroundColor Cyan
-                    Write-Host ""
+                    Show-ExitMessage
                     return
                 }
                 default {
@@ -4789,19 +4849,9 @@ function Main {
         $script:SSLOVersion = ""
         $script:SSLOVersionNum = $null
         
-        while ($true) {
-            if (Initialize-RemoteConnection -HostOnly) { break }
-            Write-Host ""
-            $retry = Read-Host "  Retry connection? (yes/no) [yes]"
-            if ([string]::IsNullOrWhiteSpace($retry)) { $retry = "yes" }
-            if ($retry -ne "yes") {
-                Write-Host ""
-                Write-Host "  Exiting." -ForegroundColor White
-                Write-Host "  Latest version: https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
-                Write-Host "  API reference: https://github.com/F5Networks/f5-ansible-bigip" -ForegroundColor Cyan
-                Write-Host ""
-                return
-            }
+        if (-not (Connect-WithRetry -HostOnly)) {
+            Show-ExitMessage
+            return
         }
         
         Start-Sleep -Seconds 2

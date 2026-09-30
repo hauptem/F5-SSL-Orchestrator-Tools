@@ -22,7 +22,7 @@ powershell.exe -File .\sslo-replay.ps1
 
 Windows PowerShell 5.1 (Desktop edition) only. PowerShell 7+ (pwsh) is not supported because it ignores the certificate bypass the tool uses for self-signed BIG-IP management certs. If launched under pwsh the tool exits at startup and prints the correct invocation. No modules or dependencies required.
 
-On launch you get a connection prompt. Enter the BIG-IP management IP and credentials. The tool validates connectivity, checks TMOS and SSLO versions, and drops you into the main menu. The connection uses iControl REST over HTTPS on port 443.
+On launch you get a connection prompt. Enter the BIG-IP management IP and credentials. The tool validates connectivity, checks the TMOS version, confirms SSL Orchestrator is installed and provisioned, and drops you into the main menu. A device without SSLO is rejected and you are offered a retry. The connection uses iControl REST over HTTPS on port 443.
 
 ## Main Menu
 
