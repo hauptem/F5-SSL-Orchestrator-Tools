@@ -1,4 +1,4 @@
-# SSLO-Replay 0.3.15.0-devel Snapshot and Restore Tool
+# SSLO-Replay 0.3.15.0-devel Snapshot and "Restore" Tool
 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![TMOS Version](https://img.shields.io/badge/TMOS-17.x%20%7C%2021.x-red)
@@ -34,7 +34,7 @@ The snapshot is a single JSON file containing every SSLO object. External depend
 
 ## How It Works
 
-SSLO-Replay does not try to restore state. It replays intent.
+SSLO-Replay does not try to restore state. **It replays intent.**
 
 1. **Record** connects to a BIG-IP, retrieves all iAppsLX blocks, classifies the SSLO objects, strips instance-specific fields (UUIDs, block IDs, restricted hashes), captures external dependencies, and writes a portable JSON snapshot
 2. **Replay** reads the snapshot, validates prerequisites on the target, transforms state blocks into gc processor CREATE format with correct per-type inputProperties, and replays objects in dependency order: SSL settings → services → service chains → security policies → topologies
