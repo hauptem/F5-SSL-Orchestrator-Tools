@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.7
+# Version: 5.8
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -419,12 +419,14 @@ function Get-DatagroupDisplayPath {
 
 # Build the filename token identifying a datagroup's partition and folder
 # The folder is folded in so two datagroups sharing a leaf name in different
-# folders neither overwrite each other on disk nor share one rotation pool
+# folders neither overwrite each other on disk nor share one rotation pool.
+# Folder segments are joined with a double underscore: a single underscore
+# would map /Common/a/b and /Common/a_b to the same token
 function Get-DatagroupScopeToken {
     param([string]$Partition, [string]$SubPath = "")
     $token = $Partition
     if (-not [string]::IsNullOrWhiteSpace($SubPath)) {
-        $token = "${Partition}_$($SubPath.Trim('/'))"
+        $token = "${Partition}__$($SubPath.Trim('/') -replace '/', '__')"
     }
     return ($token -replace '[^a-zA-Z0-9_-]', '_')
 }
@@ -491,12 +493,19 @@ function Confirm-BackupDir {
 }
 
 # Prune rotated backups beyond MAX_BACKUPS for a filename pattern
+# The match is anchored on the timestamp suffix. A wildcard filter of
+# "<pattern>_*.csv" also matches every object whose name extends the
+# pattern (urlcat_Bypass matches urlcat_Bypass_Finance), so rotating one
+# object would delete another's backups
 function Remove-OldBackups {
     param(
         [string]$Pattern,
         [string]$Directory = $script:BACKUP_DIR
     )
-    $files = @(Get-ChildItem -Path $Directory -Filter "${Pattern}_*.csv" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    $regex = '^' + [regex]::Escape($Pattern) + '_\d{8}_\d{6}\.csv$'
+    $files = @(Get-ChildItem -Path $Directory -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match $regex } |
+        Sort-Object LastWriteTime -Descending)
     if ($files -and $files.Count -gt $script:MAX_BACKUPS) {
         $files | Select-Object -Skip $script:MAX_BACKUPS | Remove-Item -Force -ErrorAction SilentlyContinue
     }
@@ -708,9 +717,10 @@ function Initialize-RemoteConnection {
         return $false
     }
     
-    # Build auth header
+    # Build auth header. UTF-8 per RFC 7617; ASCII would replace any
+    # non-ASCII password character with '?' and surface as a plain 401
     $pair = "$($script:RemoteUser):$($script:RemotePass)"
-    $bytes = [System.Text.Encoding]::ASCII.GetBytes($pair)
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($pair)
     $script:AuthHeader = [System.Convert]::ToBase64String($bytes)
     
     # Test connection
@@ -838,12 +848,15 @@ function Get-DatagroupTypeRemote {
 }
 
 # Get datagroup records
-# Returns: array of @{ Key; Value }
+# Returns: array of @{ Key; Value }, or $null if the read failed. A failed
+# read is distinct from an empty datagroup: callers that write back a full
+# record set must abort on $null, or a timeout on a large object becomes a
+# replace with nothing. Test with ($null -eq $records) - $null.Count is 0
 function Get-DatagroupRecordsRemote {
     param([string]$Partition, [string]$Name, [string]$SubPath = "")
     $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$objectPath"
-    if (-not $result.Success) { return @() }
+    if (-not $result.Success) { return $null }
     
     $records = @()
     if ($result.Response.records) {
@@ -851,7 +864,9 @@ function Get-DatagroupRecordsRemote {
             $records += @{ Key = $rec.name; Value = $(if ($rec.data) { $rec.data } else { "" }) }
         }
     }
-    return $records
+    # Comma operator: a bare empty array unrolls to $null on return, which
+    # callers would read as a failed GET
+    return ,$records
 }
 
 # Create an empty internal datagroup
@@ -1085,16 +1100,17 @@ function Get-UrlCategoryListRemote {
 }
 
 # Get URL entries for a category
-# Returns: array of URL strings
+# Returns: array of URL strings, or $null if the read failed - see
+# Get-DatagroupRecordsRemote
 function Get-UrlCategoryEntriesRemote {
     param([string]$Name)
     $result = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$Name"
-    if (-not $result.Success) { return @() }
+    if (-not $result.Success) { return $null }
     $urls = @()
     if ($result.Response.urls) {
         foreach ($url in $result.Response.urls) { $urls += $url.name }
     }
-    return $urls
+    return ,$urls
 }
 
 # Get the URL count for a category
@@ -1114,6 +1130,20 @@ function New-UrlCategoryRemote {
     return $result.Success
 }
 
+# Reduce the urls[] objects BIG-IP returned to the two writable properties.
+# Echoing the server objects back in a PATCH would carry any read-only
+# property a later TMOS adds to the collection and fail the whole request
+function ConvertTo-WritableUrlObjects {
+    param([array]$ServerUrls)
+    $objects = @()
+    foreach ($url in $ServerUrls) {
+        if ([string]::IsNullOrWhiteSpace($url.name)) { continue }
+        $type = $(if ($url.type) { [string]$url.type } elseif ($url.name.Contains('*')) { "glob-match" } else { "exact-match" })
+        $objects += @{ name = [string]$url.name; type = $type }
+    }
+    return $objects
+}
+
 # Merge new URLs into a category (GET, merge, PATCH full set)
 function Add-UrlCategoryEntriesRemote {
     param([string]$Name, [array]$NewUrls)
@@ -1122,7 +1152,7 @@ function Add-UrlCategoryEntriesRemote {
     if (-not $result.Success) { return $false }
     
     $existing = @()
-    if ($result.Response.urls) { $existing = @($result.Response.urls) }
+    if ($result.Response.urls) { $existing = ConvertTo-WritableUrlObjects -ServerUrls @($result.Response.urls) }
     
     # Merge and deduplicate by name (ordinal: BIG-IP names are case-sensitive)
     $merged = [System.Collections.Hashtable]::new()
@@ -1142,9 +1172,12 @@ function Remove-UrlCategoryEntriesRemote {
     if (-not $result.Success) { return $false }
     
     $existing = @()
-    if ($result.Response.urls) { $existing = @($result.Response.urls) }
+    if ($result.Response.urls) { $existing = ConvertTo-WritableUrlObjects -ServerUrls @($result.Response.urls) }
     
-    $remaining = @($existing | Where-Object { $UrlsToDelete -notcontains $_.name })
+    # Ordinal set: -notcontains folds case and would drop a case-variant sibling
+    $deleteSet = [System.Collections.Hashtable]::new()
+    foreach ($u in $UrlsToDelete) { if (-not [string]::IsNullOrEmpty($u)) { $deleteSet[$u] = $true } }
+    $remaining = @($existing | Where-Object { -not $deleteSet.ContainsKey($_.name) })
     
     $body = @{ urls = @($remaining) }
     $patchResult = Invoke-F5Patch -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~$Name" -Body $body
@@ -1846,13 +1879,33 @@ function Deploy-DatagroupToHost {
         # tmsh modify mode: add then delete
         $mergeErrors = 0
         
+        # The delta was computed against the source device. A target that
+        # already holds one of the added keys rejects the whole records add
+        # chunk, and the deletions would then run against a half-applied
+        # set. Read the target and reduce the delta to what it
+        # lacks or holds; a failed read aborts before anything is written
+        $targetRecords = Get-DatagroupRecordsRemote -Partition $Partition -Name $DgName -SubPath $SubPath
+        if ($null -eq $targetRecords) {
+            Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Reading target records" -ForegroundColor White
+            $script:DeployErrorMsg = "Could not read target records"
+            $script:RemoteHost = $origHost
+            return $false
+        }
+        $targetKeys = [System.Collections.Hashtable]::new()
+        foreach ($rec in $targetRecords) { $targetKeys[$rec.Key] = $true }
+        
         # Additions first
-        if ($AdditionsJson.Count -gt 0) {
-            $addKeys = @(); $addValues = @()
-            foreach ($rec in $AdditionsJson) {
-                $addKeys += $rec.name
-                $addValues += $(if ($rec.data) { $rec.data } else { "" })
-            }
+        $addKeys = @(); $addValues = @()
+        foreach ($rec in $AdditionsJson) {
+            if ($targetKeys.ContainsKey($rec.name)) { continue }
+            $addKeys += $rec.name
+            $addValues += $(if ($rec.data) { $rec.data } else { "" })
+        }
+        $skippedAdds = $AdditionsJson.Count - $addKeys.Count
+        if ($skippedAdds -gt 0) {
+            Write-LogInfo "$skippedAdds record(s) already present on target, not re-added"
+        }
+        if ($addKeys.Count -gt 0) {
             if (-not (Add-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -Keys $addKeys -Values $addValues -SubPath $SubPath)) {
                 Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Adding records" -ForegroundColor White
                 $mergeErrors++
@@ -1860,8 +1913,9 @@ function Deploy-DatagroupToHost {
         }
         
         # Deletions second
-        if ($DeletionsList.Count -gt 0) {
-            if (-not (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -Keys $DeletionsList -SubPath $SubPath)) {
+        $delKeys = @($DeletionsList | Where-Object { $targetKeys.ContainsKey($_) })
+        if ($delKeys.Count -gt 0) {
+            if (-not (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -Keys $delKeys -SubPath $SubPath)) {
                 Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Deleting records" -ForegroundColor White
                 $mergeErrors++
             }
@@ -2446,7 +2500,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.7                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.8                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -2756,6 +2810,12 @@ function Invoke-CreateDatagroup {
     if ($exists) {
         $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
         $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
+        if ($null -eq $records) {
+            Write-LogError "Could not read datagroup '$dgPath'. No changes have been made."
+            Write-LogInfo "For large datagroups, raise API_TIMEOUT and retry."
+            Wait-EnterKey
+            return
+        }
         
         Write-LogInfo "Datagroup '$dgPath' exists."
         Write-LogInfo "  Type: $dgType"
@@ -2982,6 +3042,16 @@ function Invoke-CreateDatagroup {
     if ($restoreMode -eq "merge") {
         Write-LogStep "Reading existing entries for merge..."
         $existing = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
+        # A failed read must not proceed: the merge is applied as a full
+        # replace, so an empty result here would replace the datagroup
+        # with the CSV contents alone
+        if ($null -eq $existing) {
+            Write-LogError "Could not read existing entries. No changes have been made."
+            Write-LogInfo "For large datagroups, raise API_TIMEOUT and retry."
+            if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
+            Wait-EnterKey
+            return
+        }
         # Ordinal: BIG-IP datagroup keys are case-sensitive
         $merged = [System.Collections.Hashtable]::new()
         foreach ($rec in $existing) { $merged[$rec.Key] = $rec.Value }
@@ -3192,6 +3262,12 @@ function Invoke-CreateUrlCategory {
     if ($restoreMode -eq "merge") {
         Write-LogStep "Reading existing URLs for merge..."
         $existing = Get-UrlCategoryEntriesRemote -Name $catName
+        if ($null -eq $existing) {
+            Write-LogError "Could not read existing URLs. No changes have been made."
+            if ($tempCsv) { Remove-Item $tempCsv -ErrorAction SilentlyContinue }
+            Wait-EnterKey
+            return
+        }
         $existingSet = [System.Collections.Hashtable]::new()
         foreach ($url in $existing) { $existingSet[$url] = $true }
         
@@ -3336,12 +3412,13 @@ function Invoke-DeleteDatagroup {
     
     $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
     $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
+    $recordCount = $(if ($null -eq $records) { "(read failed)" } else { $records.Count })
     
     Write-Host ""
     Write-LogWarn "You are about to delete the following datagroup:"
     Write-LogInfo "  Path:    $dgPath"
     Write-LogInfo "  Type:    $dgType"
-    Write-LogInfo "  Records: $($records.Count)"
+    Write-LogInfo "  Records: $recordCount"
     Write-Host ""
     
     if ($script:BACKUPS_ENABLED -eq 1) {
@@ -3655,6 +3732,12 @@ function Invoke-ExportUrlCategory {
     
     Write-LogStep "Exporting URL category..."
     $entries = Get-UrlCategoryEntriesRemote -Name $selectedCategory
+    # A failed read would otherwise export a header-only file reporting 0 URLs
+    if ($null -eq $entries) {
+        Write-LogError "Could not read URL category. Nothing exported."
+        Wait-EnterKey
+        return
+    }
     
     $lines = @(
         "# URL Category Export: $selectedCategory",
@@ -3852,19 +3935,18 @@ function Invoke-FleetLookingGlass {
             continue
         }
         
-        # Pull entries
+        # Pull entries. A failed read excludes the host from the comparison;
+        # counting it as pulled with zero entries would mark every entry
+        # missing there. The helpers return $null on failure and @() for
+        # an empty object, so one read settles both
         $entries = @()
         if ($objectType -eq "datagroup") {
             $records = Get-DatagroupRecordsRemote -Partition $partition -Name $objectName -SubPath $objectSubPath
-            if ($records.Count -eq 0) {
-                # Check if object exists vs empty
-                $existResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/$(Get-DatagroupPath -Partition $partition -Name $objectName -SubPath $objectSubPath)"
-                if (-not $existResult.Success) {
-                    Write-Host "`r$(' ' * 80)" -NoNewline
-                    Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
-                    Write-Host " $hostName ($siteId) - Object not found" -ForegroundColor White
-                    continue
-                }
+            if ($null -eq $records) {
+                Write-Host "`r$(' ' * 80)" -NoNewline
+                Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
+                Write-Host " $hostName ($siteId) - Object not found or read failed" -ForegroundColor White
+                continue
             }
             foreach ($rec in $records) {
                 $entry = $rec.Key
@@ -3879,14 +3961,11 @@ function Invoke-FleetLookingGlass {
             $entries = $records
         } else {
             $urls = Get-UrlCategoryEntriesRemote -Name $objectName
-            if ($urls.Count -eq 0) {
-                $existResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~${objectName}"
-                if (-not $existResult.Success) {
-                    Write-Host "`r$(' ' * 80)" -NoNewline
-                    Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
-                    Write-Host " $hostName ($siteId) - Object not found" -ForegroundColor White
-                    continue
-                }
+            if ($null -eq $urls) {
+                Write-Host "`r$(' ' * 80)" -NoNewline
+                Write-Host "`r  [FAIL]" -NoNewline -ForegroundColor Red
+                Write-Host " $hostName ($siteId) - Object not found or read failed" -ForegroundColor White
+                continue
             }
             foreach ($url in $urls) {
                 if (-not $entryHosts.ContainsKey($url)) {
@@ -4479,8 +4558,16 @@ function Invoke-EditorSubmenu {
     $originalKeys = [System.Collections.ArrayList]::new()
     $originalValues = [System.Collections.ArrayList]::new()
     
+    # The editor's Full Replace and fleet Replace write the working set
+    # back verbatim, so a failed load must not open an empty editor
     if ($EditType -eq "datagroup") {
         $records = Get-DatagroupRecordsRemote -Partition $Partition -Name $DgName -SubPath $DgSubPath
+        if ($null -eq $records) {
+            Write-LogError "Could not read datagroup records. Editor not opened."
+            Write-LogInfo "For large datagroups, raise API_TIMEOUT and retry."
+            Wait-EnterKey
+            return
+        }
         foreach ($rec in $records) {
             $workingKeys.Add($rec.Key) | Out-Null
             $workingValues.Add($rec.Value) | Out-Null
@@ -4489,6 +4576,12 @@ function Invoke-EditorSubmenu {
         }
     } else {
         $entries = Get-UrlCategoryEntriesRemote -Name $CatName
+        if ($null -eq $entries) {
+            Write-LogError "Could not read URL category. Editor not opened."
+            Write-LogInfo "For large categories, raise API_TIMEOUT and retry."
+            Wait-EnterKey
+            return
+        }
         foreach ($url in $entries) {
             $workingKeys.Add($url) | Out-Null
             $workingValues.Add("") | Out-Null
@@ -4728,7 +4821,7 @@ function Invoke-EditorSubmenu {
                     if ($urlError) { Write-LogError "Invalid entry: $urlError."; Wait-EnterKey; continue }
                     
                     $formattedUrl = Format-DomainForUrlCategory -Domain $newUrl
-                    if ($workingKeys -contains $formattedUrl) { Write-LogWarn "URL '$formattedUrl' already exists."; Wait-EnterKey; continue }
+                    if ($workingKeys -ccontains $formattedUrl) { Write-LogWarn "URL '$formattedUrl' already exists."; Wait-EnterKey; continue }
                     Write-LogInfo "Will add: $formattedUrl"
                     $confirmAdd = Read-Host "  Confirm? (yes/no) [yes]"
                     if ([string]::IsNullOrWhiteSpace($confirmAdd)) { $confirmAdd = "yes" }
@@ -5784,7 +5877,7 @@ function Main {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.7                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.8                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -5886,15 +5979,26 @@ function Main {
                 $invalidCount++
             }
         }
-        if ($invalidCount -eq 0) {
-            Write-LogOk "All partitions verified"
+        if ($invalidCount -gt 0) {
+            Write-LogWarn "$invalidCount configured partition(s) not found. They will be skipped."
+        } else {
+            Write-LogOk "All partitions validated"
+        }
+        
+        # Backup directory - same check as pre-flight; the directory may have
+        # been removed or lost permissions during the previous session
+        if (-not (Confirm-BackupDir)) {
+            Write-LogWarn "Cannot create or access backup directory: $($script:BACKUP_DIR)"
+            Write-LogWarn "Backups will be disabled. Proceed with caution."
+        } else {
+            Write-LogOk "Backup directory: $($script:BACKUP_DIR)"
         }
         
         # Check URL category database
         if (Test-UrlCategoryDbAvailable) {
             Write-LogOk "URL category database available"
         } else {
-            Write-LogInfo "URL category database not available (URL category features disabled)"
+            Write-LogInfo "URL category database not available (URL filtering module may not be provisioned)"
         }
         
         Start-Sleep -Seconds 2
