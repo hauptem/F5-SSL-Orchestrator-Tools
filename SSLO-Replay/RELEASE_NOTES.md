@@ -1,7 +1,6 @@
 ## b11.3.15.0-devel (Beta 11 - September 30 2026)
 
 - Connecting requires SSL Orchestrator to be installed and provisioned. A device without the SSLO package previously produced a warning and the session continued, leaving replay to post blocks with no SSLO version in the operation context. The connection is now rejected when the package is missing, its release cannot be parsed, SSLO is not provisioned (matching the collection's check_sslo_provisioned), or either check cannot be read
-- Connection retry keeps what the failure did not invalidate. After an SSLO check fails, the retry reconnects to the same device with the same credentials; after a network failure, it asks for the host and keeps the credentials. Previously every retry asked for host, username, and password again
 
 ## b10.3.15.0-devel (Beta 10 - September 29 2026)
 
