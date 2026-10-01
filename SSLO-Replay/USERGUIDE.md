@@ -11,8 +11,6 @@
 - [Deleting a Topology](#deleting-a-topology)
 - [Preparing a Target Device](#preparing-a-target-device)
 - [Troubleshooting](#troubleshooting)
-- [License](#license)
-- [Disclaimer](#disclaimer)
 
 ## Running the Tool
 
