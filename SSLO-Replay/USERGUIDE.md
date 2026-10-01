@@ -173,7 +173,7 @@ The topology's own component block is never deleted, because it is the object th
 
 ## Deleting a Topology
 
-Menu option 4. Deletes a topology and its now-unreferenced dependents from the connected device, through the gc processor. No snapshot file is needed.
+Menu option 4. Deletes a topology and its now-unreferenced dependents from the connected device, through the gc processor. 
 
 The tool reads the live SSLO configuration, resolves the selected topology's stack (its SSL settings, security policy, the policy's service chains, and the chains' services) and reference-counts every object against the surviving configuration. Objects still referenced by another topology, policy, or chain are retained. Only objects that would be orphaned by the delete are removed.
 
@@ -187,7 +187,7 @@ Deletion runs in reverse deployment order: topology first, then security policy,
 
 After a successful delete you are offered a configuration save (tmsh save and mcpBlockIO block database save).
 
-External objects such as VLANs, certs, datagroups, and monitors are never deleted. Only SSLO iAppsLX objects are in scope.
+External objects such as VLANs, certs, datagroups, and monitors are never deleted. 
 
 ---
 
