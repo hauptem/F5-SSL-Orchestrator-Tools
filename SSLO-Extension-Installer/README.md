@@ -58,7 +58,7 @@ The Mask setting tells SSLO to present a valid forged certificate to the client 
 
 ## Requirements
 
-- BIG-IP running TMOS 17.x, 21.x or greater series
+- BIG-IP running TMOS 17.x, 21.x or greater 
 - SSL Orchestrator 12.x or greater
 - The `blocking-page-html` file alongside the script (the only external payload; all other iRules, iFiles, and service definitions are embedded)
 
