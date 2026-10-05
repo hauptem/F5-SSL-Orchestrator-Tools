@@ -16,8 +16,8 @@ TLS Recon is an iRule that attaches to an SSLO TCP intercept virtual server and 
 ## Requirements
 
 - F5 BIG-IP with SSLO deployed
-- BIG-IP running TMOS 17.x or 21.x series
-- SSL Orchestrator 12.x or 13.x
+- BIG-IP running TMOS 17.x, 21.x or greater
+- SSL Orchestrator 12.x or greater
 
 ## Quick Start
 
