@@ -23,31 +23,7 @@
 - Monitor capture probes gateway-icmp, icmp, udp, tcp-half-open, and external monitors in addition to tcp, http, and https. Gateway ICMP monitors are recorded as monitor_gateway_icmp; monitor_icmp now means /ltm/monitor/icmp
 - Custom access profiles referenced by a topology are validated during replay prerequisites. The user guide already listed them; the check was missing
 
-## b9.3.14.0-devel (Beta 9 - September 2 2026)
-
-- Dependency config cleaning is now recursive. The *Reference link strip and instance-field strip previously applied at the top level only, so nested collection members (cipher group allow[], log publisher destinations[]) kept nameReference links carrying the source TMOS version in the query string
-- Script header corrected to describe the current design: dependency configs go to the companion text manifest, which the tool does not read, and replay re-derives dependencies from the snapshot blocks.
-
-## b8.3.14.0-devel (Beta 8 - August 2026)
-
-- Corrected all F5 Ansible references to 3.14.0
-
-## b7.3.14.0-devel (Beta 7 - July 19 2026)
-
-- Poll timeout no longer reports a deployment as failed without checking for it. The gc processor does not stop when the poll gives up, and a completed operation block self-destructs 120 seconds after BOUND - so re-checking the operation block later is ambiguous (absent means succeeded-and-gone or never-bound). On timeout the tool now checks for the deployment's component block, the durable evidence that the deployment landed. Applies to CREATE operations only; a component block that predates a MODIFY or DELETE proves nothing. Late-verified objects count as replayed and reset the circuit breaker, so slow deployments can no longer trip the systemic-failure prompt
-- Timed-out objects that cannot be verified now report that the gc processor may still complete, and that a re-replay will safely skip anything that lands
-- Policy swap validates the target policy name with the same rule as replay-time renaming: 1-20 characters after ssloP_, letters, numbers, underscores. An unvalidated name previously flowed into OData filter queries, operation block names, and gc processor config data
-
-## b6.3.14.0-devel (Beta 6 - July 17 2026)
-
-- Snapshot block field backupType renamed to captureType. **SSLO Snapshots recorded by Beta 5 and earlier will fail import validation using Beta 6 - re-record your SSLO's using Beta 6**. The updated snapshot format version remains at 1.0 since we are still in beta.
-- Windows PowerShell 5.1 is enforced at startup. PowerShell 7+ ignores the ServicePointManager certificate bypass, so every connection would fail with opaque TLS errors. The tool now exits with the correct powershell.exe invocation instead
-- Config save connection-drop detection uses locale-invariant WebException status enums instead of matching the exception message, which .NET localizes per Windows display language. On a drop signature the tool confirms the management plane is reachable and re-issues the idempotent save before reporting success
-- Topology detection excludes operation blocks by their exact prefixes (sslo_ob_, sslo_obj_) instead of the bare sslo_ob stem. The stem match also swallowed legitimate topology names like sslo_observability, silently dropping them from snapshots, redeploy, and delete accounting
-- Replay circuit breaker consolidated into a single function. 
-- Terminology aligned across functions, prompts, and output: record/snapshot/replay replaces dump/backup/restore
-
-## SSLO Replay Snapshot Format v1.0 (updated in beta 10)
+## SSLO Replay Snapshot Format v1.0
 
 ```
 {
@@ -83,6 +59,30 @@ inputProperties values: existingBlockId, deploymentReference, obRestrictedAttrib
 sslo-snapshot_{hostname}_{yyyyMMdd-HHmmss}.json
 
 sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
+
+## b9.3.14.0-devel (Beta 9 - September 2 2026)
+
+- Dependency config cleaning is now recursive. The *Reference link strip and instance-field strip previously applied at the top level only, so nested collection members (cipher group allow[], log publisher destinations[]) kept nameReference links carrying the source TMOS version in the query string
+- Script header corrected to describe the current design: dependency configs go to the companion text manifest, which the tool does not read, and replay re-derives dependencies from the snapshot blocks.
+
+## b8.3.14.0-devel (Beta 8 - August 2026)
+
+- Corrected all F5 Ansible references to 3.14.0
+
+## b7.3.14.0-devel (Beta 7 - July 19 2026)
+
+- Poll timeout no longer reports a deployment as failed without checking for it. The gc processor does not stop when the poll gives up, and a completed operation block self-destructs 120 seconds after BOUND - so re-checking the operation block later is ambiguous (absent means succeeded-and-gone or never-bound). On timeout the tool now checks for the deployment's component block, the durable evidence that the deployment landed. Applies to CREATE operations only; a component block that predates a MODIFY or DELETE proves nothing. Late-verified objects count as replayed and reset the circuit breaker, so slow deployments can no longer trip the systemic-failure prompt
+- Timed-out objects that cannot be verified now report that the gc processor may still complete, and that a re-replay will safely skip anything that lands
+- Policy swap validates the target policy name with the same rule as replay-time renaming: 1-20 characters after ssloP_, letters, numbers, underscores. An unvalidated name previously flowed into OData filter queries, operation block names, and gc processor config data
+
+## b6.3.14.0-devel (Beta 6 - July 17 2026)
+
+- Snapshot block field backupType renamed to captureType. **SSLO Snapshots recorded by Beta 5 and earlier will fail import validation using Beta 6 - re-record your SSLO's using Beta 6**. The updated snapshot format version remains at 1.0 since we are still in beta.
+- Windows PowerShell 5.1 is enforced at startup. PowerShell 7+ ignores the ServicePointManager certificate bypass, so every connection would fail with opaque TLS errors. The tool now exits with the correct powershell.exe invocation instead
+- Config save connection-drop detection uses locale-invariant WebException status enums instead of matching the exception message, which .NET localizes per Windows display language. On a drop signature the tool confirms the management plane is reachable and re-issues the idempotent save before reporting success
+- Topology detection excludes operation blocks by their exact prefixes (sslo_ob_, sslo_obj_) instead of the bare sslo_ob stem. The stem match also swallowed legitimate topology names like sslo_observability, silently dropping them from snapshots, redeploy, and delete accounting
+- Replay circuit breaker consolidated into a single function. 
+- Terminology aligned across functions, prompts, and output: record/snapshot/replay replaces dump/backup/restore
 
 ## b5.3.14.0-devel (Beta 5 - June 12 2026)
 
