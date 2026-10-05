@@ -61,7 +61,8 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 
 - Windows PowerShell 5.1 (Desktop edition). PowerShell 7+ (pwsh) is not supported and the tool will exit at startup if launched under it
 - Network access to BIG-IP management interface (port 443)
-- BIG-IP running TMOS 17.x or later with SSLO 12.x or later
+- BIG-IP running TMOS 17.x, 21.x or greater 
+- SSL Orchestrator 12.x or greater
 
 ## Installation
 
