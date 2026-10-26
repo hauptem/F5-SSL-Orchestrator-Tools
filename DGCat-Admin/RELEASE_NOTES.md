@@ -1,4 +1,4 @@
-DGCat-Admin v5.8.1 Release Notes (BASH only - October 26 2026)
+# DGCat-Admin v5.8.1 Release Notes (BASH only - October 26 2026)
 
 - Bash: interactive prompts use readline. Line editing was left to the tty driver, so a client whose Backspace sends ^H against an erase character of ^? (the SecureCRT default) echoed the control character and stored it in the input; at the password prompt a corrected typo was sent to the BIG-IP as part of the password and failed as a plain 401. Backspace, Delete, and the arrow keys now edit correctly from any client, and Tab completes file paths at the CSV and export prompts
 
