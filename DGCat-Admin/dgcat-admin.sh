@@ -185,7 +185,7 @@ log_debug() {
 
 press_enter_to_continue() {
     echo ""
-    read -rp "  Press Enter to continue..."
+    read -erp "  Press Enter to continue..."
 }
 
 # Validate if a string looks like an integer
@@ -477,7 +477,7 @@ select_datagroup() {
     while true; do
         echo "" >&2
         local dg_input
-        read -rp "  ${prompt} (or 'q' to cancel): " dg_input
+        read -erp "  ${prompt} (or 'q' to cancel): " dg_input
         
         if [ -z "${dg_input}" ] || [ "${dg_input}" == "q" ] || [ "${dg_input}" == "Q" ]; then
             echo -e "${WHITE}  [INFO]  Cancelled.${NC}" >&2
@@ -606,7 +606,7 @@ select_datagroup() {
 prompt_save_config() {
     echo ""
     local save_choice
-    read -rp "  Save configuration? (yes/no) [yes]: " save_choice
+    read -erp "  Save configuration? (yes/no) [yes]: " save_choice
     save_choice="${save_choice:-yes}"
     if [ "${save_choice}" == "yes" ]; then
         log_step "Saving configuration..."
@@ -752,9 +752,9 @@ setup_remote_connection() {
     echo ""
     local host_input
     if [ ${#FLEET_HOSTS[@]} -gt 0 ]; then
-        read -rp "  Select [0-${#FLEET_HOSTS[@]}] or enter hostname/IP: " host_input
+        read -erp "  Select [0-${#FLEET_HOSTS[@]}] or enter hostname/IP: " host_input
     else
-        read -rp "  BIG-IP hostname or IP (0 to exit): " host_input
+        read -erp "  BIG-IP hostname or IP (0 to exit): " host_input
     fi
     
     if [ "${host_input}" == "0" ]; then
@@ -785,13 +785,17 @@ setup_remote_connection() {
     echo -e "  ${WHITE}Connecting to: ${YELLOW}${REMOTE_HOST}${NC}"
     echo ""
     
-    read -rp "  Username [admin]: " REMOTE_USER
+    read -erp "  Username [admin]: " REMOTE_USER
     
     if [ -z "${REMOTE_USER}" ]; then
         REMOTE_USER="admin"
     fi
     
-    read -srp "  Password: " REMOTE_PASS
+    # All interactive reads use -e (readline). Without it the tty line
+    # discipline handles editing, and a client whose Backspace sends ^H
+    # against an erase character of ^? (SecureCRT default) echoes the
+    # control character and stores it in the input - here, in the password
+    read -serp "  Password: " REMOTE_PASS
     echo ""
     
     if [ -z "${REMOTE_PASS}" ]; then
@@ -897,7 +901,7 @@ FLEET_TEMPLATE
             break
         fi
         echo ""
-        read -rp "  Retry connection? (yes/no) [yes]: " retry
+        read -erp "  Retry connection? (yes/no) [yes]: " retry
         retry="${retry:-yes}"
         if [ "${retry}" != "yes" ]; then
             log_info "Exiting."
@@ -2048,7 +2052,7 @@ select_deploy_scope() {
     echo "" >&2
     
     local scope_type
-    read -rp "  Select [0-3]: " scope_type
+    read -erp "  Select [0-3]: " scope_type
     
     local -a targets=()
     
@@ -2072,7 +2076,7 @@ select_deploy_scope() {
             done
             echo "" >&2
             local site_input
-            read -rp "  Enter site numbers (comma-separate for multiple): " site_input
+            read -erp "  Enter site numbers (comma-separate for multiple): " site_input
             if [ -z "${site_input}" ]; then return 1; fi
             IFS=',' read -ra site_selections <<< "${site_input}"
             for sel in "${site_selections[@]}"; do
@@ -2096,7 +2100,7 @@ select_deploy_scope() {
             done
             echo "" >&2
             local host_input
-            read -rp "  Enter host numbers (comma-separate for multiple): " host_input
+            read -erp "  Enter host numbers (comma-separate for multiple): " host_input
             if [ -z "${host_input}" ]; then return 1; fi
             IFS=',' read -ra host_selections <<< "${host_input}"
             for sel in "${host_selections[@]}"; do
@@ -2496,7 +2500,7 @@ execute_deploy_datagroup() {
                 if [ ${consecutive_same_error} -ge 3 ]; then
                     echo ""
                     log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
-                    read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                    read -erp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
                     if [ "${cont_deploy}" != "yes" ]; then
                         log_info "Deployment stopped by user."
                         break
@@ -2524,7 +2528,7 @@ execute_deploy_datagroup() {
                 if [ ${consecutive_same_error} -ge 3 ]; then
                     echo ""
                     log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
-                    read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                    read -erp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
                     if [ "${cont_deploy}" != "yes" ]; then
                         log_info "Deployment stopped by user."
                         break
@@ -2635,7 +2639,7 @@ execute_deploy_urlcat() {
                 if [ ${consecutive_same_error} -ge 3 ]; then
                     echo ""
                     log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
-                    read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                    read -erp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
                     if [ "${cont_deploy}" != "yes" ]; then
                         log_info "Deployment stopped by user."
                         break
@@ -2663,7 +2667,7 @@ execute_deploy_urlcat() {
                 if [ ${consecutive_same_error} -ge 3 ]; then
                     echo ""
                     log_warn "Systemic failure detected: Same error on 3 consecutive hosts"
-                    read -rp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
+                    read -erp "  Continue deploying to remaining hosts? (yes/no) [no]: " cont_deploy
                     if [ "${cont_deploy}" != "yes" ]; then
                         log_info "Deployment stopped by user."
                         break
@@ -2781,7 +2785,7 @@ select_partition() {
     echo "" >&2
     
     local choice
-    read -rp "  Select [0-$((${#PARTITION_LIST[@]}))] : " choice
+    read -erp "  Select [0-$((${#PARTITION_LIST[@]}))] : " choice
     
     if [ "${choice}" == "0" ] || [ -z "${choice}" ]; then
         echo ""
@@ -3328,7 +3332,7 @@ menu_create_empty() {
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     local choice
-    read -rp "  Select [0-2]: " choice
+    read -erp "  Select [0-2]: " choice
     
     case "${choice}" in
         1) menu_create_empty_datagroup ;;
@@ -3379,7 +3383,7 @@ menu_create_empty_datagroup() {
     echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}integer - For port numbers, numeric values${NC}"
     echo ""
     local type_choice
-    read -rp "  Select [1-3]: " type_choice
+    read -erp "  Select [1-3]: " type_choice
     
     local dg_type=""
     case "${type_choice}" in
@@ -3405,7 +3409,7 @@ menu_create_empty_datagroup() {
     log_info "  Type: ${display_type}"
     echo ""
     local confirm
-    read -rp "  Create this datagroup? (yes/no) [no]: " confirm
+    read -erp "  Create this datagroup? (yes/no) [no]: " confirm
     if [ "${confirm}" != "yes" ]; then
         log_info "Cancelled."
         press_enter_to_continue
@@ -3439,7 +3443,7 @@ menu_create_empty_url_category() {
     
     echo ""
     local cat_name
-    read -rp "  Enter URL category name (or 'q' to cancel): " cat_name
+    read -erp "  Enter URL category name (or 'q' to cancel): " cat_name
     if [ -z "${cat_name}" ] || [ "${cat_name}" == "q" ]; then
         log_info "Cancelled."
         press_enter_to_continue
@@ -3478,7 +3482,7 @@ menu_create_empty_url_category() {
     echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}confirm - Prompt user for confirmation${NC}"
     echo ""
     local action_choice
-    read -rp "  Select [1-3] [1]: " action_choice
+    read -erp "  Select [1-3] [1]: " action_choice
     action_choice="${action_choice:-1}"
     
     local default_action=""
@@ -3496,7 +3500,7 @@ menu_create_empty_url_category() {
     log_info "  Action:   ${default_action}"
     echo ""
     local confirm
-    read -rp "  Create this URL category? (yes/no) [no]: " confirm
+    read -erp "  Create this URL category? (yes/no) [no]: " confirm
     if [ "${confirm}" != "yes" ]; then
         log_info "Cancelled."
         press_enter_to_continue
@@ -3524,7 +3528,7 @@ menu_create_from_csv() {
     echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
-    read -rp "  Select [0-2]: " create_choice
+    read -erp "  Select [0-2]: " create_choice
     
     case "${create_choice}" in
         1) menu_create_datagroup ;;
@@ -3610,7 +3614,7 @@ menu_create_datagroup() {
         echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge     - Add CSV entries to existing (deduplicated)${NC}"
         echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
         echo ""
-        read -rp "  Select [1-3]: " exist_choice
+        read -erp "  Select [1-3]: " exist_choice
         
         case "${exist_choice}" in
             1) restore_mode="overwrite" ;;
@@ -3631,7 +3635,7 @@ menu_create_datagroup() {
                 log_ok "Backup saved: ${backup_file}"
             else
                 log_warn "Could not create backup."
-                read -rp "  Continue without backup? (yes/no) [no]: " cont
+                read -erp "  Continue without backup? (yes/no) [no]: " cont
                 if [ "${cont}" != "yes" ]; then
                     log_info "Aborted."
                     press_enter_to_continue
@@ -3650,7 +3654,7 @@ menu_create_datagroup() {
         echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}address - For IP addresses, subnets (CIDR)${NC}"
         echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}integer - For port numbers, numeric values${NC}"
         echo ""
-        read -rp "  Select [1-3]: " type_choice
+        read -erp "  Select [1-3]: " type_choice
         
         case "${type_choice}" in
             1) dg_type="string" ;;
@@ -3668,7 +3672,7 @@ menu_create_datagroup() {
     local csv_path=""
     while true; do
         echo ""
-        read -rp "  Enter path to CSV file (or 'q' to cancel): " csv_path
+        read -erp "  Enter path to CSV file (or 'q' to cancel): " csv_path
         
         if [ -z "${csv_path}" ]; then
             log_warn "No file path provided."
@@ -3807,7 +3811,7 @@ menu_create_datagroup() {
     echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Keys only (e.g., domains, subnets)${NC}"
     echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Keys and Values (e.g., domain,action)${NC}"
     echo ""
-    read -rp "  Select [1-2]: " format_choice
+    read -erp "  Select [1-2]: " format_choice
     
     case "${format_choice}" in
         1)
@@ -3842,7 +3846,7 @@ menu_create_datagroup() {
             log_warn "Type mismatch detected!"
             log_warn "Datagroup type is '${dg_type}' but ${mismatch_count} entries (${mismatch_pct}%) appear to be '${mismatch_type}' format."
             echo ""
-            read -rp "  Continue anyway? (yes/no) [no]: " continue_choice
+            read -erp "  Continue anyway? (yes/no) [no]: " continue_choice
             if [ "${continue_choice}" != "yes" ]; then
                 log_info "Aborted by user."
                 [ -n "${temp_csv}" ] && rm -f "${temp_csv}" 2>/dev/null
@@ -3975,7 +3979,7 @@ menu_delete_datagroup() {
     echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
-    read -rp "  Select [0-2]: " delete_choice
+    read -erp "  Select [0-2]: " delete_choice
     
     case "${delete_choice}" in
         1) menu_delete_datagroup_only ;;
@@ -4059,7 +4063,7 @@ menu_delete_datagroup_only() {
             log_ok "Backup saved: ${backup_file}"
         else
             log_warn "Could not create backup."
-            read -rp "  Continue without backup? (yes/no) [no]: " continue_choice
+            read -erp "  Continue without backup? (yes/no) [no]: " continue_choice
             if [ "${continue_choice}" != "yes" ]; then
                 log_info "Aborted by user."
                 press_enter_to_continue
@@ -4071,7 +4075,7 @@ menu_delete_datagroup_only() {
     # Confirm deletion
     echo ""
     echo -ne "  ${RED}Type DELETE to confirm:${NC} "
-    read -r confirm
+    read -er confirm
     if [ "${confirm}" != "DELETE" ]; then
         log_info "Aborted by user."
         press_enter_to_continue
@@ -4110,7 +4114,7 @@ menu_delete_url_category() {
     echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
-    read -rp "  Enter URL category name or select [0-1]: " cat_input
+    read -erp "  Enter URL category name or select [0-1]: " cat_input
     
     case "${cat_input}" in
         0|"")
@@ -4144,7 +4148,7 @@ menu_delete_url_category() {
             echo -e "      ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
             
-            read -rp "  Select URL category [0-$((${#cat_array[@]}))] : " cat_choice
+            read -erp "  Select URL category [0-$((${#cat_array[@]}))] : " cat_choice
             
             if [ "${cat_choice}" == "0" ] || [ -z "${cat_choice}" ]; then
                 log_info "Cancelled."
@@ -4201,7 +4205,7 @@ menu_delete_url_category() {
             log_ok "Backup saved: ${backup_file}"
         else
             log_warn "Could not create backup."
-            read -rp "  Continue without backup? (yes/no) [no]: " continue_choice
+            read -erp "  Continue without backup? (yes/no) [no]: " continue_choice
             if [ "${continue_choice}" != "yes" ]; then
                 log_info "Aborted by user."
                 press_enter_to_continue
@@ -4213,7 +4217,7 @@ menu_delete_url_category() {
     # Confirm deletion
     echo ""
     echo -ne "  ${RED}Type DELETE to confirm:${NC} "
-    read -r confirm
+    read -er confirm
     if [ "${confirm}" != "DELETE" ]; then
         log_info "Aborted by user."
         press_enter_to_continue
@@ -4245,7 +4249,7 @@ menu_export_to_csv() {
     echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
-    read -rp "  Select [0-2]: " export_choice
+    read -erp "  Select [0-2]: " export_choice
     
     case "${export_choice}" in
         1) menu_export_datagroup ;;
@@ -4293,7 +4297,7 @@ menu_export_datagroup() {
     export_ts=$(date +"%Y%m%d_%H%M%S")
     local default_path="${BACKUP_DIR}/${safe_partition}_${export_token}_${dg_class}_${export_ts}.csv"
     echo ""
-    read -rp "  Export path [${default_path}]: " export_path
+    read -erp "  Export path [${default_path}]: " export_path
     export_path="${export_path:-${default_path}}"
     
     
@@ -4367,7 +4371,7 @@ menu_export_url_category() {
     echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
-    read -rp "  Enter URL category name or select [0-1]: " cat_input
+    read -erp "  Enter URL category name or select [0-1]: " cat_input
     
     case "${cat_input}" in
         0|"")
@@ -4401,7 +4405,7 @@ menu_export_url_category() {
             echo -e "      ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
             
-            read -rp "  Select URL category [0-$((${#cat_array[@]}))] : " cat_choice
+            read -erp "  Select URL category [0-$((${#cat_array[@]}))] : " cat_choice
             
             if [ "${cat_choice}" == "0" ] || [ -z "${cat_choice}" ]; then
                 log_info "Cancelled."
@@ -4458,7 +4462,7 @@ menu_export_url_category() {
     export_ts=$(date +"%Y%m%d_%H%M%S")
     local default_path="${BACKUP_DIR}/urlcat_${safe_name}_${export_ts}.csv"
     echo ""
-    read -rp "  Export path [${default_path}]: " export_path
+    read -erp "  Export path [${default_path}]: " export_path
     export_path="${export_path:-${default_path}}"
     
     # Ask about format
@@ -4467,7 +4471,7 @@ menu_export_url_category() {
     echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Domain only (e.g., example.com)${NC}"
     echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Full URL format (e.g., https://example.com/)${NC}"
     echo ""
-    read -rp "  Select [1-2] [1]: " format_choice
+    read -erp "  Select [1-2] [1]: " format_choice
     format_choice="${format_choice:-1}"
     
     local strip_protocol=true
@@ -4615,7 +4619,7 @@ menu_create_url_category() {
     
     # Get category name
     echo ""
-    read -rp "  Enter URL category name (or 'q' to cancel): " cat_name
+    read -erp "  Enter URL category name (or 'q' to cancel): " cat_name
     
     if [ -z "${cat_name}" ] || [ "${cat_name}" == "q" ] || [ "${cat_name}" == "Q" ]; then
         log_info "Cancelled."
@@ -4643,7 +4647,7 @@ menu_create_url_category() {
         echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge     - Add new URLs to existing (deduplicated)${NC}"
         echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
         echo ""
-        read -rp "  Select [1-3]: " exist_choice
+        read -erp "  Select [1-3]: " exist_choice
         
         case "${exist_choice}" in
             1) restore_mode="overwrite" ;;
@@ -4670,7 +4674,7 @@ menu_create_url_category() {
             echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Merge     - Add new URLs to existing (deduplicated)${NC}"
             echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
-            read -rp "  Select [1-3]: " exist_choice
+            read -erp "  Select [1-3]: " exist_choice
             
             case "${exist_choice}" in
                 1) restore_mode="overwrite" ;;
@@ -4688,7 +4692,7 @@ menu_create_url_category() {
     local csv_path=""
     while true; do
         echo ""
-        read -rp "  Enter path to CSV file (or 'q' to cancel): " csv_path
+        read -erp "  Enter path to CSV file (or 'q' to cancel): " csv_path
         
         if [ -z "${csv_path}" ]; then
             log_warn "No file path provided."
@@ -4856,7 +4860,7 @@ menu_create_url_category() {
         echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}block   - Block traffic${NC}"
         echo -e "    ${YELLOW}3${NC}${WHITE})${NC} ${WHITE}confirm - Prompt user for confirmation${NC}"
         echo ""
-        read -rp "  Select [1-3] [1]: " action_choice
+        read -erp "  Select [1-3] [1]: " action_choice
         action_choice="${action_choice:-1}"
         
         case "${action_choice}" in
@@ -4882,7 +4886,7 @@ menu_create_url_category() {
         log_info "  Mode:         ${restore_mode}"
     fi
     echo ""
-    read -rp "  Proceed? (yes/no) [no]: " confirm
+    read -erp "  Proceed? (yes/no) [no]: " confirm
     
     if [ "${confirm}" != "yes" ]; then
         log_info "Aborted."
@@ -5132,7 +5136,7 @@ editor_submenu() {
         log_warn "The bash editor will be very slow at this scale."
         log_info "Consider using the PowerShell version for large dataset editing."
         echo ""
-        read -rp "  Continue to editor? (yes/no) [no]: " continue_choice
+        read -erp "  Continue to editor? (yes/no) [no]: " continue_choice
         if [ "${continue_choice}" != "yes" ]; then
             log_info "Exiting editor."
             press_enter_to_continue
@@ -5272,7 +5276,7 @@ editor_submenu() {
         echo ""
         echo -e "  ${YELLOW}q${NC}${WHITE})${NC} Done (return to main menu)"
         echo ""
-        read -rp "  Select option: " edit_choice
+        read -erp "  Select option: " edit_choice
         
         case "${edit_choice}" in
             n)
@@ -5287,7 +5291,7 @@ editor_submenu() {
                 ;;
             g)
                 echo ""
-                read -rp "  Enter page number (1-${total_pages}): " goto_page
+                read -erp "  Enter page number (1-${total_pages}): " goto_page
                 if [[ "${goto_page}" =~ ^[0-9]+$ ]] && [ "${goto_page}" -ge 1 ] && [ "${goto_page}" -le "${total_pages}" ]; then
                     current_page=${goto_page}
                 else
@@ -5297,7 +5301,7 @@ editor_submenu() {
                 ;;
             f)
                 echo ""
-                read -rp "  Enter search pattern (case-insensitive): " current_filter
+                read -erp "  Enter search pattern (case-insensitive): " current_filter
                 current_page=1
                 ;;
             c)
@@ -5311,7 +5315,7 @@ editor_submenu() {
                 echo -e "    ${YELLOW}2${NC}${WHITE})${NC} A-Z (ascending)"
                 echo -e "    ${YELLOW}3${NC}${WHITE})${NC} Z-A (descending)"
                 echo ""
-                read -rp "  Select [1-3]: " sort_choice
+                read -erp "  Select [1-3]: " sort_choice
                 case "${sort_choice}" in
                     1) current_sort="original" ;;
                     2) current_sort="asc" ;;
@@ -5322,7 +5326,7 @@ editor_submenu() {
                 # Add entry - modifies working arrays only
                 if [ "${edit_type}" == "datagroup" ]; then
                     echo ""
-                    read -rp "  Enter new entry: " new_key
+                    read -erp "  Enter new entry: " new_key
                     if [ -z "${new_key}" ]; then
                         log_warn "No entry provided."
                         press_enter_to_continue
@@ -5354,7 +5358,7 @@ editor_submenu() {
                     fi
                     
                     local new_value=""
-                    read -rp "  Enter value (optional, press Enter to skip): " new_value
+                    read -erp "  Enter value (optional, press Enter to skip): " new_value
                     
                     # Add to working arrays
                     working_keys+=("${new_key}")
@@ -5363,7 +5367,7 @@ editor_submenu() {
                 else
                     # URL category add
                     echo ""
-                    read -rp "  Enter domain or URL to add: " new_url
+                    read -erp "  Enter domain or URL to add: " new_url
                     
                     if [ -z "${new_url}" ]; then
                         log_warn "No URL provided."
@@ -5399,7 +5403,7 @@ editor_submenu() {
                     fi
                     
                     log_info "Will add: ${formatted_url}"
-                    read -rp "  Confirm? (yes/no) [yes]: " confirm_add
+                    read -erp "  Confirm? (yes/no) [yes]: " confirm_add
                     confirm_add="${confirm_add:-yes}"
                     
                     if [ "${confirm_add}" != "yes" ]; then
@@ -5419,7 +5423,7 @@ editor_submenu() {
                 # Edit in place at the original index - delete-then-add would
                 # move the record to the end of the set
                 echo ""
-                read -rp "  Enter entry number or key to edit (or 'q' to cancel): " edit_input
+                read -erp "  Enter entry number or key to edit (or 'q' to cancel): " edit_input
                 
                 if [ -z "${edit_input}" ] || [ "${edit_input}" == "q" ] || [ "${edit_input}" == "Q" ]; then
                     log_info "Cancelled."
@@ -5499,7 +5503,7 @@ editor_submenu() {
                 
                 if [ "${edit_type}" == "datagroup" ]; then
                     local ekey_input
-                    read -rp "  New key [${ecurrent_key}]: " ekey_input
+                    read -erp "  New key [${ecurrent_key}]: " ekey_input
                     if [ -n "${ekey_input}" ]; then
                         enew_key="${ekey_input}"
                     fi
@@ -5513,13 +5517,13 @@ editor_submenu() {
                     fi
                     
                     local evalue_input
-                    read -rp "  New value [${eshown_value}] ('-' to clear): " evalue_input
+                    read -erp "  New value [${eshown_value}] ('-' to clear): " evalue_input
                     if [ -n "${evalue_input}" ]; then
                         if [ "${evalue_input}" == "-" ]; then
                             # '-' is the clear sentinel; confirm it so a literal
                             # dash remains reachable as a value
                             local eclear_confirm
-                            read -rp "  Clear the value? (yes/no) [yes]: " eclear_confirm
+                            read -erp "  Clear the value? (yes/no) [yes]: " eclear_confirm
                             eclear_confirm="${eclear_confirm:-yes}"
                             if [ "${eclear_confirm}" == "yes" ]; then
                                 enew_value=""
@@ -5533,7 +5537,7 @@ editor_submenu() {
                 else
                     # URL categories carry no value; an edit replaces the URL
                     local eurl_input
-                    read -rp "  New domain or URL [${ecurrent_key}]: " eurl_input
+                    read -erp "  New domain or URL [${ecurrent_key}]: " eurl_input
                     enew_value=""
                     if [ -z "${eurl_input}" ] || [ "${eurl_input}" == "${ecurrent_key}" ]; then
                         # Keep the stored entry verbatim. Normalizing it would
@@ -5597,7 +5601,7 @@ editor_submenu() {
             d)
                 # Delete entry - modifies working arrays only
                 echo ""
-                read -rp "  Enter entry number or key to delete (or 'q' to cancel): " del_input
+                read -erp "  Enter entry number or key to delete (or 'q' to cancel): " del_input
                 
                 if [ -z "${del_input}" ] || [ "${del_input}" == "q" ] || [ "${del_input}" == "Q" ]; then
                     log_info "Cancelled."
@@ -5658,7 +5662,7 @@ editor_submenu() {
                 
                 echo ""
                 log_warn "Delete entry: ${del_key}"
-                read -rp "  Confirm? (yes/no) [no]: " confirm_del
+                read -erp "  Confirm? (yes/no) [no]: " confirm_del
                 
                 if [ "${confirm_del}" != "yes" ]; then
                     log_info "Cancelled."
@@ -5684,7 +5688,7 @@ editor_submenu() {
             x)
                 # Delete by pattern - modifies working arrays only
                 echo ""
-                read -rp "  Enter pattern to match entries for deletion: " del_pattern
+                read -erp "  Enter pattern to match entries for deletion: " del_pattern
                 
                 if [ -z "${del_pattern}" ]; then
                     log_warn "No pattern provided."
@@ -5724,7 +5728,7 @@ editor_submenu() {
                 echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
                 
                 echo ""
-                read -rp "  Delete all ${match_count} matching entries? (yes/no) [no]: " confirm_del
+                read -erp "  Delete all ${match_count} matching entries? (yes/no) [no]: " confirm_del
                 
                 if [ "${confirm_del}" != "yes" ]; then
                     log_info "Cancelled."
@@ -5834,7 +5838,7 @@ editor_submenu() {
                 echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────────${NC}"
                 echo -e "  ${WHITE}Final count: ${#working_keys[@]} entries${NC}"
                 echo ""
-                read -rp "  Apply these changes? (yes/no) [no]: " confirm_apply
+                read -erp "  Apply these changes? (yes/no) [no]: " confirm_apply
                 
                 if [ "${confirm_apply}" != "yes" ]; then
                     log_info "Cancelled."
@@ -5856,7 +5860,7 @@ editor_submenu() {
                         log_ok "Backup saved: ${backup_file}"
                     else
                         log_warn "Could not create backup."
-                        read -rp "  Continue without backup? (yes/no) [no]: " cont
+                        read -erp "  Continue without backup? (yes/no) [no]: " cont
                         if [ "${cont}" != "yes" ]; then
                             continue
                         fi
@@ -5892,12 +5896,12 @@ editor_submenu() {
                         echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}Full Replace  - PATCH entire record set via REST${NC}"
                         echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                         echo ""
-                        read -rp "  Select [0-2]: " apply_mode_choice
+                        read -erp "  Select [0-2]: " apply_mode_choice
                     else
                         echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}Full Replace  - PATCH entire record set via REST${NC}"
                         echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                         echo ""
-                        read -rp "  Select [0-1]: " apply_mode_choice
+                        read -erp "  Select [0-1]: " apply_mode_choice
                         # Reduced menu: 1 is Full Replace - remapped for the
                         # shared case below
                         if [ "${apply_mode_choice}" == "1" ]; then
@@ -6046,7 +6050,7 @@ editor_submenu() {
                 if ! has_pending_changes; then
                     echo ""
                     log_info "No pending changes detected."
-                    read -rp "  Deploy current state to fleet anyway? (yes/no) [no]: " deploy_anyway
+                    read -erp "  Deploy current state to fleet anyway? (yes/no) [no]: " deploy_anyway
                     if [ "${deploy_anyway}" != "yes" ]; then
                         log_info "Deploy cancelled."
                         press_enter_to_continue
@@ -6166,7 +6170,7 @@ editor_submenu() {
                     echo -e "  ${WHITE}Final entry count: ${#working_keys[@]}${NC}"
                     echo ""
                     
-                    read -rp "  Continue to deployment options? (yes/no) [no]: " continue_deploy
+                    read -erp "  Continue to deployment options? (yes/no) [no]: " continue_deploy
                     if [ "${continue_deploy}" != "yes" ]; then
                         log_info "Deploy cancelled."
                         press_enter_to_continue
@@ -6206,9 +6210,9 @@ editor_submenu() {
                     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                     echo ""
                     if [ "${TMSH_ELIGIBLE}" -eq 1 ]; then
-                        read -rp "  Select [0-2]: " deploy_mode_choice
+                        read -erp "  Select [0-2]: " deploy_mode_choice
                     else
-                        read -rp "  Select [0-1]: " deploy_mode_choice
+                        read -erp "  Select [0-1]: " deploy_mode_choice
                     fi
                     
                     local deploy_mode="replace"
@@ -6305,7 +6309,7 @@ editor_submenu() {
                     echo -e "  ${RED}WARNING: This will push current state to all listed Big-IPs.${NC}"
                 fi
                 echo ""
-                read -rp "  Type DEPLOY to confirm: " confirm_deploy
+                read -erp "  Type DEPLOY to confirm: " confirm_deploy
                 
                 if [ "${confirm_deploy}" != "DEPLOY" ]; then
                     log_info "Deploy cancelled."
@@ -6349,7 +6353,7 @@ editor_submenu() {
                     else
                         deploy_prompt="  Proceed with deployment to ${ready_count} fleet host(s)? (yes/no) [no]: "
                     fi
-                    read -rp "${deploy_prompt}" proceed_deploy
+                    read -erp "${deploy_prompt}" proceed_deploy
                     if [ "${proceed_deploy}" != "yes" ]; then
                         log_info "Deploy cancelled. No changes have been made."
                         press_enter_to_continue
@@ -6384,7 +6388,7 @@ editor_submenu() {
                         echo -e "  ${GREEN}[ OK ]${NC}  ${WHITE}Creating backup${NC}"
                     else
                         echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Creating backup${NC}"
-                        read -rp "  Continue without backup? (yes/no) [no]: " cont
+                        read -erp "  Continue without backup? (yes/no) [no]: " cont
                         if [ "${cont}" != "yes" ]; then
                             log_info "Deploy cancelled."
                             press_enter_to_continue
@@ -6483,7 +6487,7 @@ editor_submenu() {
                 if [ "${current_device_success}" != "true" ]; then
                     echo ""
                     log_error "Failed to apply changes to current device."
-                    read -rp "  Continue deploying to fleet anyway? (yes/no) [no]: " cont_fleet
+                    read -erp "  Continue deploying to fleet anyway? (yes/no) [no]: " cont_fleet
                     if [ "${cont_fleet}" != "yes" ]; then
                         log_info "Deploy aborted."
                         press_enter_to_continue
@@ -6581,7 +6585,7 @@ editor_submenu() {
                 if has_pending_changes; then
                     echo ""
                     log_warn "You have unapplied changes that will be discarded."
-                    read -rp "  Discard changes and exit? (yes/no) [no]: " confirm_exit
+                    read -erp "  Discard changes and exit? (yes/no) [no]: " confirm_exit
                     if [ "${confirm_exit}" != "yes" ]; then
                         continue
                     fi
@@ -6615,7 +6619,7 @@ menu_fleet_looking_glass() {
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     local type_choice
-    read -rp "  Select [0-2]: " type_choice
+    read -erp "  Select [0-2]: " type_choice
     
     local object_type=""
     local object_name=""
@@ -6643,7 +6647,7 @@ menu_fleet_looking_glass() {
         2)
             object_type="urlcat"
             echo ""
-            read -rp "  Enter URL category name (or 'q' to cancel): " object_name
+            read -erp "  Enter URL category name (or 'q' to cancel): " object_name
             if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
                 return
             fi
@@ -6671,7 +6675,7 @@ menu_fleet_looking_glass() {
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     local scope_type
-    read -rp "  Select [0-3]: " scope_type
+    read -erp "  Select [0-3]: " scope_type
     
     local -a target_hosts=()
     local -a target_sites_list=()
@@ -6695,7 +6699,7 @@ menu_fleet_looking_glass() {
             done
             echo ""
             local site_input
-            read -rp "  Enter site numbers (comma-separate for multiple): " site_input
+            read -erp "  Enter site numbers (comma-separate for multiple): " site_input
             
             if [ -z "${site_input}" ]; then
                 return
@@ -6723,7 +6727,7 @@ menu_fleet_looking_glass() {
             done
             echo ""
             local host_input
-            read -rp "  Enter host numbers (comma-separate for multiple): " host_input
+            read -erp "  Enter host numbers (comma-separate for multiple): " host_input
             
             if [ -z "${host_input}" ]; then
                 return
@@ -6895,7 +6899,7 @@ menu_fleet_looking_glass() {
         echo -e "  ${YELLOW}s${NC}${WHITE})${NC} Search      ${YELLOW}d${NC}${WHITE})${NC} Diff      ${YELLOW}q${NC}${WHITE})${NC} Quit"
         echo ""
         local input
-        read -rp "  Select option: " input
+        read -erp "  Select option: " input
         
         [ -z "${input}" ] && continue
         
@@ -6974,7 +6978,7 @@ menu_fleet_looking_glass() {
         if [ "${input}" == "s" ] || [ "${input}" == "S" ]; then
             echo ""
             local search_term
-            read -rp "  Enter search pattern: " search_term
+            read -erp "  Enter search pattern: " search_term
             [ -z "${search_term}" ] && continue
             
             clear
@@ -7086,7 +7090,7 @@ menu_fleet_backup() {
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     local type_choice
-    read -rp "  Select [0-2]: " type_choice
+    read -erp "  Select [0-2]: " type_choice
     
     local object_type=""
     local object_name=""
@@ -7113,7 +7117,7 @@ menu_fleet_backup() {
         2)
             object_type="urlcat"
             echo ""
-            read -rp "  Enter URL category name (or 'q' to cancel): " object_name
+            read -erp "  Enter URL category name (or 'q' to cancel): " object_name
             if [ -z "${object_name}" ] || [ "${object_name}" == "q" ]; then
                 return
             fi
@@ -7141,7 +7145,7 @@ menu_fleet_backup() {
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
     local scope_type
-    read -rp "  Select [0-3]: " scope_type
+    read -erp "  Select [0-3]: " scope_type
     
     local -a target_hosts=()
     local -a target_sites_list=()
@@ -7163,7 +7167,7 @@ menu_fleet_backup() {
             done
             echo ""
             local site_input
-            read -rp "  Enter site numbers (comma-separate for multiple): " site_input
+            read -erp "  Enter site numbers (comma-separate for multiple): " site_input
             if [ -z "${site_input}" ]; then return; fi
             IFS=',' read -ra site_selections <<< "${site_input}"
             for sel in "${site_selections[@]}"; do
@@ -7186,7 +7190,7 @@ menu_fleet_backup() {
             done
             echo ""
             local host_input
-            read -rp "  Enter host numbers (comma-separate for multiple): " host_input
+            read -erp "  Enter host numbers (comma-separate for multiple): " host_input
             if [ -z "${host_input}" ]; then return; fi
             IFS=',' read -ra host_selections <<< "${host_input}"
             for sel in "${host_selections[@]}"; do
@@ -7277,7 +7281,7 @@ menu_edit_datagroup_or_category() {
     echo -e "    ${YELLOW}2${NC}${WHITE})${NC} ${WHITE}URL Category${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
     echo ""
-    read -rp "  Select [0-2]: " edit_choice
+    read -erp "  Select [0-2]: " edit_choice
     
     case "${edit_choice}" in
         1)
@@ -7330,7 +7334,7 @@ menu_edit_datagroup_or_category() {
             echo -e "    ${YELLOW}1${NC}${WHITE})${NC} ${WHITE}List all categories${NC}"
     echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
             echo ""
-            read -rp "  Enter URL category name or select [0-1]: " cat_input
+            read -erp "  Enter URL category name or select [0-1]: " cat_input
             
             case "${cat_input}" in
                 0|"")
@@ -7363,7 +7367,7 @@ menu_edit_datagroup_or_category() {
                     echo -e "      ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
                     echo ""
                     
-                    read -rp "  Select [0-$((${#cat_array[@]}))] : " cat_choice
+                    read -erp "  Select [0-$((${#cat_array[@]}))] : " cat_choice
                     
                     if [ "${cat_choice}" == "0" ] || [ -z "${cat_choice}" ]; then
                         log_info "Cancelled."
@@ -7428,7 +7432,7 @@ menu_bootstrap() {
         echo -e "    ${YELLOW}0${NC}${WHITE})${NC} ${WHITE}Cancel${NC}"
         echo ""
         local choice
-        read -rp "  Select [0-2]: " choice
+        read -erp "  Select [0-2]: " choice
         
         case "${choice}" in
             1) menu_bootstrap_create ;;
@@ -7686,7 +7690,7 @@ menu_bootstrap_import() {
     done
     echo ""
     local confirm
-    read -rp "  Proceed? (yes/no) [no]: " confirm
+    read -erp "  Proceed? (yes/no) [no]: " confirm
     if [ "${confirm}" != "yes" ]; then
         log_info "Cancelled."
         press_enter_to_continue
@@ -7850,7 +7854,7 @@ main() {
         while true; do
             show_main_menu
             
-            read -rp "  Select option [0-8]: " choice
+            read -erp "  Select option [0-8]: " choice
             
             case "${choice}" in
                 1) menu_create_empty ;;
@@ -7886,7 +7890,7 @@ main() {
                 break
             fi
             echo ""
-            read -rp "  Retry connection? (yes/no) [yes]: " retry
+            read -erp "  Retry connection? (yes/no) [yes]: " retry
             retry="${retry:-yes}"
             if [ "${retry}" != "yes" ]; then
                 log_info "Exiting."
