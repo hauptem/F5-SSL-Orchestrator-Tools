@@ -10,6 +10,7 @@
 - PowerShell: the Basic auth header is UTF-8 encoded. ASCII replaced any non-ASCII password character with '?', which surfaced as a plain 401
 - Bash: the BIG-IP credential is no longer passed to curl as a -u argument, where it was readable in the process list by every user on the management host for the duration of each request. It is passed as a curl config on a private file descriptor. Relevant when the tool runs on a shared jump host or on the BIG-IP itself
 - Bash: a failed datagroup type read during CSV import, delete, or editor open no longer trips errexit and exits the tool; the operation reports the failure and returns to the menu
+- Bash: interactive prompts use readline. Line editing was left to the tty driver, so a client whose Backspace sends ^H against an erase character of ^? (the SecureCRT default) echoed the control character and stored it in the input; at the password prompt a corrected typo was sent to the BIG-IP as part of the password and failed as a plain 401. Backspace, Delete, and the arrow keys now edit correctly from any client, and Tab completes file paths at the CSV and export prompts
 
 # DGCat-Admin v5.7 Release Notes
 
