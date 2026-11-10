@@ -154,7 +154,7 @@ Services and SSL settings must already exist on the target. The tool will not cr
 
 ---
 
-## Redeploying a Topology
+## Redeploying a Topology (experimental)
 
 Menu option 3. Reads the current state of a topology from the connected device and pushes it back through the gc processor as a MODIFY operation.
 
@@ -227,7 +227,7 @@ The gc processor did not finish within the wait window. The tool automatically c
 
 ### Replay fails with "ERROR state"
 
-The gc processor rejected the deployment. The tool prints the block's error detail with the failure. Check `/var/log/restnoded/restnoded.log` for the full context.
+The gc processor rejected the deployment. The tool prints the block's full error message with the failure; for TMOS validation errors the cause is usually named at the end of it. Check `/var/log/restnoded/restnoded.log` for the full context.
 
 ### Import fails with "No valid blocks found in snapshot"
 

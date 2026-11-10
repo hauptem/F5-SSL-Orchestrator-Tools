@@ -6,7 +6,7 @@
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
-# Requirements: Windows PowerShell 5.1 (pwsh 7+ is not supported), 
+# Requirements: Windows PowerShell 5.1 (pwsh 7+ is not supported),
 # BIG-IP TMOS 17.x+ with SSLO 12.x+
 #
 # REFERENCE:
@@ -92,7 +92,7 @@ $script:CONNECTION_DROP_STATUSES = @(
 # The gc processor's internal SSLO_CONFIG_PROCESSOR_TIMEOUT_SECS is 90, but the
 # F5 Ansible SSLO templates set the block-level budget to 120 on every
 # create_modify template. Match the reference: large policies (80+ APM objects)
-# need the headroom.
+# need the headroom
 $script:GC_PROCESSOR_TIMEOUT = 120
 
 # SSLO deployment types in dependency order (replay must follow this sequence)
@@ -198,7 +198,7 @@ $script:DEP_STRIP_FIELDS = @(
 # Union of the Ansible bigip_sslo_config_policy.py condition_category_list and
 # the TMOS 17.5 and 21.1 URL databases. Renamed categories keep both names so
 # snapshots from either version classify correctly. Pinners is created by SSLO
-# (sslo-urlCatPinners) on every configured device. Any category NOT in this
+# (sslo-urlCatPinners) on every configured device. Any category not in this
 # list is custom and must exist on target. Replay also checks every category
 # against the target URL database when it can be read
 $script:BUILTIN_URL_CATEGORIES = @{
@@ -446,6 +446,9 @@ $script:ConnectFailure = ""
 # SSL BYPASS (self-signed BIG-IP management certs)
 # =============================================================================
 
+# Trust self-signed management certificates and require TLS 1.2 for this
+# session. Exits under PowerShell 7+, where the certificate bypass does not
+# apply
 function Initialize-SslBypass {
     # ServicePointManager.CertificatePolicy is ignored by PowerShell 7+ (Core),
     # so the bypass would silently not apply and every connection would fail
@@ -481,6 +484,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 # LOGGING
 # =============================================================================
 
+# Write a section banner
 function Write-LogSection {
     param([string]$Title)
     Write-Host ""
@@ -489,29 +493,34 @@ function Write-LogSection {
     Write-Host "  ══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
 }
 
+# Write an informational line
 function Write-LogInfo {
     param([string]$Message)
     Write-Host "  $Message" -ForegroundColor White
 }
 
+# Write a success line with an [ OK ] tag
 function Write-LogOk {
     param([string]$Message)
     Write-Host "  [ OK ]" -NoNewline -ForegroundColor Green
     Write-Host "  $Message" -ForegroundColor White
 }
 
+# Write a warning line with a [WARN] tag
 function Write-LogWarn {
     param([string]$Message)
     Write-Host "  [WARN]" -NoNewline -ForegroundColor Yellow
     Write-Host "  $Message" -ForegroundColor White
 }
 
+# Write an error line with a [FAIL] tag
 function Write-LogError {
     param([string]$Message)
     Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red
     Write-Host "  $Message" -ForegroundColor White
 }
 
+# Write a progress line
 function Write-LogStep {
     param([string]$Message)
     Write-Host "  $Message" -ForegroundColor White
@@ -521,6 +530,7 @@ function Write-LogStep {
 # UTILITY FUNCTIONS
 # =============================================================================
 
+# Pause until the operator presses Enter
 function Wait-EnterKey {
     Write-Host ""
     Read-Host "  Press Enter to continue"
@@ -605,27 +615,32 @@ function Invoke-F5Api {
     }
 }
 
+# GET an endpoint on the connected BIG-IP
 function Invoke-F5Get {
     param([string]$Endpoint)
     return Invoke-F5Api -Method "GET" -Endpoint $Endpoint
 }
 
+# POST a body to an endpoint on the connected BIG-IP
 function Invoke-F5Post {
     param([string]$Endpoint, [object]$Body)
     return Invoke-F5Api -Method "POST" -Endpoint $Endpoint -Body $Body
 }
 
+# PATCH an endpoint on the connected BIG-IP
 function Invoke-F5Patch {
     param([string]$Endpoint, [object]$Body)
     return Invoke-F5Api -Method "PATCH" -Endpoint $Endpoint -Body $Body
 }
 
+# DELETE an endpoint on the connected BIG-IP
 function Invoke-F5Delete {
     param([string]$Endpoint)
     return Invoke-F5Api -Method "DELETE" -Endpoint $Endpoint
 }
 
 # Save the TMOS configuration and the iAppsLX block database
+# Returns: $true when the TMOS save succeeded
 function Save-F5Config {
     # Save TMOS configuration
     $result = Invoke-F5Post -Endpoint "/mgmt/tm/sys/config" -Body @{ command = "save" }
@@ -633,7 +648,7 @@ function Save-F5Config {
     
     # BIG-IP closes TCP after a successful save config POST, and Invoke-RestMethod
     # surfaces that as a failure even though the save completed. A genuine network
-    # drop mid-exchange throws the SAME status, so do not take the quirk on faith:
+    # drop mid-exchange throws the same status, so do not take the quirk on faith:
     # confirm the management plane is reachable, then re-issue the save (idempotent).
     # A clean retry proves the save ran; if the retry hits the drop signature again
     # while the box is reachable, that is the quirk, not a dead network
@@ -659,10 +674,12 @@ function Save-F5Config {
 # CONNECTION
 # =============================================================================
 
-# Prompt for target and credentials, verify connectivity, capture TMOS/SSLO versions
-# HostOnly: prompt for the host, keep existing credentials.
-# Reuse: prompt for nothing, reconnect to the same host with the same credentials.
-# Sets $script:ConnectFailure on failure: input, auth, network, or sslo
+# Prompt for target and credentials, verify connectivity, and confirm SSLO is
+# installed and provisioned. HostOnly prompts for the host and keeps existing
+# credentials. Reuse prompts for nothing and reconnects to the same host with
+# the same credentials. On failure, sets $script:ConnectFailure to input, auth,
+# network, or sslo
+# Returns: $true when connected
 function Initialize-RemoteConnection {
     param([switch]$HostOnly, [switch]$Reuse)
     
@@ -854,7 +871,7 @@ function Connect-WithRetry {
     }
 }
 
-# Exit banner with the project and API reference links
+# Print the exit banner with the project and API reference links
 function Show-ExitMessage {
     Write-Host ""
     Write-Host "  Exiting." -ForegroundColor White
@@ -907,7 +924,7 @@ function Get-StateBlockType {
     }
     
     # Topology blocks use "sslo_" prefix without a type letter
-    # e.g. sslo_HTTPS_tcp443. Exclude operation blocks by their EXACT prefixes:
+    # e.g. sslo_HTTPS_tcp443. Exclude operation blocks by their exact prefixes:
     # this tool and the GUI use "sslo_ob_", the F5 Ansible collection uses
     # "sslo_obj_". Match the full prefixes, not the bare "sslo_ob" stem - the
     # stem would also swallow legitimate topology names like sslo_observability,
@@ -921,11 +938,10 @@ function Get-StateBlockType {
     return $null
 }
 
-# Test whether a block is SSLO framework infrastructure (not configuration)
+# Test whether a block is SSLO framework infrastructure, not configuration
 function Test-IsFrameworkBlock {
     param([object]$Block)
     
-    # Framework blocks are SSLO infrastructure, not configuration
     if ($Block.name -match "^f5-ssl-orchestrator") { return $true }
     return $false
 }
@@ -944,7 +960,7 @@ function Test-IsSsloBlock {
 # STATE BLOCK TRANSFORMATION
 # =============================================================================
 
-# Maps deployment type to the inputProperty ID that holds the config data
+# Deployment type to config-data inputProperty ID mapping
 $script:TYPE_PROPERTY_MAP = @{
     "SSL_SETTINGS"     = "f5-ssl-orchestrator-tls"
     "SERVICE"          = "f5-ssl-orchestrator-service"
@@ -953,9 +969,9 @@ $script:TYPE_PROPERTY_MAP = @{
     "TOPOLOGY"         = "f5-ssl-orchestrator-topology"
 }
 
-# Per-type inputProperty requirements derived from Ansible SSLO module templates
-# Each type uses a SPECIFIC set - not all properties. Empty ones are placeholders
-# the gc processor expects to see for that deployment type.
+# Per-type inputProperty requirements derived from the Ansible SSLO module
+# templates. Each type uses its own set, not all properties. Empty ones are
+# placeholders the gc processor expects to see for that deployment type
 $script:TYPE_INPUT_PROPERTIES = @{
     "SSL_SETTINGS" = @(
         @{ id = "f5-ssl-orchestrator-tls"; type = "JSON"; empty = @{} }
@@ -990,8 +1006,8 @@ $script:TYPE_INPUT_PROPERTIES = @{
     )
 }
 
-# Fields to strip from state block config data before CREATE
-# These are generated by the gc processor and are NOT valid input
+# Fields to strip from state block config data before CREATE.
+# The gc processor generates them; they are not valid input
 $script:STATE_STRIP_FIELDS = @(
     "profiles"
     "existingBlockId"
@@ -1257,13 +1273,13 @@ function Convert-StateBlockToCreate {
                         if ($chains -is [System.Array]) {
                             foreach ($entry in $chains) {
                                 if ($entry.PSObject.Properties["pfId"]) {
-                                    # The GUI assigns a pfId to every cert/key chain whether or not
-                                    # the key has a passphrase, so pfId presence proves nothing and
-                                    # the passphrase itself is not recoverable from a state block.
-                                    # Ask the operator neutrally, matching the Ansible key_passphrase
-                                    # contract - Enter means the key has none.
-                                    # Cached per key path - the same key referenced by multiple
-                                    # chains or SSL settings prompts once per replay run
+                                    # The GUI assigns a pfId to every cert/key chain whether
+                                    # or not the key has a passphrase, so pfId presence proves
+                                    # nothing, and the passphrase itself is not recoverable
+                                    # from a state block. Ask the operator neutrally, matching
+                                    # the Ansible key_passphrase contract - Enter means the key
+                                    # has none. Cached per key path - the same key referenced
+                                    # by multiple chains or SSL settings prompts once per run
                                     $certLabel = if ($entry.cert) { $entry.cert } else { $DeploymentName }
                                     $cacheKey = if ($entry.key) { [string]$entry.key } else { $certLabel }
                                     if ($script:PassphraseCache.ContainsKey($cacheKey)) {
@@ -1313,9 +1329,9 @@ function Convert-StateBlockToCreate {
 # RUNTIME FIELD STRIPPING
 # =============================================================================
 
-# Nesting depth of an object graph: scalars are 0, each object or array level
-# adds 1. Arrays are counted even though ConvertTo-Json may not, so the result
-# errs toward refusing a block rather than truncating it
+# Measure the nesting depth of an object graph: scalars are 0, each object or
+# array level adds 1. Arrays are counted even though ConvertTo-Json may not, so
+# the result errs toward refusing a block rather than truncating it
 function Get-ObjectDepth {
     param([object]$Node)
     
@@ -1419,9 +1435,9 @@ function Remove-RuntimeFields {
 # DEPENDENCY CAPTURE
 # =============================================================================
 
-# Paths SSLO creates itself: anything inside an application folder, and the
-# /Common objects General Settings installs (sslo-default-* profiles,
-# ssloDefault_* objects). These are never prerequisites
+# Test whether SSLO creates a path itself: anything inside an application
+# folder, or one of the /Common objects General Settings installs (sslo-
+# default-* profiles, ssloDefault_* objects). These are never prerequisites
 function Test-IsSsloGenerated {
     param([string]$ObjPath)
     if ([string]::IsNullOrWhiteSpace($ObjPath)) { return $true }
@@ -1431,22 +1447,24 @@ function Test-IsSsloGenerated {
     return $false
 }
 
-# Other /Common/sslo* paths cannot be told apart by name: SSLO may own them,
-# or an operator may have named an object that way. They are captured and
-# checked, but a miss on the target is a warning, never a blocker
+# Test whether a path carries an SSLO-style name that Test-IsSsloGenerated does
+# not cover. Ownership cannot be told from the name: SSLO may own the object, or
+# an operator may have named it that way. Such a path is captured and checked,
+# but a miss on the target is a warning, never a blocker
 function Test-IsSsloReservedName {
     param([string]$ObjPath)
     return ($ObjPath -cmatch "^/Common/sslo")
 }
 
-# iControl REST object name for a full path: /Common/folder/obj -> ~Common~folder~obj
+# Convert a full path to its iControl REST object name: /Common/folder/obj
+# becomes ~Common~folder~obj
 function ConvertTo-RestName {
     param([string]$Path)
     return ($Path -replace "/", "~")
 }
 
-# Cert/key endpoints are handled separately in SSL_SETTINGS to capture names
-# without going through Add-Ref (which would try to fetch content)
+# Test whether an endpoint serves certificates or keys. Those references are
+# recorded by name in the SSL_SETTINGS walk and never fetched through Add-Ref
 function Test-IsCertKeyEndpoint {
     param([string]$Endpoint)
     if ($Endpoint -match "/sys/crypto/cert/") { return $true }
@@ -1454,8 +1472,9 @@ function Test-IsCertKeyEndpoint {
     return $false
 }
 
-# Monitors require type probing - the SSLO state data stores only the path,
-# not the monitor type, and the REST API requires the type in the endpoint
+# Resolve a monitor reference by probing each monitor type. The SSLO state data
+# stores only the path, and the REST API requires the type in the endpoint
+# Returns: dependency record, or $null for a built-in monitor
 function Get-MonitorDependency {
     param([string]$MonitorPath)
     
@@ -1516,8 +1535,8 @@ $script:DEP_PROBE_ENDPOINTS = @{
     )
 }
 
-# Name of a referenced object that the state data stores either as a plain
-# string or as an object with a name, value, or path member
+# Read the name of a referenced object. The state data stores a reference either
+# as a plain string or as an object with a name, value, or path member
 function Get-RefName {
     param([object]$Item)
     if ($null -eq $Item) { return $null }
@@ -1555,9 +1574,9 @@ function Resolve-DepObject {
     return @{ Found = $false; Type = $Type; Endpoint = ""; Response = $null }
 }
 
-# URL categories on the connected device, keyed by object name and by display
-# name, each mapped to the object name. SSLO policies store display names; the
-# REST API addresses a category by object name
+# Read the URL categories on the connected device into a lookup keyed by object
+# name and by display name, each mapped to the object name. SSLO policies store
+# display names; the REST API addresses a category by object name
 # Returns: hashtable, or $null when the list cannot be read or carries no
 # display names (callers fall back to per-category lookups)
 function Get-UrlCategoryMap {
@@ -1674,7 +1693,8 @@ function Get-BlockDependencyRefs {
                 
                 if ($cs.connectionInformation) {
                     $connInfo = $cs.connectionInformation
-                    # VLANs - L3, HTTP, ICAP, off-box AWAF: connectionInformation.{from,to}BigipNetwork.vlan
+                    # VLANs - L3, HTTP, ICAP, off-box AWAF:
+                    # connectionInformation.{from,to}BigipNetwork.vlan
                     foreach ($dir in @("fromBigipNetwork", "toBigipNetwork")) {
                         $vlan = $connInfo.$dir.vlan
                         # create=true: the gc processor builds the VLAN from the network block
@@ -1697,7 +1717,8 @@ function Get-BlockDependencyRefs {
                 if ($cs.serviceSpecific -and $cs.serviceSpecific.vlan -and $cs.serviceSpecific.vlan.path -and $cs.serviceSpecific.vlan.create -ne $true) {
                     Add-Ref "vlan" $cs.serviceSpecific.vlan.path "/mgmt/tm/net/vlan/"
                 }
-                # Monitor: loadBalancing.monitor.fromSystem (type probed at capture, not validated at replay)
+                # Monitor: loadBalancing.monitor.fromSystem
+                # (type probed at capture, not validated at replay)
                 if ($cs.loadBalancing -and $cs.loadBalancing.monitor) {
                     $monPath = $cs.loadBalancing.monitor.fromSystem
                     if ($monPath -and $monPath -ne "" -and $monPath -notin $script:BUILTIN_MONITORS) {
@@ -1797,14 +1818,16 @@ function Get-BlockDependencyRefs {
                         }
                     }
                     
-                    # Datagroups in port match conditions: options.port[].port where valueType=datagroup
+                    # Datagroups in port match conditions: options.port[].port
+                    # where valueType=datagroup
                     foreach ($portEntry in @($opts.port)) {
                         if ($portEntry -and $portEntry.valueType -eq "datagroup") {
                             Add-Ref "datagroup" $portEntry.port "/mgmt/tm/ltm/data-group/internal/"
                         }
                     }
                     
-                    # Datagroups in IP geolocation conditions: options.geolocations[].value where valueType=datagroup
+                    # Datagroups in IP geolocation conditions:
+                    # options.geolocations[].value where valueType=datagroup
                     foreach ($geoEntry in @($opts.geolocations)) {
                         if ($geoEntry -and $geoEntry.valueType -eq "datagroup") {
                             Add-Ref "datagroup" $geoEntry.value "/mgmt/tm/ltm/data-group/internal/"
@@ -1856,8 +1879,10 @@ function Invoke-DependencyCapture {
     
     Write-LogStep "Recording dependencies..."
     
-    $depMap = @{}       # Unique dependencies, keyed by resolved type:path
-    $depAliases = @{}   # Reference type:path -> its entry in $depMap
+    # Unique dependencies, keyed by resolved type:path
+    $depMap = @{}
+    # Reference type:path to its entry in $depMap
+    $depAliases = @{}
     $urlCatMap = $null
     $urlCatMapRead = $false
     
@@ -2031,7 +2056,7 @@ function Invoke-DependencyCapture {
         "vlan_or_datagroup"     = 37
         "url_category"          = 38
     }
-    $depList = @($depMap.Values | Sort-Object { 
+    $depList = @($depMap.Values | Sort-Object {
         $order = $depSortOrder[$_.type]
         if ($null -eq $order) { $order = 99 }
         $order
@@ -2053,10 +2078,11 @@ function Invoke-DependencyCapture {
 # DEPENDENCY FIELD STRIPPING
 # =============================================================================
 
-# Strip instance-specific fields from dependency configs for clean storage.
-# Applied recursively: nested collection members (cipher group allow[],
-# log publisher destinations[], etc.) carry their own nameReference links
-# with the source TMOS version in the query string.
+# Strip instance-specific fields from a dependency config for clean storage.
+# Applied recursively: nested collection members (cipher group allow[], log
+# publisher destinations[]) carry their own nameReference links with the source
+# TMOS version in the query string
+# Returns: cleaned copy of the config
 function Remove-DepRuntimeFields {
     param([object]$Config)
     
@@ -2065,6 +2091,7 @@ function Remove-DepRuntimeFields {
     return $clean
 }
 
+# Strip one node in place and recurse into its object and array values
 function Remove-DepRuntimeFieldsRecursive {
     param([object]$Node)
     
@@ -2083,7 +2110,7 @@ function Remove-DepRuntimeFieldsRecursive {
     
     # Remove REST API reference link objects (*Reference fields with a link property)
     # These are just REST navigation links, not configuration data
-    $refFields = @($Node.PSObject.Properties | Where-Object { 
+    $refFields = @($Node.PSObject.Properties | Where-Object {
         $_.Name -match "Reference$" -and $_.Value -is [PSCustomObject] -and $_.Value.PSObject.Properties["link"]
     } | ForEach-Object { $_.Name })
     foreach ($field in $refFields) {
@@ -2148,7 +2175,8 @@ function Get-DepDisplayType {
 # OPTION 1: SNAPSHOT RECORD
 # =============================================================================
 
-# Option 1: Record an SSLO snapshot with paired dependency manifest
+# Record an SSLO snapshot with its paired dependency manifest
+# Returns: $true when the snapshot was written and verified
 function Invoke-SsloRecord {
     Clear-Host
     Write-LogSection "Record SSLO Snapshot"
@@ -2717,9 +2745,9 @@ function Select-SnapshotFile {
 # =============================================================================
 
 # Extract every service chain name a security policy references: rule actions
-# AND the default action (defaultActionOptions is a real top-level policy field
-# per the Ansible sslo_config_policy template). All policy walkers - replay
-# scoping, policy swap, and topology delete reference counting - MUST use this
+# and the default action (defaultActionOptions is a top-level policy field per
+# the Ansible sslo_config_policy template). Every policy walker - replay
+# scoping, policy swap, and topology delete reference counting - uses this
 # single implementation. A walker that misses defaultActionOptions can delete a
 # chain a surviving policy still references
 function Get-PolicyServiceChainNames {
@@ -2739,7 +2767,7 @@ function Get-PolicyServiceChainNames {
     return @($chains | Sort-Object -Unique | Where-Object { $_ })
 }
 
-# Names of the SSLO objects a block's configuration references: a chain's
+# List the SSLO objects a block's configuration references by name: a chain's
 # services, a policy's chains, a topology's SSL settings and policy
 function Get-SsloReferences {
     param([string]$DeploymentType, [object]$ConfigData)
@@ -2821,9 +2849,10 @@ function Get-PolicyDependencyTree {
     return $result
 }
 
-# Build a topology MODIFY block from the target's current state with updated policy
-# Source: Ansible bigip_sslo_config_topology.py add_json_metadata and
-#         sslo_templates/sslo_config_topology.py create_modify template
+# Build a topology MODIFY block from the target's current state with an updated
+# policy reference. Follows the Ansible bigip_sslo_config_topology.py
+# add_json_metadata and the sslo_config_topology.py create_modify template
+# Returns: block object ready to POST, or $null on failure
 function Convert-StateBlockToModify {
     param(
         [object]$TargetStateBlock,
@@ -3001,7 +3030,11 @@ function Invoke-BlockPostStatus {
         $errDetail = ""
         try { $errDetail = [string]$pollResult.Response.error } catch { <# non-critical #> }
         if ($errDetail) {
-            if ($errDetail.Length -gt 300) { $errDetail = $errDetail.Substring(0, 300) + "..." }
+            # Print the whole message: the cause is usually named at the end
+            # (mcpd validation text). Cap only runaway payloads
+            if ($errDetail.Length -gt 2000) {
+                $errDetail = $errDetail.Substring(0, 2000) + "... (truncated - see /var/log/restnoded/restnoded.log)"
+            }
             Write-LogError "  $errDetail"
         }
         return "FAILED"
@@ -3030,8 +3063,9 @@ function Invoke-BlockPostStatus {
     return "FAILED"
 }
 
-# Boolean wrapper for fail-fast callers (policy swap, redeploy, delete).
-# UNVERIFIED counts as success here
+# POST a block and reduce the result to a boolean for fail-fast callers (policy
+# swap, redeploy, delete). UNVERIFIED counts as success here
+# Returns: $true unless the post failed
 function Invoke-BlockPost {
     param(
         [object]$Block,
@@ -3559,10 +3593,10 @@ function Invoke-PolicySwap {
     Wait-EnterKey
 }
 
-# Replay circuit breaker - called at every failure site in the replay loop.
-# On the 3rd consecutive failure, prompts the operator to continue or stop.
-# Loop control (break, continue, fall-through) stays at the call site; success
-# paths reset $script:ConsecutiveFailures to 0 directly
+# Count a replay failure and, on the third in a row, ask the operator whether to
+# continue. Called at every failure site in the replay loop. Loop control
+# (break, continue, fall-through) stays at the call site; success paths reset
+# $script:ConsecutiveFailures to 0 directly
 # Returns: $true to continue the replay loop, $false to stop
 function Test-ReplayCircuitBreaker {
     $script:ConsecutiveFailures++
@@ -3638,7 +3672,8 @@ function Test-RenameInvariant {
     return $null
 }
 
-# Option 2: Replay a snapshot to the connected target
+# Replay a snapshot to the connected target: the whole snapshot, a single
+# topology, or a policy swap onto an existing topology
 function Invoke-SsloReplay {
     # -------------------------------------------------------------------------
     # Step 1: Select and import snapshot file
@@ -3809,7 +3844,7 @@ function Invoke-SsloReplay {
                 
                 # ---------------------------------------------------------
                 # Dynamic naming (optional): rename the topology stack to a
-                # new base name. Renaming applies ONLY to the topology, its
+                # new base name. Renaming applies only to the topology, its
                 # SSL settings, and its security policy. Services, service
                 # chains, and /Common/ dependencies are never renamed - they
                 # are outside replay's naming scope by design
@@ -3839,7 +3874,8 @@ function Invoke-SsloReplay {
                     $newBase = Read-Host "  New base name (Enter to keep $detectedBase)"
                     
                     if (-not [string]::IsNullOrWhiteSpace($newBase) -and $newBase -cne $detectedBase) {
-                        # Names cascade into TMOS and APM object names downstream - keep them short and clean
+                        # Names cascade into TMOS and APM object names downstream -
+                        # keep them short and clean
                         if ($newBase -notmatch '^[A-Za-z0-9_]{1,20}$') {
                             Write-LogError "Base name must be 1-20 characters: letters, numbers, underscores."
                             Wait-EnterKey
@@ -3849,7 +3885,7 @@ function Invoke-SsloReplay {
                         # Rename map: the three full prefixed block names of this stack.
                         # State blocks echo gc-generated artifacts (virtuals, log settings,
                         # generated profiles, .app folder paths) that embed the full block
-                        # name in values AND keys, so a field walk cannot enumerate them.
+                        # name in values and keys, so a field walk cannot enumerate them.
                         # Substitution is textual, anchored at identifier boundaries (see
                         # Invoke-NameSubstitution), and verified per block by
                         # Test-RenameInvariant before anything is committed
@@ -3976,7 +4012,7 @@ function Invoke-SsloReplay {
     $replayPlan = @()
     
     # Build target inventory with block IDs and states.
-    # A failed GET here MUST abort: an empty inventory disables collision
+    # A failed GET here aborts: an empty inventory disables collision
     # detection and converts "skip what exists" into "deploy everything"
     $targetBlocks = @{}
     $targetResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks"
@@ -4283,9 +4319,10 @@ function Invoke-SsloReplay {
 # OPTION 3: TOPOLOGY REDEPLOY
 # =============================================================================
 
-# Force a fresh deployment pass on an existing topology without changing its configuration.
-# Reads all SSLO blocks from the device into memory, identifies topologies and shared objects,
-# and pushes the selected topology back through the gc processor as a MODIFY operation.
+# Force a fresh deployment pass on an existing topology without changing its
+# configuration. Reads the SSLO blocks from the device, clears stuck operation
+# blocks for the selected topology, and pushes it back through the gc processor
+# as a MODIFY operation
 function Invoke-TopologyRedeploy {
     Clear-Host
     Write-LogSection "Redeploy SSLO Topology"
@@ -4641,16 +4678,16 @@ function Show-MainMenu {
 # OPTION 4: TOPOLOGY DELETE
 # =============================================================================
 
-# Option 4: Delete a topology stack with live dependency reference counting
-# Deletes the topology and any SSL settings, policy, chains, and services that
-# no surviving object references. Shared objects are retained
+# Delete a topology stack with live dependency reference counting: the topology
+# and any SSL settings, policy, chains, and services that no surviving object
+# references. Shared objects are retained
 function Invoke-TopologyDelete {
     Clear-Host
     Write-LogSection "Delete SSLO Topology"
     Write-Host ""
     
     # Repoll - live state is the only valid input for a destructive operation.
-    # A failed read MUST abort: deleting against a stale or partial graph
+    # A failed read aborts: deleting against a stale or partial graph
     # could remove objects another topology still depends on
     Write-LogStep "Reading SSLO configuration from $($script:RemoteHostname)..."
     $result = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks"
@@ -4685,7 +4722,7 @@ function Invoke-TopologyDelete {
         return
     }
     
-    # Reference walks against live config only
+    # Read a live topology's SSL settings and policy references
     function Get-TopoRefs {
         param([object]$Topo)
         $refs = @{ Ssl = @(); Policy = "" }
@@ -4696,6 +4733,7 @@ function Invoke-TopologyDelete {
         }
         return $refs
     }
+    # List the service chains a live policy references
     function Get-PolicyChains {
         param([object]$Pol)
         if ($Pol -and $Pol.Config) {
@@ -4703,6 +4741,7 @@ function Invoke-TopologyDelete {
         }
         return @()
     }
+    # List the services a live chain references
     function Get-ChainServices {
         param([object]$Chain)
         $svcs = @()
@@ -4713,6 +4752,7 @@ function Invoke-TopologyDelete {
         }
         return @($svcs | Sort-Object -Unique)
     }
+    # Find a live object by name
     function Find-Live {
         param([string]$Name)
         return ($live | Where-Object { $_.Name -eq $Name } | Select-Object -First 1)
@@ -4934,7 +4974,7 @@ function Invoke-TopologyDelete {
 # MAIN
 # =============================================================================
 
-# Entry point: connection, session and menu loops
+# Run the tool: connect, then serve the menu until the operator exits
 function Main {
     Clear-Host
     
