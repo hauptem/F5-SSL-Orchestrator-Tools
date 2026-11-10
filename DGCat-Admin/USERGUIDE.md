@@ -28,7 +28,7 @@
 DGCat-Admin is a menu-driven administration tool for managing LTM datagroups and custom URL categories on F5 BIG-IP systems. It connects to BIG-IP devices via the iControl REST API and is available in two versions with identical functionality:
 
 - **Bash** (`dgcat-admin.sh`) - Requires `curl` and `jq`. Runs from any Linux or macOS machine, a BIG-IP, or BIG-IQ.
-- **PowerShell** (`dgcat-admin.ps1`) - Requires PowerShell 5.1 or later. Runs from any Windows workstation.
+- **PowerShell** (`dgcat-admin.ps1`) - Requires Windows PowerShell 5.1 (Desktop edition). Runs from any Windows workstation.
 
 Both versions require network access to the BIG-IP management interface on port 443 and an account with administrative API access.
 
@@ -88,7 +88,7 @@ Folders listed in the `PROTECTED_FOLDERS` configuration (default: `appsvcs`, `Se
 
 **Bash version:** `curl` and `jq` must be available on the machine where you run the script. Both are available in the default package repositories for most Linux distributions and macOS. The tool checks for these at startup and will not proceed without them.
 
-**PowerShell version:** PowerShell 5.1 or later, which ships with Windows 10 and 11. No additional modules or packages are required.
+**PowerShell version:** Windows PowerShell 5.1 (Desktop edition), which ships with Windows 10 and 11. No additional modules or packages are required. PowerShell 7 (`pwsh`) is not supported: it ignores the certificate policy the script uses to accept self-signed BIG-IP management certificates, so the script exits with instructions if launched there.
 
 On the BIG-IP side, you need a user account with administrative API access (typically the `admin` role) and network reachability to the management interface on port 443.
 
@@ -104,7 +104,8 @@ chmod +x dgcat-admin.sh
 **PowerShell:**
 
 ```powershell
-.\dgcat-admin.ps1
+# Run under Windows PowerShell 5.1 (not pwsh)
+powershell.exe -File .\dgcat-admin.ps1
 ```
 
 There is no installation process, no dependencies beyond the above, and no configuration files required to get started. The tool creates its backup directory automatically on first run.
@@ -151,6 +152,8 @@ If you have a fleet configuration file, the tool displays your fleet hosts as nu
 
 Type a number to select a fleet host, or type any hostname or IP address to connect to a device that isn't in your fleet. Type `0` to exit.
 
+In the bash version every prompt supports line editing: Backspace, Delete, and the arrow keys work from any terminal client, and Tab completes file paths at the CSV and export prompts.
+
 After selecting a host, the screen clears and shows the target, then you're prompted for a username (Enter defaults to admin) and password. 
 
 ```
@@ -191,6 +194,8 @@ You provide a datagroup name and partition. If the datagroup already exists, the
 
 - **Overwrite** - Replace all existing entries with the contents of the CSV file
 - **Merge** - Add the CSV entries to the existing entries, deduplicating by key
+
+Merge reads the existing entries first. If that read fails, the import stops with "No changes have been made" and the datagroup is left as it was.
 
 If the datagroup doesn't exist, you select a type:
 
@@ -238,7 +243,7 @@ This is where you view contents and make changes. The editor supports browsing, 
 
 ### Editor Workflow
 
-When you open a datagroup or URL category in the editor, the tool fetches the current state from the BIG-IP and loads it into memory. All changes you make happen in memory only - the live object is not modified until you explicitly apply.
+When you open a datagroup or URL category in the editor, the tool fetches the current state from the BIG-IP and loads it into memory. All changes you make happen in memory only - the live object is not modified until you explicitly apply. If the fetch fails, the editor does not open.
 
 The editor displays a full paginated view with all available commands:
 
@@ -340,6 +345,8 @@ After confirming your intent to deploy, you select a deployment mode:
 
 **Merge** applies only your additions and deletions to each target, preserving any entries that are specific to that device. For datagroups, the tool sends incremental tmsh `records add` and `records delete` operations to each target; the rest of the record set is never touched. For URL categories, the tool uses the API's native add and delete operations. This is the right choice when different sites have intentional differences - such as site-specific bypass entries or local address ranges - and you only want to propagate the changes you made, not overwrite everything.
 
+For datagroups, the tool reads each target before applying the change. Additions the target already holds are skipped and reported as `N record(s) already present on target, not re-added`, and deletions of keys the target does not hold are dropped. If the target cannot be read, that host fails with `Could not read target records` and nothing is written to it.
+
 The selected mode governs every device in the deployment, including the one you're connected to - a Merge deploy applies only the staged delta to the current device as well. Because datagroup Merge uses the same tmsh passthrough as tmsh Modify, it is only offered when the change set can be expressed that way; change sets containing edited values or tmsh-unsafe characters show Full Replace as the only mode.
 
 ### Deployment Scope
@@ -409,7 +416,7 @@ Next, you choose which fleet hosts to query:
 
 ### Pulling Data
 
-The tool connects to each selected host, retrieves the object's entries, and builds a consolidated view. Hosts that are unreachable or don't have the object are flagged and skipped. After the pull completes, the tool shows a summary:
+The tool connects to each selected host, retrieves the object's entries, and builds a consolidated view. Hosts that are unreachable, don't have the object, or fail the read are flagged (`Object not found or read failed`) and left out of the comparison. After the pull completes, the tool shows a summary:
 
 <img width="754" height="344" alt="Image" src="https://github.com/user-attachments/assets/9ac7334c-281b-4783-80d7-1d46b6c4a84e" />
 
@@ -423,11 +430,13 @@ Press `s` and enter a case-insensitive search pattern. The tool finds every entr
 
 **Entries found on only some hosts** are listed individually with per-host detail showing which hosts have the entry and which are missing it. This immediately surfaces drift without requiring a separate diff operation.
 
+**Datagroup entries present on every host but holding different values** are flagged `(value mismatch)` with the value each host holds. Search patterns match keys only. URL categories have no values, so this does not apply to them.
+
 <img width="753" height="380" alt="Image" src="https://github.com/user-attachments/assets/74f083d4-67f8-4f7e-b816-039296e0e4d0" />
 
 ### Diffing
 
-Press `d` to run a full diff across all pulled hosts. The diff shows every entry that is not present on every host, with per-host presence detail for each one. Entries that are consistent across the entire fleet are counted but not displayed - if everything matches, the tool reports that all entries are consistent.
+Press `d` to run a full diff across all pulled hosts. The diff shows every entry that is not present on every host, with per-host presence detail for each one, and every datagroup entry whose value differs between hosts, with per-host values. Entries that are consistent across the entire fleet are counted but not displayed - if everything matches, the tool reports that all entries are consistent.
 
 ```
   All 312 entries consistent across all 4 hosts.
@@ -616,11 +625,13 @@ When connected to a host that is not part of any fleet site, backups go to the r
 bigip01-mgmt_dc1_example_com_Common_bypass-domains_internal_20260327_143052.csv
 ```
 
-For datagroups inside a TMOS folder, the folder is folded into the filename so same-named datagroups in different folders keep separate files and rotation pools, and the backup header records the folder:
+For datagroups inside a TMOS folder, the folder is folded into the filename so same-named datagroups in different folders keep separate files and rotation pools, and the backup header records the folder. The folder and the name are joined with a double underscore:
 
 ```
-bigip01-mgmt_dc1_example_com_Common_dashboard_pool-alias_internal_20260327_143052.csv
+bigip01-mgmt_dc1_example_com_Common_dashboard__pool-alias_internal_20260327_143052.csv
 ```
+
+Folder backups written before v5.9 used a different name shape. They are not rotated; remove them manually if desired.
 
 Fleet deployment backups for remote hosts are always organized by site and use the same naming convention, so connected-host and fleet backups of the same object share one rotation pool:
 
@@ -630,7 +641,7 @@ DC1/bigip02-mgmt_dc1_example_com_Common_bypass-domains_internal_20260327_143022.
 
 ### Retention
 
-The tool retains up to `MAX_BACKUPS` files per object (default: 10). When the limit is exceeded, the oldest backup files are removed automatically.
+The tool retains up to `MAX_BACKUPS` files per object (default: 10). When the limit is exceeded, the oldest backup files are removed automatically. Rotation matches the object's exact filename, so backups of an object with a similar name (`Bypass` and `Bypass_Finance`) are counted separately.
 
 ### Restoring from Backup
 
@@ -693,6 +704,9 @@ One or more CIDR entries in your CSV have non-zero host bits for their prefix le
 **"X duplicate entries removed, Y unique entries"**
 Your CSV contained duplicate keys or URLs. The tool automatically removes duplicates before applying. The reported count reflects what will land in the datagroup or URL category.
 
+**"Could not read ... No changes have been made." / "Editor not opened." / "Nothing exported."**
+The tool could not read the object's current contents, so it stopped before writing anything. A merge, an editor session, or an export built on a failed read would replace or misreport the object. The usual cause is a large object that takes longer to read than the API timeout allows. Increase `API_REQUEST_TIMEOUT` (bash) or `$script:API_TIMEOUT` (PowerShell) in the script header and retry.
+
 **"Failed to populate URL category"**
 The URL category was created but the API timed out while applying URLs. This can happen with very large URL categories (>10000 records). The category likely contains the data - verify in the GUI or by viewing it in the tool. If it is empty, retry using overwrite mode. If timeouts persist, increase `API_REQUEST_TIMEOUT` (bash) or `$script:API_TIMEOUT` (PowerShell) in the script header. The default is 60 seconds.
 
@@ -712,6 +726,12 @@ Every target host either failed to connect or didn't have the target object. Ver
 **Hosts showing "Object not found" during validation.**
 The host is reachable and credentials are valid, but the target datagroup or URL category does not exist on that host. Create the object on the target host first, then reattempt.
 
+**"Could not read target records" on a host during a Merge deploy.**
+The tool reads each target's datagroup before a Merge so it can skip records the target already holds. The read failed, so nothing was written to that host. Check connectivity and the API timeout, then redeploy to that host.
+
+**"Object not found or read failed" during Search.**
+The host answered the connectivity test but the object's contents could not be read, either because the object does not exist there or because the read timed out. The host is left out of the comparison rather than counted as empty.
+
 **Hosts showing "Connection failed" during validation.**
 The host is unreachable or restjavad is down. Verify network connectivity and REST API availability on the target. See the 503 guidance above.
 
@@ -721,8 +741,8 @@ The host failed pre-deploy validation - either it was unreachable or the target 
 **"Failed to create datagroup" with HTTP 400 when creating into a folder.**
 The most common cause is that the target folder does not exist on the BIG-IP - the tool creates objects, not folders. Verify the folder in the GUI or create it first. Enable `DEBUG_ENABLED` to see the exact reason BIG-IP returns in the response body.
 
-**"Device reported an error but the records are present - treating as applied."**
-TMOS occasionally applies a tmsh `records add` or `records delete` while the client-side transport reports an error. The tool reads the datagroup back and, when the records are in the expected end state, treats the operation as applied and continues. Nothing needs to be done; the warning is informational. A blind retry would be unsafe because tmsh refuses to add an existing record or delete a missing one.
+**"Device reported an error but the records are present - treating as applied."** (or "...the records are gone..." for a delete)
+TMOS occasionally applies a tmsh `records add` or `records delete` while the client-side transport reports an error. The tool reads the datagroup back and, when the records are in the expected end state, treats the operation as applied and continues. The error the device reported is shown on the next line when one is available. Nothing needs to be done; the warning is informational. A blind retry would be unsafe because tmsh refuses to add an existing record or delete a missing one.
 
 ### Editor Issues
 

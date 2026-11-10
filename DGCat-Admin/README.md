@@ -42,7 +42,7 @@ The tool handles the details that make these operations error-prone when done ma
 - jq
 - Network access to BIG-IP management interface (port 443)
 - BIG-IP running TMOS 17.x or later
-- Note: DGCat's editor in bash gets pretty sluggish when there are more than 6k-7k records, but the create/deploy functions work fine
+- Note: DGCat's editor in bash gets pretty sluggish above 8,000 records and warns before opening a dataset that large, but the create/deploy functions work fine
   
 ### PowerShell Version
 
