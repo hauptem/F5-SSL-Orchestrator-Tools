@@ -154,7 +154,7 @@ Services and SSL settings must already exist on the target. The tool will not cr
 
 ---
 
-## Redeploying a Topology (experimental)
+## Redeploying a Topology
 
 Menu option 3. Reads the current state of a topology from the connected device and pushes it back through the gc processor as a MODIFY operation.
 
