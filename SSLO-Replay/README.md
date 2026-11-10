@@ -27,7 +27,7 @@ The snapshot is a single JSON file containing every SSLO object. External depend
 - **Record** - Captures all SSLO objects (SSL settings, services, service chains, security policies, topologies) in a single portable JSON file
 - **Full Replay** - Deterministic recreation of an entire SSLO deployment in dependency order
 - **Scoped Replay** - Replay a single topology with automatic dependency resolution, with optional renaming of the topology stack at replay time
-- **Policy Swap** - Apply a security policy from a snapshot to an existing topology on the target, with rename and overwrite support
+- **Policy Swap** - Apply a security policy from a snapshot to an existing topology on the target, with rename and overwrite support. The datagroups, URL categories, and VLANs the policy needs are checked on the target before anything changes
 - **Redeploy** - Push an existing topology back through the gc processor to force a fresh deployment pass, no snapshot file needed
 - **Delete** - Remove a topology and its unreferenced dependents from the live device, with reference counting so shared objects are retained
 - **Dependency Capture** - Records external BIG-IP objects (iRules, monitors, cipher groups, profiles, SNAT pools, pools, DNS resolvers, datagroups, URL categories, WAF policies) as a .txt manifest for reference
@@ -49,10 +49,12 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 ## Current Limitations
 
 - Replay was not designed to install the LTM prerequisites; those will be present in a UCS restore. Replay was designed for quick SSLO restoration when you need to "nuke" your entire SSLO because of a guided configuration (gc) issue or when you want some SSLO config portability.
-- Certs and keys will never be captured during a snapshot in the JSON manifest for obvious security reasons. Install them on the target before replay.
+- Cert and key content is never captured, for obvious security reasons. The dependency manifest lists them by name only. Install them on the target before replay.
 - General Settings (`ssloGS_global`) are environment-specific; configure via the SSLO GUI on the target before replay
 - Per-request policy modifications made outside SSLO with strict updates disabled will not survive replay
 - Extension services (blocking page, DoH guard) must be installed separately
+- Custom monitors are not checked before replay. The gc processor validates them at deploy time, so they must exist on the target
+- Networks SSLO creates for a service (a VLAN on an interface, self IPs) are replayed from the service block. The interfaces and VLAN tags they name are not checked before replay and must be free on the target
 - Snapshots replay to the same or a newer SSLO version. Replay to an older SSLO version is not supported: newer versions store fields that older gc processors may reject
 - Office 365 URL configuration is held by the SSLO O365 worker, not in iAppsLX blocks, and is not captured. Configure it on the target before replaying policies that use its URL categories
 - SSLO-Replay is slow, because the REST API stack in a BIG-IP is slow. It is not possible to get faster performance until F5 updates the internal processing pipeline. The benefit, however, is accuracy and the removal of human error.
@@ -61,8 +63,8 @@ The transformation logic, per-type inputProperty templates, and prerequisite fie
 
 - Windows PowerShell 5.1 (Desktop edition). PowerShell 7+ (pwsh) is not supported and the tool will exit at startup if launched under it
 - Network access to BIG-IP management interface (port 443)
-- BIG-IP running TMOS 17.x, 21.x or greater 
-- SSL Orchestrator 12.x or greater
+- BIG-IP running TMOS 17.x or later
+- SSL Orchestrator 12.x or later
 
 ## Installation
 
