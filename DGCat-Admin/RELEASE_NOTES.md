@@ -1,3 +1,12 @@
+# DGCat-Admin v5.9 Release Notes (November 10 2026)
+
+- Bash: fleet Merge and tmsh read-back no longer misread a large datagroup. The target's key list was piped into grep -q, which exits on the first match; under pipefail the writer killed by the closed pipe turned a match into "no match" once the list outgrew the pipe buffer (roughly 5000 records). In fleet Merge a deletion of a key the target held was dropped while the host reported OK, and an addition already present was re-sent and failed its chunk. In read-back (since v5.7) a records delete that reported an error could be confirmed as applied while the record was still present, and a records add that had applied could be reported as failed. The list is now fed by here-string
+- A failed datagroup type read aborts CSV import and editor open with an error. The type drives entry validation, and both versions continued with an empty type and validated nothing when the type read failed but the record read succeeded
+- Bash: the read-failure messages added in v5.8 no longer print an HTTP status. The reads run in a command substitution, so the status shown was the one left by the previous request, typically 200
+- Bash: the "Type DELETE to confirm" prompts are passed to readline. They were printed by a separate echo, so Home or Ctrl-A redrew the input over the prompt text
+- PowerShell: fleet Merge skips null entries in the deletion list instead of raising a ContainsKey exception
+- Housekeeping: function header comments follow one format in both versions (summary, then Args, Input, Outputs, Sets, Returns as they apply), configuration comments match between versions, and names that differed for the same thing are unified. In bash, menu_delete_datagroup is now menu_delete, menu_delete_datagroup_only is menu_delete_datagroup, and the two urlcat deploy functions are spelled url_category. 
+
 # DGCat-Admin v5.8.1 Release Notes (BASH only - October 26 2026)
 
 - Bash: interactive prompts use readline. Line editing was left to the tty driver, so a client whose Backspace sends ^H against an erase character of ^? (the SecureCRT default) echoed the control character and stored it in the input; at the password prompt a corrected typo was sent to the BIG-IP as part of the password and failed as a plain 401. Backspace, Delete, and the arrow keys now edit correctly from any client, and Tab completes file paths at the CSV and export prompts
