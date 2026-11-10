@@ -2,7 +2,7 @@
 # =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.8.1
+# Version: 5.9
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -58,8 +58,8 @@ TMSH_CHUNK_SIZE=500
 PARTITIONS="Common"
 
 # Protected system datagroups - DO NOT MODIFY
-# These are pre-configured BIG-IP datagroups that must not be modified or deleted
-# Attempting to change these can produce adverse system results
+# Pre-configured BIG-IP datagroups that must not be modified or deleted;
+# changing them can produce adverse system results
 PROTECTED_DATAGROUPS=(
     "private_net"
     "images"
@@ -67,21 +67,27 @@ PROTECTED_DATAGROUPS=(
     "sys_APM_MS_Office_OFBA_DG"
 )
 
-# TMOS folders whose objects are managed by other systems (AS3, Service
-# Discovery). Datagroups in these folders are shown in listings but blocked
-# from create, edit, and delete. Delete entries to disable the guard
+# Protected TMOS folders - datagroups inside these are owned by an external
+# declaration engine (AS3, Service Discovery) and are rewritten on its next
+# push - edits made here are silently discarded. They are shown in listings
+# but blocked from create, edit, and delete. Matched on the first folder
+# segment only; AS3 nests its tenants below its own folder. Remove entries
+# to disable the guard
 PROTECTED_FOLDERS=(
     "appsvcs"
     "ServiceDiscovery"
 )
 
-# Debug tracing (set to 1 to log request/response detail for every API call)
+# API tracing (set to 1 to trace every request and response)
+# Traces method, URI, decoded tmsh options, request body, HTTP status, and
+# the BIG-IP error body. Credentials are never traced.
+# Verbose - enable only while diagnosing an API failure
 DEBUG_ENABLED=0
 
 # CSV preview lines
 PREVIEW_LINES=5
 
-# Parsed partition array (populated at runtime)
+# Parsed partition list (populated at runtime from PARTITIONS)
 declare -a PARTITION_LIST
 
 # =============================================================================
@@ -112,7 +118,7 @@ FLEET_CONFIG_FILE="${BACKUP_DIR}/fleet.conf"
 declare -a FLEET_SITES
 declare -a FLEET_HOSTS
 
-# Track unique sites for deploy menu
+# Unique site IDs, for the scope menus
 declare -a FLEET_UNIQUE_SITES
 
 # =============================================================================
@@ -131,6 +137,8 @@ NC='\033[0m'
 # LOGGING FUNCTIONS
 # =============================================================================
 
+# Write a line to the console and, when logging is enabled, the session log
+# Args: message
 log() {
     if [ "${LOGGING_ENABLED}" -eq 1 ]; then
         echo -e "$1" | tee -a "${LOGFILE}" 2>/dev/null
@@ -139,6 +147,8 @@ log() {
     fi
 }
 
+# Write a section banner
+# Args: title
 log_section() {
     log ""
     log "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
@@ -146,6 +156,8 @@ log_section() {
     log "  ${CYAN}══════════════════════════════════════════════════════════════${NC}"
 }
 
+# Status lines: [INFO], [ OK ], [WARN], [FAIL], [....]
+# Args: message
 log_info() {
     log "${WHITE}  [INFO]  $1${NC}"
 }
@@ -168,7 +180,7 @@ log_step() {
 
 # Debug tracing - stderr only. Functions that return results on stdout
 # (lists, selections, backup paths) would capture a stdout debug line
-# into their data
+# into their data. No-op unless DEBUG_ENABLED
 log_debug() {
     if [ "${DEBUG_ENABLED}" -eq 1 ]; then
         echo -e "${GRAY}  [DBUG]  $1${NC}" >&2
@@ -183,12 +195,15 @@ log_debug() {
 # UTILITY FUNCTIONS
 # =============================================================================
 
+# Pause until the operator presses Enter
 press_enter_to_continue() {
     echo ""
     read -erp "  Press Enter to continue..."
 }
 
-# Validate if a string looks like an integer
+# Test whether an entry is an integer
+# Args: entry
+# Returns: 0 if it is, 1 if not
 is_integer_format() {
     local entry="$1"
     # Match digits only (optionally with leading minus for negative)
@@ -198,7 +213,9 @@ is_integer_format() {
     return 1
 }
 
-# Validate if a string looks like an IP address or CIDR subnet
+# Test whether an entry is an IPv4/IPv6 address or CIDR subnet
+# Args: entry
+# Returns: 0 if it is, 1 if not
 is_address_format() {
     local entry="$1"
     # Match IPv4 address or CIDR notation
@@ -212,10 +229,10 @@ is_address_format() {
     return 1
 }
 
-# Validate CIDR entries have properly zeroed host bits
-# BIG-IP rejects CIDR addresses where host bits are non-zero (e.g., 10.159.55.0/16)
-# Args: keys_array_name
-# Outputs: error_count|example1|example2|... (pipe-delimited, max 5 examples)
+# Check IPv4 CIDR entries for non-zero host bits, which BIG-IP rejects
+# (e.g., 10.159.55.0/16)
+# Args: keys_name (name of the array holding the keys)
+# Outputs: error_count|example1|example2|... (max 5 examples)
 validate_cidr_alignment() {
     local keys_name=$1
     eval "local total=\${#${keys_name}[@]}"
@@ -267,8 +284,9 @@ validate_cidr_alignment() {
     echo "${error_count}${examples}"
 }
 
-# Check if a datagroup is a protected system datagroup
-# Returns 0 (true) if protected, 1 (false) if safe to modify
+# Test whether a name matches a protected system datagroup
+# Args: dg_name
+# Returns: 0 if protected, 1 if not
 is_protected_datagroup() {
     local dg_name="$1"
     for protected in "${PROTECTED_DATAGROUPS[@]}"; do
@@ -279,8 +297,8 @@ is_protected_datagroup() {
     return 1
 }
 
-# Convert Windows line endings (\r\n) to Unix (\n)
-# BIG-IP and CSV parsing require Unix line endings
+# Convert CRLF line endings to LF in place
+# Args: filepath
 convert_line_endings() {
     local filepath="$1"
     if file "${filepath}" | grep -q "CRLF"; then
@@ -291,7 +309,9 @@ convert_line_endings() {
     return 0
 }
 
-# Check if file has Windows line endings
+# Test whether a file contains CRLF line endings
+# Args: filepath
+# Returns: 0 if it does, 1 if not
 has_windows_line_endings() {
     local filepath="$1"
     if file "${filepath}" | grep -q "CRLF" || grep -q $'\r' "${filepath}" 2>/dev/null; then
@@ -299,7 +319,9 @@ has_windows_line_endings() {
     fi
     return 1
 }
-# Ensure backup directory exists
+
+# Create the backup directory if needed and verify it is writable
+# Returns: 0 if usable, 1 if not
 ensure_backup_dir() {
     if [ ! -d "${BACKUP_DIR}" ]; then
         if ! mkdir -p "${BACKUP_DIR}" 2>/dev/null; then
@@ -315,10 +337,12 @@ ensure_backup_dir() {
     return 0
 }
 
-# Cleanup old backups beyond retention limit
+# Prune rotated backups beyond MAX_BACKUPS for a filename prefix
 # The match is anchored on the timestamp suffix. A glob of "<prefix>_*.csv"
 # also matches every object whose name extends the prefix (urlcat_Bypass
-# matches urlcat_Bypass_Finance), so rotating one object deleted another's
+# matches urlcat_Bypass_Finance), so rotating one object would delete
+# another's backups
+# Args: prefix, [directory]
 cleanup_old_backups() {
     local prefix="$1"
     local directory="${2:-${BACKUP_DIR}}"
@@ -338,7 +362,8 @@ cleanup_old_backups() {
 
 # Validate a single datagroup key against the datagroup's type
 # String-type datagroups accept any key, so only address and integer are checked
-# Echoes: empty if valid, error message if invalid
+# Args: key, dg_type
+# Outputs: empty if valid, error message if invalid
 validate_datagroup_key_format() {
     local key="$1"
     local dg_type="$2"
@@ -378,7 +403,8 @@ validate_datagroup_key_format() {
 
 # Validate a single URL category entry before format conversion
 # Only the domain is validated; protocol and path are stripped first
-# Echoes: empty if valid, terse reason if invalid
+# Args: entry
+# Outputs: empty if valid, terse reason if invalid
 validate_url_entry_format() {
     local entry="$1"
     
@@ -405,19 +431,23 @@ validate_url_entry_format() {
     return 0
 }
 
-# Strip partition prefix from datagroup name (e.g., /Common/mygroup -> mygroup)
+# Strip a leading /Partition/ prefix from an object name
+# (e.g., /Common/mygroup -> mygroup)
+# Args: name
+# Outputs: name without the prefix
 strip_partition_prefix() {
     echo "$1" | sed 's/^\/[^/]*\///g'
 }
 
-# Prompt user to select a datagroup from a partition
+# Prompt the operator to select a datagroup by number or name
 # Names are folder-qualified (folder/name) for objects inside TMOS folders.
 # Bare-name input matching a single folder object resolves to it; multiple
 # matches list the candidates. New names accept folder/name; the folder must
 # already exist - this tool creates objects, not folders
-# Args: partition, prompt_text, [mode]
-# Outputs: name|subpath|class on success (subpath empty at partition root)
-# Returns: 0 on success, 1 on failure/cancel
+# Args: partition, [prompt], [mode]
+# mode: existing (must exist, default), any (new or existing), new (must not exist)
+# Outputs: name|subpath|class (subpath empty at partition root)
+# Returns: 0 on selection, 1 on failure or cancel
 select_datagroup() {
     local partition="$1"
     local prompt="${2:-Enter datagroup name}"
@@ -602,7 +632,7 @@ select_datagroup() {
     done
 }
 
-# Prompt to save configuration
+# Prompt the operator to save the BIG-IP configuration
 prompt_save_config() {
     echo ""
     local save_choice
@@ -626,7 +656,7 @@ prompt_save_config() {
 # API Helper Functions
 # -----------------------------------------------------------------------------
 
-# Base API request function
+# Send a REST request to the connected BIG-IP
 # Args: method, endpoint, [data]
 # Sets: API_RESPONSE, API_HTTP_CODE
 # Returns: 0 on success (2xx), 1 on failure
@@ -637,7 +667,7 @@ api_request() {
     
     local url="https://${REMOTE_HOST}${endpoint}"
     # The credential is passed as a curl config on a private fd rather than
-    # as a -u argument, which every user on the host could read from the
+    # as a -u argument, which every account on the host could read from the
     # process list. curl's config parser unescapes \\ and \" inside quotes
     local auth="${REMOTE_USER}:${REMOTE_PASS}"
     auth="${auth//\\/\\\\}"
@@ -695,14 +725,16 @@ api_request() {
     return 1
 }
 
-# GET request wrapper
+# GET wrapper for api_request
+# Args: endpoint
 api_get() {
     local endpoint="$1"
     api_request "GET" "${endpoint}"
     return $?
 }
 
-# POST request wrapper
+# POST wrapper for api_request
+# Args: endpoint, data
 api_post() {
     local endpoint="$1"
     local data="$2"
@@ -710,7 +742,8 @@ api_post() {
     return $?
 }
 
-# PATCH request wrapper
+# PATCH wrapper for api_request
+# Args: endpoint, data
 api_patch() {
     local endpoint="$1"
     local data="$2"
@@ -718,7 +751,8 @@ api_patch() {
     return $?
 }
 
-# DELETE request wrapper
+# DELETE wrapper for api_request
+# Args: endpoint
 api_delete() {
     local endpoint="$1"
     api_request "DELETE" "${endpoint}"
@@ -729,8 +763,8 @@ api_delete() {
 # Connection Functions
 # -----------------------------------------------------------------------------
 
-# Prompt for REST API connection details and test connection
-# Uses FLEET_HOSTS/FLEET_SITES arrays if already loaded by load_fleet_config()
+# Prompt for target and credentials and verify connectivity
+# Fleet hosts are offered for selection when fleet.conf is loaded
 # Returns: 0 on successful connection, 1 on failure
 setup_remote_connection() {
     log_section "DGCat Connection Setup"
@@ -833,9 +867,10 @@ setup_remote_connection() {
         return 1
     fi
 }
-# Pre-flight checks
-# Validate dependencies and establish connection
-# Returns: 0 on success, exits on critical failure
+
+# Validate dependencies and configuration, load the fleet, connect, and
+# verify the target
+# Returns: 0 on success; exits on a critical failure
 preflight_checks_rest_api() {
     log_section "Pre-Flight Checks"
     
@@ -871,7 +906,7 @@ preflight_checks_rest_api() {
         [ ${#FLEET_UNIQUE_SITES[@]} -eq 1 ] && site_word="site"
         log_ok "Fleet loaded: ${#FLEET_HOSTS[@]} ${host_word} across ${#FLEET_UNIQUE_SITES[@]} ${site_word}"
     else
-        # Create boilerplate fleet.conf for the user
+        # Create boilerplate fleet.conf for the operator
         if [ ! -f "${FLEET_CONFIG_FILE}" ] && [ -d "${BACKUP_DIR}" ]; then
             cat > "${FLEET_CONFIG_FILE}" 2>/dev/null << 'FLEET_TEMPLATE'
 # DGCat-Admin Fleet Configuration File
@@ -951,7 +986,8 @@ FLEET_TEMPLATE
 # System Functions
 # -----------------------------------------------------------------------------
 
-# Save configuration
+# Save the running configuration on the connected BIG-IP
+# Returns: 0 on success, 1 on failure
 save_config_remote() {
     local data='{"command":"save"}'
     if api_post "/mgmt/tm/sys/config" "${data}"; then
@@ -960,7 +996,9 @@ save_config_remote() {
     return 1
 }
 
-# Check if partition exists
+# Test whether a partition exists (direct query, no cache)
+# Args: partition
+# Returns: 0 if it exists, 1 if not
 partition_exists_remote() {
     local partition="$1"
     if api_get "/mgmt/tm/auth/partition/${partition}"; then
@@ -973,8 +1011,10 @@ partition_exists_remote() {
 # Datagroup Functions
 # -----------------------------------------------------------------------------
 
-# Get list of datagroups in a partition
-# Returns: partition|subpath|name|internal lines (subpath empty at partition root)
+# List internal datagroups in a partition, excluding iApp-owned objects
+# Args: partition
+# Outputs: partition|subpath|name|internal lines (subpath empty at partition root)
+# Returns: 0 on success, 1 if the read failed
 get_internal_datagroup_list_remote() {
     local partition="$1"
     
@@ -992,7 +1032,9 @@ get_internal_datagroup_list_remote() {
     ' 2>/dev/null || true
 }
 
-# Check if datagroup exists by partition and name
+# Test whether an internal datagroup exists
+# Args: partition, dg_name, [subpath]
+# Returns: 0 if it exists, 1 if not
 internal_datagroup_exists_remote() {
     local partition="$1"
     local dg_name="$2"
@@ -1004,7 +1046,10 @@ internal_datagroup_exists_remote() {
     return 1
 }
 
-# Get datagroup type by partition and name
+# Get a datagroup's type as the API reports it (string, ip, or integer)
+# Args: partition, dg_name, [subpath]
+# Outputs: type
+# Returns: 0 on success, 1 if the read failed
 get_internal_datagroup_type_remote() {
     local partition="$1"
     local dg_name="$2"
@@ -1017,7 +1062,13 @@ get_internal_datagroup_type_remote() {
     return 1
 }
 
-# Get datagroup records as key|value lines
+# Get datagroup records
+# A failed read is distinct from an empty datagroup: callers that write back
+# a full record set must check the exit status, which a pipe or process
+# substitution hides
+# Args: partition, dg_name, [subpath]
+# Outputs: key|value lines (nothing for an empty datagroup)
+# Returns: 0 on success, 1 if the read failed
 get_internal_datagroup_records_remote() {
     local partition="$1"
     local dg_name="$2"
@@ -1034,9 +1085,11 @@ get_internal_datagroup_records_remote() {
     ' 2>/dev/null || true
 }
 
-# Create datagroup
-# Args: partition, name, type, [subpath]
-# The folder must already exist in TMOS - this tool creates objects, not folders
+# Create an empty internal datagroup
+# A non-empty subpath targets an existing TMOS folder. The folder is not
+# created here, so a missing one surfaces as a create failure
+# Args: partition, dg_name, dg_type, [subpath]
+# Returns: 0 on success, 1 on failure
 create_internal_datagroup_remote() {
     local partition="$1"
     local dg_name="$2"
@@ -1065,9 +1118,10 @@ create_internal_datagroup_remote() {
     return 1
 }
 
-# Apply records to datagroup (replace all)
-# Args: partition, name, records_json
-# records_json format: [{"name":"key1","data":"value1"},{"name":"key2"}]
+# Replace a datagroup's full record set via PATCH
+# Args: partition, dg_name, records_json, [subpath]
+# records_json: [{"name":"key1","data":"value1"},{"name":"key2"}]
+# Returns: 0 on success, 1 on failure
 apply_internal_datagroup_records_remote() {
     local partition="$1"
     local dg_name="$2"
@@ -1083,10 +1137,11 @@ apply_internal_datagroup_records_remote() {
     return 1
 }
 
-# Build JSON records array from key|value lines
-# Input: key|value lines via stdin
-# Output: JSON array suitable for REST API
-# Args: dg_type (for reference, not currently used in output format)
+# Build a REST records array from key|value lines
+# Args: dg_type (accepted for call-site symmetry; the record format does
+#       not depend on it)
+# Input: key|value lines on stdin
+# Outputs: JSON array of {name, data}
 build_records_json_remote() {
     local dg_type="$1"
     
@@ -1100,9 +1155,9 @@ build_records_json_remote() {
     '
 }
 
-# Build tmsh-style record string for incremental add
-# Input: key|value lines via stdin
-# Output: tmsh record string (e.g., "key1 { data value1 } key2")
+# Build a tmsh-style record string for incremental add
+# Input: key|value lines on stdin
+# Outputs: tmsh record string (e.g., "key1 { data value1 } key2")
 build_tmsh_records_add() {
     local result=""
     while IFS='|' read -r key value; do
@@ -1116,9 +1171,9 @@ build_tmsh_records_add() {
     echo "${result}"
 }
 
-# Build tmsh-style key string for incremental delete
-# Input: key names, one per line
-# Output: space-separated keys
+# Build a tmsh-style key string for incremental delete
+# Input: keys, one per line on stdin
+# Outputs: space-separated keys
 build_tmsh_records_delete() {
     local result=""
     while IFS= read -r key; do
@@ -1128,8 +1183,11 @@ build_tmsh_records_delete() {
     echo "${result}"
 }
 
-# Build the REST tilde path for a datagroup, folder segment included
-# (e.g. ~Common~dashboard~mygroup). Objects at the partition root omit it
+# Build the tilde-delimited REST object path for a datagroup, folder segment
+# included (e.g., ~Common~dashboard~mygroup). Objects at the partition root
+# omit it
+# Args: partition, dg_name, [subpath]
+# Outputs: REST path
 build_datagroup_path() {
     local partition="$1"
     local dg_name="$2"
@@ -1143,7 +1201,10 @@ build_datagroup_path() {
     fi
 }
 
-# Human-readable full path (e.g. /Common/dashboard/mygroup)
+# Build the operator-facing full path for a datagroup, for prompts and logs
+# (e.g., /Common/dashboard/mygroup)
+# Args: partition, dg_name, [subpath]
+# Outputs: display path
 get_datagroup_display_path() {
     local partition="$1"
     local dg_name="$2"
@@ -1156,10 +1217,13 @@ get_datagroup_display_path() {
     fi
 }
 
-# Backup filename token - the folder is folded in so datagroups with the
-# same leaf name in different folders get separate files and rotation pools.
+# Build the filename token identifying a datagroup's folder and name
+# The folder is folded in so two datagroups sharing a leaf name in different
+# folders neither overwrite each other on disk nor share one rotation pool.
 # Folder segments are joined with a double underscore: a single underscore
-# mapped /Common/a/b and /Common/a_b to the same token
+# would map /Common/a/b and /Common/a_b to the same token
+# Args: dg_name, [subpath]
+# Outputs: filename token
 get_datagroup_scope_token() {
     local dg_name="$1"
     local subpath="${2:-}"
@@ -1171,9 +1235,10 @@ get_datagroup_scope_token() {
     fi
 }
 
-# Parse operator input into folder and leaf name
-# Accepts: name, folder/name, /Partition/folder/name
-# Echoes: subpath|name (subpath empty for partition-root objects)
+# Split an operator-entered datagroup reference into folder and leaf name
+# Accepts: name | folder/name | /Partition/folder/name
+# Args: input, partition
+# Outputs: subpath|name (subpath empty at partition root)
 split_datagroup_path() {
     local input="$1"
     local partition="$2"
@@ -1191,7 +1256,9 @@ split_datagroup_path() {
     fi
 }
 
-# Check whether a folder (top segment) is externally managed
+# Test whether a datagroup's folder is owned by an external declaration engine
+# Matched on the first folder segment only
+# Args: subpath
 # Returns: 0 if protected, 1 if not
 is_protected_folder() {
     local subpath="$1"
@@ -1213,24 +1280,29 @@ is_protected_folder() {
 # options string. Whitespace splits tokens (a multi-word delete key would delete
 # other records); braces, quotes, backslash, ';', and '#' corrupt the parse.
 # Full Replace (REST JSON) is unaffected
-# Input: strings one per line on stdin
-# Returns: 0 if all safe, 1 if any string contains unsafe characters
+# Input: strings, one per line on stdin
+# Returns: 0 if all are safe, 1 if any contains an unsafe character
 tmsh_safe_strings() {
     ! grep -q "[[:space:]{}\"\\\\;#']"
 }
 
-# URL-encode a tmsh options string for REST API query parameter
+# URL-encode a tmsh options string for the REST query parameter
+# Args: options
+# Outputs: encoded string
 urlencode_options() {
     echo "$1" | sed 's/ /%20/g; s/{/%7B/g; s/}/%7D/g; s/"/%22/g'
 }
 
-# Last incremental error detail (BIG-IP JSON message when available)
+# Reason for the last incremental record change failure (the BIG-IP JSON
+# message when available)
 INCREMENTAL_ERROR_MSG=""
 
-# Read-back after a reported passthrough failure - the device sometimes
-# applies the change while the transport reports an error. Retry is unsafe:
-# tmsh refuses add-existing and delete-missing
-# Args: partition, name, subpath, op (add|delete), verify_keys (newline list)
+# Confirm an incremental record change reached the device
+# The tmsh passthrough can report failure after TMOS has applied the change.
+# Reissuing the request is not safe - tmsh rejects an add for an existing key
+# and a delete for a missing one - so the record set is read back and the
+# device settles it
+# Args: partition, dg_name, subpath, op (add|delete), verify_keys (one per line)
 # Returns: 0 if every key is in the expected end state, 1 otherwise
 test_incremental_result() {
     local partition="$1"
@@ -1242,27 +1314,30 @@ test_incremental_result() {
     local present
     present=$(get_internal_datagroup_records_remote "${partition}" "${dg_name}" "${subpath}" | cut -d'|' -f1) || return 1
     
+    # The key list is fed by here-string, not a pipe: grep -q exits on the
+    # first match, and under pipefail a writer killed by the closed pipe
+    # (any list larger than the pipe buffer) reads as "no match"
     local key
     while IFS= read -r key; do
         [ -z "${key}" ] && continue
         if [ "${op}" == "add" ]; then
-            printf '%s\n' "${present}" | grep -Fxq -- "${key}" || return 1
+            grep -Fxq -- "${key}" <<< "${present}" || return 1
         else
-            printf '%s\n' "${present}" | grep -Fxq -- "${key}" && return 1
+            grep -Fxq -- "${key}" <<< "${present}" && return 1
         fi
     done <<< "${verify_keys}"
     return 0
 }
 
-# Add records to datagroup incrementally using ?options=records add
-# Args: partition, name, records (key|value lines), [subpath]
+# Add records to a datagroup incrementally using ?options=records add
 # Records are sent in chunks of TMSH_CHUNK_SIZE; the options string rides in
 # the request URI. tmsh resolves the target from the request body - subPath
 # goes in body and URI. A chunk that reports failure is read back before it
 # is counted as failed: the passthrough can report an error after TMOS has
 # applied the change, and a re-add of an existing key is rejected
-# Returns: 0 if every chunk was applied or confirmed present, 1 otherwise;
-# sets INCREMENTAL_ERROR_MSG on failure
+# Args: partition, dg_name, records (key|value lines), [subpath]
+# Sets: INCREMENTAL_ERROR_MSG on failure
+# Returns: 0 if every chunk was applied or confirmed present, 1 otherwise
 add_datagroup_records_incremental() {
     local partition="$1"
     local dg_name="$2"
@@ -1311,11 +1386,11 @@ add_datagroup_records_incremental() {
     return 0
 }
 
-# Delete records from datagroup incrementally using ?options=records delete
-# Args: partition, name, keys (one per line), [subpath]
+# Delete records from a datagroup incrementally using ?options=records delete
 # Chunked and read-back verified as in add_datagroup_records_incremental
-# Returns: 0 if every chunk was applied or confirmed absent, 1 otherwise;
-# sets INCREMENTAL_ERROR_MSG on failure
+# Args: partition, dg_name, keys (one per line), [subpath]
+# Sets: INCREMENTAL_ERROR_MSG on failure
+# Returns: 0 if every chunk was applied or confirmed absent, 1 otherwise
 delete_datagroup_records_incremental() {
     local partition="$1"
     local dg_name="$2"
@@ -1366,7 +1441,9 @@ delete_datagroup_records_incremental() {
 # URL Category Functions
 # -----------------------------------------------------------------------------
 
-# Check if URL category exists by name
+# Test whether a URL category exists
+# Args: cat_name
+# Returns: 0 if it exists, 1 if not
 url_category_exists_remote() {
     local cat_name="$1"
     
@@ -1376,7 +1453,9 @@ url_category_exists_remote() {
     return 1
 }
 
-# Get list of URL categories
+# List URL category names, sorted
+# Outputs: one name per line
+# Returns: 0 on success, 1 if the read failed
 get_url_category_list_remote() {
     if ! api_get "/mgmt/tm/sys/url-db/url-category"; then
         return 1
@@ -1385,7 +1464,11 @@ get_url_category_list_remote() {
     echo "${API_RESPONSE}" | jq -r '.items // [] | .[].name' 2>/dev/null | sort || true
 }
 
-# Get URL entries from a category
+# Get URL entries for a category
+# Args: cat_name
+# Outputs: one URL per line (nothing for an empty category)
+# Returns: 0 on success, 1 if the read failed - see
+# get_internal_datagroup_records_remote
 get_url_category_entries_remote() {
     local cat_name="$1"
     
@@ -1396,7 +1479,9 @@ get_url_category_entries_remote() {
     echo "${API_RESPONSE}" | jq -r '.urls // [] | .[].name' 2>/dev/null || true
 }
 
-# Get URL count from a category
+# Get the URL count for a category
+# Args: cat_name
+# Outputs: count
 get_url_category_count_remote() {
     local cat_name="$1"
     
@@ -1408,9 +1493,10 @@ get_url_category_count_remote() {
     echo "${API_RESPONSE}" | jq -r '.urls // [] | length' 2>/dev/null || echo "0"
 }
 
-# Create URL category
+# Create a URL category with initial URLs and default action
 # Args: cat_name, default_action, urls_json
-# urls_json format: [{"name":"https://example.com/","type":"exact-match"}]
+# urls_json: [{"name":"https://example.com/","type":"exact-match"}]
+# Returns: 0 on success, 1 on failure
 create_url_category_remote() {
     local cat_name="$1"
     local default_action="$2"
@@ -1432,7 +1518,7 @@ create_url_category_remote() {
 # Reduce the urls[] in API_RESPONSE to the two writable properties, for
 # PATCH-back. Echoing the server objects would carry any read-only property
 # a later TMOS adds to the collection and fail the whole request
-# Output: JSON array of {name, type}
+# Outputs: JSON array of {name, type}
 writable_urls_from_response() {
     echo "${API_RESPONSE}" | jq -c '
         .urls // [] | map({
@@ -1442,8 +1528,9 @@ writable_urls_from_response() {
     ' 2>/dev/null
 }
 
-# Add URLs to existing category
+# Merge new URLs into a category (GET, merge, PATCH full set)
 # Args: cat_name, urls_json
+# Returns: 0 on success, 1 on failure
 modify_url_category_add_remote() {
     local cat_name="$1"
     local urls_json="$2"
@@ -1469,8 +1556,9 @@ modify_url_category_add_remote() {
     return 1
 }
 
-# Delete URLs from existing category
-# Args: cat_name, urls_to_delete (newline separated)
+# Remove URLs from a category (GET, filter, PATCH full set)
+# Args: cat_name, urls_to_delete (one per line)
+# Returns: 0 on success, 1 on failure
 modify_url_category_delete_remote() {
     local cat_name="$1"
     local urls_to_delete="$2"
@@ -1503,8 +1591,9 @@ modify_url_category_delete_remote() {
     return 1
 }
 
-# Replace all URLs in category
+# Replace a category's full URL set via PATCH
 # Args: cat_name, urls_json
+# Returns: 0 on success, 1 on failure
 modify_url_category_replace_remote() {
     local cat_name="$1"
     local urls_json="$2"
@@ -1518,9 +1607,9 @@ modify_url_category_replace_remote() {
     return 1
 }
 
-# Build URL JSON array from domain/URL list
-# Input: domain/url lines via stdin
-# Output: JSON array with proper type field for REST API
+# Build REST URL objects from URL lines, setting glob-match for wildcards
+# Input: URLs, one per line on stdin
+# Outputs: JSON array of {name, type}
 build_urls_json_remote() {
     jq -Rn '
         [inputs | select(length > 0) | 
@@ -1536,8 +1625,8 @@ build_urls_json_remote() {
 # Delete Functions
 # -----------------------------------------------------------------------------
 
-# Delete datagroup
-# Args: partition, dg_name
+# Delete an internal datagroup
+# Args: partition, dg_name, [subpath]
 # Returns: 0 on success, 1 on failure
 delete_internal_datagroup_remote() {
     local partition="$1"
@@ -1550,7 +1639,7 @@ delete_internal_datagroup_remote() {
     return 1
 }
 
-# Delete URL category by name
+# Delete a URL category
 # Args: cat_name
 # Returns: 0 on success, 1 on failure
 delete_url_category_remote() {
@@ -1561,8 +1650,9 @@ delete_url_category_remote() {
     fi
     return 1
 }
-# Delete internal datagroup
-# Args: partition, dg_name
+
+# Wrapper for delete_internal_datagroup_remote
+# Args: partition, dg_name, [subpath]
 # Returns: 0 on success, 1 on failure
 delete_internal_datagroup() {
     local partition="$1"
@@ -1571,7 +1661,8 @@ delete_internal_datagroup() {
     delete_internal_datagroup_remote "${partition}" "${dg_name}" "${subpath}"
     return $?
 }
-# Delete URL category
+
+# Wrapper for delete_url_category_remote
 # Args: cat_name
 # Returns: 0 on success, 1 on failure
 delete_url_category() {
@@ -1584,15 +1675,13 @@ delete_url_category() {
 # FLEET MANAGEMENT FUNCTIONS
 # =============================================================================
 
-# Validate a fleet host entry (IPv4 address or FQDN)
-# Args: host string
-# Sets: FLEET_VALIDATE_ERROR with reason on failure
-# Returns: 0 if valid, 1 if invalid
+# Reason for the last validate_fleet_host rejection
 FLEET_VALIDATE_ERROR=""
 
 # Validate a fleet host entry (IPv4 address or FQDN)
 # Args: host
-# Returns: 0 if valid, 1 if invalid (reason in FLEET_VALIDATE_ERROR)
+# Sets: FLEET_VALIDATE_ERROR with the reason on failure
+# Returns: 0 if valid, 1 if invalid
 validate_fleet_host() {
     local host="$1"
     FLEET_VALIDATE_ERROR=""
@@ -1662,9 +1751,10 @@ validate_fleet_host() {
     return 0
 }
 
-# Load fleet configuration from file
-# Populates FLEET_SITES, FLEET_HOSTS, and FLEET_UNIQUE_SITES arrays
-# Returns: 0 on success, 1 if file not found or empty
+# Parse and validate fleet.conf; halts the tool on validation errors
+# Sets: FLEET_SITES, FLEET_HOSTS, FLEET_UNIQUE_SITES
+# Returns: 0 if at least one fleet host was loaded, 1 if the file is missing
+# or empty
 load_fleet_config() {
     FLEET_SITES=()
     FLEET_HOSTS=()
@@ -1775,9 +1865,9 @@ load_fleet_config() {
     return 0
 }
 
-# Get site ID for a host
+# Get the site ID for a fleet host
 # Args: hostname
-# Outputs: site_id or empty if not found
+# Outputs: site ID, or empty if the host is not in the fleet
 get_host_site() {
     local hostname="$1"
     
@@ -1790,7 +1880,7 @@ get_host_site() {
     return 1
 }
 
-# Count hosts in a site
+# Count fleet hosts in a site
 # Args: site_id
 # Outputs: count
 count_site_hosts() {
@@ -1806,8 +1896,8 @@ count_site_hosts() {
     echo "${count}"
 }
 
-# Check if fleet is configured and loaded
-# Returns: 0 if fleet available, 1 if not
+# Test whether a fleet is configured and loaded
+# Returns: 0 if it is, 1 if not
 fleet_available() {
     if [ ${#FLEET_HOSTS[@]} -gt 0 ]; then
         return 0
@@ -1815,7 +1905,7 @@ fleet_available() {
     return 1
 }
 
-# Ensure site log directory exists
+# Create the per-site backup subdirectory if needed
 # Args: site_id
 # Returns: 0 on success, 1 on failure
 ensure_site_log_dir() {
@@ -1828,9 +1918,9 @@ ensure_site_log_dir() {
     return 0
 }
 
-# Get the correct backup directory for the connected host
-# If the connected host is part of a fleet site, returns the site subfolder
-# Otherwise returns the root backup directory
+# Get the backup directory for the connected host
+# Fleet hosts use their site subfolder; non-fleet hosts use the root backup
+# directory
 # Outputs: backup directory path
 get_connected_backup_dir() {
     local host_site
@@ -1847,10 +1937,10 @@ get_connected_backup_dir() {
 # DEPLOY VALIDATION FUNCTIONS
 # =============================================================================
 
-# Test connectivity to a single host using current credentials
-# Args: hostname
-# Returns: 0 on success, 1 on failure
+# Test REST connectivity to a fleet host with the current credentials
+# Args: host
 # Sets: API_RESPONSE, API_HTTP_CODE
+# Returns: 0 on success, 1 on failure
 test_host_connection() {
     local host="$1"
     
@@ -1868,9 +1958,9 @@ test_host_connection() {
     return ${result}
 }
 
-# Verify internal datagroup exists on remote host
-# Args: hostname, partition, dg_name
-# Returns: 0 if exists, 1 if not
+# Test whether a datagroup exists on a fleet host
+# Args: host, partition, dg_name, [subpath]
+# Returns: 0 if it exists, 1 if not
 verify_remote_internal_datagroup() {
     local host="$1"
     local partition="$2"
@@ -1889,9 +1979,9 @@ verify_remote_internal_datagroup() {
     return ${result}
 }
 
-# Verify URL category exists on remote host
-# Args: hostname, cat_name
-# Returns: 0 if exists, 1 if not
+# Test whether a URL category exists on a fleet host
+# Args: host, cat_name
+# Returns: 0 if it exists, 1 if not
 verify_remote_url_category() {
     local host="$1"
     local cat_name="$2"
@@ -1908,10 +1998,10 @@ verify_remote_url_category() {
     return ${result}
 }
 
-# Create backup of internal datagroup on remote host
-# Args: hostname, partition, dg_name, site_id
-# Returns: 0 on success, 1 on failure
+# Back up a datagroup from a fleet host to its site subdirectory
+# Args: host, partition, dg_name, site_id, [subpath]
 # Outputs: backup file path
+# Returns: 0 on success, 1 on failure
 backup_remote_internal_datagroup() {
     local host="$1"
     local partition="$2"
@@ -1969,10 +2059,10 @@ backup_remote_internal_datagroup() {
     return 0
 }
 
-# Create backup of URL category on remote host
-# Args: hostname, cat_name, site_id
-# Returns: 0 on success, 1 on failure
+# Back up a URL category from a fleet host to its site subdirectory
+# Args: host, cat_name, site_id
 # Outputs: backup file path
+# Returns: 0 on success, 1 on failure
 backup_remote_url_category() {
     local host="$1"
     local cat_name="$2"
@@ -2023,12 +2113,12 @@ backup_remote_url_category() {
 # DEPLOY EXECUTION FUNCTIONS
 # =============================================================================
 
-# Global for tracking deploy error
+# Reason for the last per-host deploy failure
 DEPLOY_ERROR_MSG=""
 
-# Display deploy scope selection menu
-# Args: object_type ("datagroup" or "urlcat"), object_name
-# Outputs: selected hosts (newline-separated) or empty if cancelled
+# Prompt for deployment scope (all fleet, by site, or by host)
+# Args: object_type (datagroup, urlcat, or bootstrap), object_name, [include_self]
+# Outputs: selected hosts, one per line
 # Returns: 0 on selection, 1 on cancel
 select_deploy_scope() {
     local object_type="$1"
@@ -2126,12 +2216,14 @@ select_deploy_scope() {
     return 0
 }
 
-# Deploy internal datagroup to a single host
-# Args: hostname, partition, dg_name, dg_type, records_json, site_id, deploy_mode, additions_json, deletions_list
-# deploy_mode: "replace" (default) or "merge"
-# For merge: additions_json = JSON records to add, deletions_list = newline-separated keys to remove
-# Returns: 0 on success, 1 on failure
+# Apply datagroup changes to one fleet host and save its config
+# Args: host, partition, dg_name, dg_type, records_json, site_id, [deploy_mode],
+#       [additions_json], [deletions_list], [subpath]
+# deploy_mode: replace (default) or merge
+# merge: additions_json holds the records to add, deletions_list the keys to
+#        remove, one per line
 # Sets: DEPLOY_ERROR_MSG on failure
+# Returns: 0 on success, 1 on failure
 deploy_internal_datagroup_to_host() {
     local host="$1"
     local partition="$2"
@@ -2156,12 +2248,12 @@ deploy_internal_datagroup_to_host() {
         # The delta was computed against the source device. A target that
         # already holds one of the added keys rejects the whole records add
         # chunk, and the deletions would then run against a half-applied
-        # set. Read the target and reduce the delta to what it
-        # lacks or holds; a failed read aborts before anything is written
+        # set. Read the target and reduce the delta to what it lacks or
+        # holds; a failed read aborts before anything is written
         local target_keys
         if ! target_keys=$(get_internal_datagroup_records_remote "${partition}" "${dg_name}" "${subpath}" | cut -d'|' -f1); then
             echo -e "  ${RED}[FAIL]${NC}  ${WHITE}Reading target records${NC}"
-            DEPLOY_ERROR_MSG="Could not read target records (HTTP ${API_HTTP_CODE})"
+            DEPLOY_ERROR_MSG="Could not read target records"
             REMOTE_HOST="${orig_host}"
             return 1
         fi
@@ -2172,7 +2264,7 @@ deploy_internal_datagroup_to_host() {
             while IFS= read -r add_line; do
                 [ -z "${add_line}" ] && continue
                 add_key="${add_line%%|*}"
-                if printf '%s\n' "${target_keys}" | grep -Fxq -- "${add_key}"; then
+                if grep -Fxq -- "${add_key}" <<< "${target_keys}"; then
                     skipped_adds=$((skipped_adds + 1))
                     continue
                 fi
@@ -2193,7 +2285,7 @@ deploy_internal_datagroup_to_host() {
         local del_keys="" del_key
         while IFS= read -r del_key; do
             [ -z "${del_key}" ] && continue
-            if printf '%s\n' "${target_keys}" | grep -Fxq -- "${del_key}"; then
+            if grep -Fxq -- "${del_key}" <<< "${target_keys}"; then
                 del_keys+="${del_key}"$'\n'
             fi
         done <<< "${deletions_list}"
@@ -2235,12 +2327,14 @@ deploy_internal_datagroup_to_host() {
     return 0
 }
 
-# Deploy URL category to a single host
-# Args: hostname, cat_name, urls_json, site_id, deploy_mode, additions_json, deletions_list
-# deploy_mode: "replace" (default) or "merge"
-# For merge: additions_json = JSON URLs to add, deletions_list = newline-separated URLs to remove
-# Returns: 0 on success, 1 on failure
+# Apply URL category changes to one fleet host and save its config
+# Args: host, cat_name, urls_json, site_id, [deploy_mode], [additions_json],
+#       [deletions_list]
+# deploy_mode: replace (default) or merge
+# merge: additions_json holds the URLs to add, deletions_list the URLs to
+#        remove, one per line
 # Sets: DEPLOY_ERROR_MSG on failure
+# Returns: 0 on success, 1 on failure
 deploy_url_category_to_host() {
     local host="$1"
     local cat_name="$2"
@@ -2304,10 +2398,10 @@ deploy_url_category_to_host() {
     return 0
 }
 
-# Run pre-deploy validation for internal datagroup
-# Args: partition, dg_name, targets (newline-separated hosts)
+# Verify connectivity and datagroup existence on each deploy target
+# Args: partition, dg_name, targets (one host per line), [subpath]
+# Outputs: host|site|status|message lines on stdout; progress on stderr
 # Returns: 0 if all pass, 1 if any fail
-# Outputs: validation summary to stderr, results to stdout
 run_predeploy_validation_datagroup() {
     local partition="$1"
     local dg_name="$2"
@@ -2373,11 +2467,11 @@ run_predeploy_validation_datagroup() {
     return 1
 }
 
-# Run pre-deploy validation for URL category
-# Args: cat_name, targets (newline-separated hosts)
+# Verify connectivity and URL category existence on each deploy target
+# Args: cat_name, targets (one host per line)
+# Outputs: host|site|status|message lines on stdout; progress on stderr
 # Returns: 0 if all pass, 1 if any fail
-# Outputs: validation summary to stderr, results to stdout
-run_predeploy_validation_urlcat() {
+run_predeploy_validation_url_category() {
     local cat_name="$1"
     local targets="$2"
     
@@ -2440,8 +2534,11 @@ run_predeploy_validation_urlcat() {
     return 1
 }
 
-# Execute deploy for internal datagroup
-# Args: partition, dg_name, dg_type, records_json, validation_results (newline-separated), current_host, current_status, current_message, deploy_mode, additions_json, deletions_list
+# Execute a datagroup deploy across validated targets with per-host backup
+# and summary
+# Args: partition, dg_name, dg_type, records_json, validation_results (one
+#       per line), [current_host], [current_status], [current_message],
+#       [deploy_mode], [additions_json], [deletions_list], [subpath]
 # Returns: 0 on complete success, 1 on any failure
 execute_deploy_datagroup() {
     local partition="$1"
@@ -2582,10 +2679,13 @@ execute_deploy_datagroup() {
     return 1
 }
 
-# Execute deploy for URL category
-# Args: cat_name, urls_json, validation_results (newline-separated), current_host, current_status, current_message, deploy_mode, additions_json, deletions_list
+# Execute a URL category deploy across validated targets with per-host backup
+# and summary
+# Args: cat_name, urls_json, validation_results (one per line),
+#       [current_host], [current_status], [current_message], [deploy_mode],
+#       [additions_json], [deletions_list]
 # Returns: 0 on complete success, 1 on any failure
-execute_deploy_urlcat() {
+execute_deploy_url_category() {
     local cat_name="$1"
     local urls_json="$2"
     local validation_results="$3"
@@ -2725,7 +2825,7 @@ execute_deploy_urlcat() {
 # PARTITION FUNCTIONS
 # =============================================================================
 
-# Parse the PARTITIONS config string into PARTITION_LIST array
+# Parse the PARTITIONS config string into the PARTITION_LIST array
 parse_partitions() {
     PARTITION_LIST=()
     IFS=',' read -ra PARTITION_LIST <<< "${PARTITIONS}"
@@ -2735,8 +2835,10 @@ parse_partitions() {
         PARTITION_LIST[$i]=$(echo "${PARTITION_LIST[$i]}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     done
 }
-# Check if a partition exists
-# Uses session cache when available to avoid redundant API calls
+
+# Test whether a partition exists (session-cached)
+# Args: partition
+# Returns: 0 if it exists, 1 if not
 partition_exists() {
     local partition="$1"
     
@@ -2763,8 +2865,10 @@ partition_exists() {
     return ${result}
 }
 
-# Display partition selection menu and return selected partition
-# Returns partition name via echo, empty string if cancelled
+# Prompt the operator to select a configured partition
+# A single configured partition is selected without prompting
+# Args: [prompt]
+# Outputs: partition name, or empty if cancelled
 select_partition() {
     local prompt="${1:-Select partition}"
     
@@ -2802,14 +2906,16 @@ select_partition() {
 }
 
 # =============================================================================
-# PRE-FLIGHT CHECKS
+# CONNECTED-HOST WRAPPERS AND BACKUP FUNCTIONS
 # =============================================================================
 
-# Run pre-flight checks
+# Wrapper for preflight_checks_rest_api
 preflight_checks() {
     preflight_checks_rest_api
 }
-# Get list of all INTERNAL datagroups
+
+# List internal datagroups across all configured partitions
+# Outputs: partition|subpath|name|internal lines, sorted
 get_internal_datagroup_list() {
     for partition in "${PARTITION_LIST[@]}"; do
         if partition_exists "${partition}"; then
@@ -2817,12 +2923,14 @@ get_internal_datagroup_list() {
         fi
     done | sort -t'|' -k1,1 -k2,2 -k3,3
 }
-# Get list of all datagroups
-# Returns: partition|name|class lines
+
+# Wrapper for get_internal_datagroup_list
 get_all_datagroup_list() {
     get_internal_datagroup_list
 }
-# Check if datagroup exists in specified partition
+
+# Wrapper for internal_datagroup_exists_remote
+# Args: partition, dg_name, [subpath]
 internal_datagroup_exists() {
     local partition="$1"
     local dg_name="$2"
@@ -2830,8 +2938,10 @@ internal_datagroup_exists() {
     internal_datagroup_exists_remote "${partition}" "${dg_name}" "${subpath}"
     return $?
 }
-# Check if datagroup exists
-# Returns: "internal" or empty string
+
+# Get the class of a datagroup
+# Args: partition, dg_name, [subpath]
+# Outputs: "internal", or empty if the datagroup does not exist
 datagroup_exists() {
     local partition="$1"
     local dg_name="$2"
@@ -2844,30 +2954,36 @@ datagroup_exists() {
     echo ""
     return 0
 }
-# Get datagroup type (string, address, integer)
+
+# Wrapper for get_internal_datagroup_type_remote
+# Args: partition, dg_name, [subpath]
 get_internal_datagroup_type() {
     local partition="$1"
     local dg_name="$2"
     local subpath="${3:-}"
     get_internal_datagroup_type_remote "${partition}" "${dg_name}" "${subpath}"
 }
-# Get datagroup type
-# Args: partition, name, [subpath]
+
+# Wrapper for get_internal_datagroup_type
+# Args: partition, dg_name, [subpath]
 get_datagroup_type() {
     local partition="$1"
     local dg_name="$2"
     local subpath="${3:-}"
     get_internal_datagroup_type "${partition}" "${dg_name}" "${subpath}"
 }
-# Get datagroup records as "key|value" lines
+
+# Wrapper for get_internal_datagroup_records_remote
+# Args: partition, dg_name, [subpath]
 get_internal_datagroup_records() {
     local partition="$1"
     local dg_name="$2"
     local subpath="${3:-}"
     get_internal_datagroup_records_remote "${partition}" "${dg_name}" "${subpath}"
 }
-# Get datagroup records
-# Args: partition, name, [subpath]
+
+# Wrapper for get_internal_datagroup_records
+# Args: partition, dg_name, [subpath]
 get_datagroup_records() {
     local partition="$1"
     local dg_name="$2"
@@ -2875,7 +2991,9 @@ get_datagroup_records() {
     get_internal_datagroup_records "${partition}" "${dg_name}" "${subpath}"
 }
 
-# Backup a datagroup to CSV file
+# Back up a datagroup from the connected host
+# Args: partition, dg_name, [dg_class], [subpath]
+# Outputs: backup file path, or nothing on failure
 backup_datagroup() {
     local partition="$1"
     local dg_name="$2"
@@ -2931,7 +3049,9 @@ backup_datagroup() {
     echo "${backup_file}"
     return 0
 }
-# Backup a URL category to CSV file
+
+# Back up a URL category from the connected host
+# Args: cat_name
 # Outputs: backup file path, or nothing on failure
 backup_url_category() {
     local cat_name="$1"
@@ -2943,15 +3063,15 @@ backup_url_category() {
     local entries
     entries=$(echo "${API_RESPONSE}" | jq -r '.urls // [] | .[].name' 2>/dev/null || true)
 
-    local safe_name
-    safe_name=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    local safe_catname
+    safe_catname=$(echo "${cat_name}" | sed 's/[^a-zA-Z0-9_-]/_/g')
     local safe_hostname
     safe_hostname=$(echo "${REMOTE_HOST}" | sed 's/[^a-zA-Z0-9_-]/_/g')
     local backup_path
     backup_path=$(get_connected_backup_dir)
     local backup_ts
     backup_ts=$(date +%Y%m%d_%H%M%S)
-    local backup_file="${backup_path}/${safe_hostname}_urlcat_${safe_name}_${backup_ts}.csv"
+    local backup_file="${backup_path}/${safe_hostname}_urlcat_${safe_catname}_${backup_ts}.csv"
 
     {
         echo "# URL Category Backup: ${cat_name}"
@@ -2963,11 +3083,13 @@ backup_url_category() {
         fi
     } > "${backup_file}" 2>/dev/null || return 0
 
-    cleanup_old_backups "${safe_hostname}_urlcat_${safe_name}" "${backup_path}"
+    cleanup_old_backups "${safe_hostname}_urlcat_${safe_catname}" "${backup_path}"
     echo "${backup_file}"
     return 0
 }
-# Create datagroup
+
+# Wrapper for create_internal_datagroup_remote
+# Args: partition, dg_name, dg_type, [subpath]
 create_internal_datagroup() {
     local partition="$1"
     local dg_name="$2"
@@ -2976,7 +3098,8 @@ create_internal_datagroup() {
     create_internal_datagroup_remote "${partition}" "${dg_name}" "${dg_type}" "${subpath}"
     return $?
 }
-# Save system configuration
+
+# Wrapper for save_config_remote
 save_config() {
     save_config_remote
     return $?
@@ -2986,9 +3109,10 @@ save_config() {
 # CSV PARSING AND VALIDATION
 # =============================================================================
 
-# Parse CSV file and validate format
-# Returns: 0 if valid, 1 if invalid
-# Sets global arrays: CSV_KEYS, CSV_VALUES
+# Parse a CSV file into the CSV_KEYS and CSV_VALUES arrays
+# Args: filepath, format (keys_only or keys_values)
+# Sets: CSV_KEYS, CSV_VALUES
+# Returns: 0 if at least one entry was parsed, 1 otherwise
 parse_csv_file() {
     local filepath="$1"
     local format="$2"  # "keys_only" or "keys_values"
@@ -3061,7 +3185,9 @@ parse_csv_file() {
     return 0
 }
 
-# Analyze entries for type mismatches
+# Classify CSV keys against the expected datagroup type (advisory)
+# Args: expected_type, keys_name (name of the array holding the keys)
+# Outputs: mismatch_count|mismatch_type|mismatch_pct
 analyze_entry_types() {
     local expected_type="$1"
     local keys_name=$2
@@ -3123,8 +3249,8 @@ analyze_entry_types() {
 }
 
 # Validate address-type datagroup entries are valid IPv4 or IPv4/CIDR
-# Args: keys_array_name
-# Outputs: error_count|entry (reason)|... (pipe-delimited, max 5 examples)
+# Args: keys_name (name of the array holding the keys)
+# Outputs: error_count|entry (reason)|... (max 5 examples)
 validate_address_entries() {
     local keys_name=$1
     eval "local total=\${#${keys_name}[@]}"
@@ -3178,8 +3304,8 @@ validate_address_entries() {
 }
 
 # Validate integer-type datagroup entries are valid integers
-# Args: keys_array_name
-# Outputs: error_count|entry1|entry2|... (pipe-delimited, max 5 examples)
+# Args: keys_name (name of the array holding the keys)
+# Outputs: error_count|entry1|entry2|... (max 5 examples)
 validate_integer_entries() {
     local keys_name=$1
     eval "local total=\${#${keys_name}[@]}"
@@ -3202,9 +3328,9 @@ validate_integer_entries() {
 }
 
 # Validate URL category CSV entries are valid domains
-# Check raw entries before format conversion
-# Args: keys_array_name
-# Outputs: error_count|entry (reason)|... (pipe-delimited, max 5 examples)
+# Raw entries are checked before format conversion
+# Args: keys_name (name of the array holding the keys)
+# Outputs: error_count|entry (reason)|... (max 5 examples)
 validate_url_csv_entries() {
     local keys_name=$1
     eval "local total=\${#${keys_name}[@]}"
@@ -3261,7 +3387,8 @@ validate_url_csv_entries() {
     echo "${error_count}${examples}"
 }
 
-# Preview CSV file contents
+# Display the first PREVIEW_LINES data rows of a CSV file
+# Args: filepath
 preview_csv_file() {
     local filepath="$1"
     local total_lines
@@ -3295,12 +3422,12 @@ preview_csv_file() {
 # MENU FUNCTIONS
 # =============================================================================
 
-# Main menu display
+# Render the main menu
 show_main_menu() {
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.8                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.9                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╠════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${CYAN}${NC}  ${WHITE}Connected: ${YELLOW}${REMOTE_HOSTNAME}${NC}"
@@ -3321,7 +3448,7 @@ show_main_menu() {
     echo ""
 }
 
-# Option 1: Create empty Datagroup or URL Category
+# Option 1: Create an empty datagroup or URL category
 menu_create_empty() {
     log_section "Create Datagroup or URL Category"
     
@@ -3344,7 +3471,7 @@ menu_create_empty() {
     esac
 }
 
-# Option 1a: Create empty datagroup
+# Create an empty datagroup interactively
 menu_create_empty_datagroup() {
     log_section "Create Empty Datagroup"
     
@@ -3430,7 +3557,7 @@ menu_create_empty_datagroup() {
     press_enter_to_continue
 }
 
-# Option 1b: Create empty URL category
+# Create an empty URL category interactively
 menu_create_empty_url_category() {
     log_section "Create Empty URL Category"
     
@@ -3518,7 +3645,7 @@ menu_create_empty_url_category() {
     press_enter_to_continue
 }
 
-# Option 2: Create/Restore from CSV (Datagroup or URL Category)
+# Option 2: Create or update a datagroup or URL category from CSV
 menu_create_from_csv() {
     log_section "Create/Restore from CSV"
     
@@ -3544,7 +3671,7 @@ menu_create_from_csv() {
     esac
 }
 
-# Option 2a: Create/Restore datagroup from CSV
+# Create or update a datagroup from a CSV file
 menu_create_datagroup() {
     log_section "Create/Restore Datagroup from CSV"
     
@@ -3596,9 +3723,10 @@ menu_create_datagroup() {
         dg_class="${selection_class}"
         dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}") || dg_type=""
         
+        # The type drives entry validation, so a failed type read aborts too
         local current_count
-        if ! current_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" 2>/dev/null | wc -l); then
-            log_error "Could not read datagroup '${dg_name}'. HTTP ${API_HTTP_CODE}. No changes have been made."
+        if [ -z "${dg_type}" ] || ! current_count=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}" 2>/dev/null | wc -l); then
+            log_error "Could not read datagroup '${dg_name}'. No changes have been made."
             log_info "For large datagroups, raise API_REQUEST_TIMEOUT and retry."
             press_enter_to_continue
             return
@@ -3668,7 +3796,7 @@ menu_create_datagroup() {
         esac
     fi
     
-    # Get CSV file path (loop until valid file or user cancels)
+    # Get CSV file path (loop until a valid file or the operator cancels)
     local csv_path=""
     while true; do
         echo ""
@@ -3969,8 +4097,8 @@ menu_create_datagroup() {
     press_enter_to_continue
 }
 
-# Option 3: Delete Datagroup or URL Category
-menu_delete_datagroup() {
+# Option 3: Delete a datagroup or URL category
+menu_delete() {
     log_section "Delete Datagroup or URL Category"
     
     echo ""
@@ -3982,7 +4110,7 @@ menu_delete_datagroup() {
     read -erp "  Select [0-2]: " delete_choice
     
     case "${delete_choice}" in
-        1) menu_delete_datagroup_only ;;
+        1) menu_delete_datagroup ;;
         2) menu_delete_url_category ;;
         0|"")
             log_info "Cancelled."
@@ -3995,8 +4123,8 @@ menu_delete_datagroup() {
     esac
 }
 
-# Option 3a: Delete datagroup
-menu_delete_datagroup_only() {
+# Delete a datagroup with backup and typed confirmation
+menu_delete_datagroup() {
     log_section "Delete Datagroup"
     
     # Select partition
@@ -4074,8 +4202,10 @@ menu_delete_datagroup_only() {
     
     # Confirm deletion
     echo ""
-    echo -ne "  ${RED}Type DELETE to confirm:${NC} "
-    read -er confirm
+    # Color codes are bracketed with \001/\002 so readline excludes them
+    # from the prompt width; a prompt printed by a separate echo is unknown
+    # to readline and is overwritten when the line is redrawn
+    read -erp "$(printf '  \001%b\002Type DELETE to confirm:\001%b\002 ' "${RED}" "${NC}")" confirm
     if [ "${confirm}" != "DELETE" ]; then
         log_info "Aborted by user."
         press_enter_to_continue
@@ -4096,7 +4226,7 @@ menu_delete_datagroup_only() {
     press_enter_to_continue
 }
 
-# Option 3b: Delete URL Category
+# Delete a URL category with backup and typed confirmation
 menu_delete_url_category() {
     log_section "Delete URL Category"
     
@@ -4216,8 +4346,10 @@ menu_delete_url_category() {
     
     # Confirm deletion
     echo ""
-    echo -ne "  ${RED}Type DELETE to confirm:${NC} "
-    read -er confirm
+    # Color codes are bracketed with \001/\002 so readline excludes them
+    # from the prompt width; a prompt printed by a separate echo is unknown
+    # to readline and is overwritten when the line is redrawn
+    read -erp "$(printf '  \001%b\002Type DELETE to confirm:\001%b\002 ' "${RED}" "${NC}")" confirm
     if [ "${confirm}" != "DELETE" ]; then
         log_info "Aborted by user."
         press_enter_to_continue
@@ -4239,7 +4371,7 @@ menu_delete_url_category() {
     press_enter_to_continue
 }
 
-# Option 4: Export to CSV (Datagroup or URL Category)
+# Option 4: Export a datagroup or URL category to CSV
 menu_export_to_csv() {
     log_section "Export to CSV"
     
@@ -4265,7 +4397,7 @@ menu_export_to_csv() {
     esac
 }
 
-# Option 4a: Export datagroup to CSV
+# Export a datagroup to CSV
 menu_export_datagroup() {
     log_section "Export Datagroup to CSV"
     
@@ -4353,7 +4485,7 @@ menu_export_datagroup() {
     press_enter_to_continue
 }
 
-# Option 4b: Export URL category to CSV
+# Export a URL category to CSV
 menu_export_url_category() {
     log_section "Export URL Category to CSV"
     
@@ -4456,11 +4588,11 @@ menu_export_url_category() {
     log_info "URLs in category: ${url_count}"
     
     # Default export path
-    local safe_name
-    safe_name=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+    local safe_catname
+    safe_catname=$(echo "${selected_category}" | sed 's/[^a-zA-Z0-9_-]/_/g')
     local export_ts
     export_ts=$(date +"%Y%m%d_%H%M%S")
-    local default_path="${BACKUP_DIR}/urlcat_${safe_name}_${export_ts}.csv"
+    local default_path="${BACKUP_DIR}/urlcat_${safe_catname}_${export_ts}.csv"
     echo ""
     read -erp "  Export path [${default_path}]: " export_path
     export_path="${export_path:-${default_path}}"
@@ -4492,11 +4624,11 @@ menu_export_url_category() {
     
     # Export
     log_step "Exporting URL category..."
-    # Verified read - an unchecked failure here tripped errexit and exited
-    # the tool mid-export; the count check above ran on a separate request
+    # Verified read - under errexit an unchecked failure here would exit
+    # the tool, and the count check above runs on a separate request
     local url_entries
     if ! url_entries=$(get_url_category_entries "${selected_category}"); then
-        log_error "Could not read URL category. HTTP ${API_HTTP_CODE}. Nothing exported."
+        log_error "Could not read URL category. Nothing exported."
         press_enter_to_continue
         return
     fi
@@ -4535,8 +4667,8 @@ menu_export_url_category() {
     
     press_enter_to_continue
 }
-# Check if URL database is available
-# Uses session cache when available to avoid redundant API calls
+
+# Test whether the URL category database is provisioned (session-cached)
 # Returns: 0 if URL categories are accessible, 1 if not
 url_category_db_available() {
     # Check session cache first
@@ -4562,31 +4694,37 @@ url_category_db_available() {
     fi
     return ${result}
 }
-# Check if URL category exists
+
+# Wrapper for url_category_exists_remote
+# Args: cat_name
 url_category_exists() {
     local cat_name="$1"
     url_category_exists_remote "${cat_name}"
     return $?
 }
-# Get list of custom URL categories
+
+# Wrapper for get_url_category_list_remote
 get_url_category_list() {
     get_url_category_list_remote
 }
 
-# Get URL entries from a URL category
+# Wrapper for get_url_category_entries_remote
+# Args: cat_name
 get_url_category_entries() {
-    local category="$1"
-    get_url_category_entries_remote "${category}"
+    local cat_name="$1"
+    get_url_category_entries_remote "${cat_name}"
 }
-# Get URL count from a URL category
+
+# Wrapper for get_url_category_count_remote
+# Args: cat_name
 get_url_category_count() {
     local cat_name="$1"
     get_url_category_count_remote "${cat_name}"
 }
 
-# Format domain/URL for URL category (F5 URL category format)
-# Input: domain like "example.com" or ".example.com" or "www.example.com"
-# Output: https://example.com/ or https://*.example.com/
+# Normalize a domain to BIG-IP URL category format
+# Args: domain (e.g., example.com, .example.com, www.example.com)
+# Outputs: https://example.com/ or https://*.example.com/
 format_domain_for_url_category() {
     local domain="$1"
     
@@ -4605,7 +4743,8 @@ format_domain_for_url_category() {
     # Add https:// prefix and trailing /
     echo "https://${domain}/"
 }
-# Option 2b: Create URL Category from CSV
+
+# Create or update a URL category from a CSV file
 menu_create_url_category() {
     log_section "Create URL Category from CSV"
     
@@ -4949,15 +5088,15 @@ menu_create_url_category() {
 }
 
 # =============================================================================
-# EDIT DATAGROUP/URL CATEGORY FUNCTIONS
+# OPTION 5: INTERACTIVE EDITOR
 # =============================================================================
 
 # Default page size for browsing
 EDIT_PAGE_SIZE=20
 
-# Display paginated entries with optional filtering
-# Args: entries (newline-separated), page_num, page_size, filter_pattern, sort_order
-# Returns via echo: displayed entries count
+# Display one page of entries with optional filter and sort
+# Args: entries (one per line), [page_num], [page_size], [filter], [sort_order]
+# Outputs: total_count|page_num|total_pages on stdout; the page on stderr
 display_entries_page() {
     local entries="$1"
     local page_num="${2:-1}"
@@ -5049,14 +5188,11 @@ display_entries_page() {
     echo "${total_count}|${page_num}|${total_pages}"
 }
 
-# =============================================================================
-# UNIFIED EDITOR
-# =============================================================================
-
-# Unified editor for datagroups and URL categories
-# All edits are staged in memory and applied atomically on user request
-# Args for datagroup:  "datagroup" partition dg_name dg_class [dg_subpath]
-# Args for URL cat:    "urlcat" cat_name
+# Interactive editor: stage changes, apply to device, deploy to fleet
+# All edits are staged in memory and written only when the operator applies
+# them
+# Args (datagroup):    "datagroup", partition, dg_name, dg_class, [dg_subpath]
+# Args (URL category): "urlcat", cat_name
 editor_submenu() {
     local edit_type="$1"
     
@@ -5072,6 +5208,12 @@ editor_submenu() {
         dg_class="$4"
         dg_subpath="${5:-}"
         dg_type=$(get_datagroup_type "${partition}" "${dg_name}" "${dg_subpath}") || dg_type=""
+        # The type drives key validation in the add and edit commands
+        if [ -z "${dg_type}" ]; then
+            log_error "Could not read datagroup type. Editor not opened."
+            press_enter_to_continue
+            return
+        fi
         display_title="DGCat-Admin Editor"
         display_info1="Path:  $(get_datagroup_display_path "${partition}" "${dg_name}" "${dg_subpath}")"
         display_info2="Class: ${dg_class}  |  Type: ${dg_type}"
@@ -5100,7 +5242,7 @@ editor_submenu() {
     local loaded_entries
     if [ "${edit_type}" == "datagroup" ]; then
         if ! loaded_entries=$(get_datagroup_records "${partition}" "${dg_name}" "${dg_subpath}"); then
-            log_error "Could not read datagroup records. HTTP ${API_HTTP_CODE}. Editor not opened."
+            log_error "Could not read datagroup records. Editor not opened."
             log_info "For large datagroups, raise API_REQUEST_TIMEOUT and retry."
             press_enter_to_continue
             return
@@ -5114,7 +5256,7 @@ editor_submenu() {
         done <<< "${loaded_entries}"
     else
         if ! loaded_entries=$(get_url_category_entries "${cat_name}"); then
-            log_error "Could not read URL category. HTTP ${API_HTTP_CODE}. Editor not opened."
+            log_error "Could not read URL category. Editor not opened."
             log_info "For large categories, raise API_REQUEST_TIMEOUT and retry."
             press_enter_to_continue
             return
@@ -5151,7 +5293,7 @@ editor_submenu() {
     local current_filter=""
     local current_sort="original"
     
-    # Function to check if there are pending changes
+    # Test whether there are pending changes
     has_pending_changes() {
         # Quick length check first
         if [ ${#working_keys[@]} -ne ${#original_keys[@]} ]; then
@@ -5209,7 +5351,7 @@ editor_submenu() {
         return 0
     }
     
-    # Function to build entries string from working arrays for display
+    # Build the entries string from the working arrays for display
     build_entries_display() {
         local result=""
         local i
@@ -5609,7 +5751,7 @@ editor_submenu() {
                     continue
                 fi
                 
-                # Apply same filter/sort as display to get the view the user sees
+                # Apply the display filter and sort to get the view the operator sees
                 local view_entries="${entries}"
                 if [ -n "${current_filter}" ]; then
                     view_entries=$(echo "${entries}" | grep -i "${current_filter}" 2>/dev/null || true)
@@ -6330,7 +6472,7 @@ editor_submenu() {
                 if [ "${edit_type}" == "datagroup" ]; then
                     validation_results=$(run_predeploy_validation_datagroup "${partition}" "${dg_name}" "${deploy_targets}" "${dg_subpath}") || true
                 else
-                    validation_results=$(run_predeploy_validation_urlcat "${cat_name}" "${deploy_targets}") || true
+                    validation_results=$(run_predeploy_validation_url_category "${cat_name}" "${deploy_targets}") || true
                 fi
                 
                 # Count ready fleet hosts
@@ -6343,8 +6485,8 @@ editor_submenu() {
                     continue
                 fi
                 
-                # User decision point - no changes have been made anywhere yet
-                # Only prompt if some hosts failed - user already typed DEPLOY
+                # Operator decision point - no changes have been made anywhere yet
+                # Only prompt if some hosts failed - the operator already typed DEPLOY
                 if [ "${ready_count}" -lt "${target_count}" ]; then
                     echo ""
                     local deploy_prompt=""
@@ -6575,7 +6717,7 @@ editor_submenu() {
                         deploy_urls_json="[]"
                     fi
                     
-                    execute_deploy_urlcat "${cat_name}" "${deploy_urls_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
+                    execute_deploy_url_category "${cat_name}" "${deploy_urls_json}" "${validation_results}" "${REMOTE_HOST}" "${current_device_status}" "${current_device_message}" "${deploy_mode}" "${deploy_additions_json}" "${deploy_deletions_list}" || true
                 fi
                 
                 press_enter_to_continue
@@ -6601,6 +6743,7 @@ editor_submenu() {
 # =============================================================================
 # OPTION 6: FLEET LOOKING GLASS
 # =============================================================================
+
 # Option 6: Search and compare an object's entries across the fleet (read-only)
 menu_fleet_looking_glass() {
     log_section "DGCat-Admin Search"
@@ -6784,10 +6927,10 @@ menu_fleet_looking_glass() {
             continue
         fi
         
-        # Pull entries. One verified read per host: a separate existence
-        # GET followed by an unchecked data read in a process substitution
-        # let a failed data read count the host as pulled with zero entries,
-        # which marked every entry missing there
+        # Pull entries. One verified read per host settles both existence
+        # and content. A failed read excludes the host from the comparison;
+        # counting it as pulled with zero entries would mark every entry
+        # missing there
         local entries=""
         local count=0
         
@@ -7072,7 +7215,11 @@ menu_fleet_looking_glass() {
     done
 }
 
-# Option 7: Backup
+# =============================================================================
+# OPTION 7: FLEET BACKUP
+# =============================================================================
+
+# Option 7: Back up an object from selected fleet hosts
 menu_fleet_backup() {
     log_section "Backup"
     
@@ -7271,7 +7418,11 @@ menu_fleet_backup() {
     press_enter_to_continue
 }
 
-# Option 5: Edit a Datagroup or URL Category
+# =============================================================================
+# OPTION 5: EDIT MENU
+# =============================================================================
+
+# Option 5: Select an object and open the interactive editor
 menu_edit_datagroup_or_category() {
     log_section "Edit a Datagroup or URL Category"
     
@@ -7420,7 +7571,7 @@ menu_edit_datagroup_or_category() {
 # OPTION 8: BOOTSTRAP
 # =============================================================================
 
-# Option 8: Bootstrap menu - create or import a fleet object-provisioning config
+# Option 8: Create or import a fleet object-provisioning config
 menu_bootstrap() {
     log_section "Bootstrap"
     
@@ -7742,8 +7893,9 @@ menu_bootstrap_import() {
     press_enter_to_continue
 }
 
-# Create bootstrap objects on current host
-# Args: partition, dg_names_ref, dg_types_ref, cat_names_ref, cat_actions_ref
+# Create the validated bootstrap objects on the connected host
+# Args: partition, then the names of the arrays holding the datagroup names,
+#       datagroup types, category names, and category actions
 bootstrap_create_objects() {
     local partition="$1"
     local _dg_names_ref=$2
@@ -7812,13 +7964,17 @@ bootstrap_create_objects() {
     return ${failed}
 }
 
+# =============================================================================
+# MAIN
+# =============================================================================
+
 # Entry point: banner, pre-flight checks, and the session/menu loops
 main() {
     # Clear screen and show banner
     clear
     echo ""
     echo -e "  ${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.8                        ${NC}${CYAN}║${NC}"
+    echo -e "  ${CYAN}║${NC}${WHITE}                    DGCAT-Admin v5.9                        ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}║${NC}${WHITE}               F5 BIG-IP Administration Tool                ${NC}${CYAN}║${NC}"
     echo -e "  ${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -7848,7 +8004,7 @@ main() {
     # Brief pause after preflight checks
     sleep 2
     
-    # Session loop — option 0 returns here for new connection
+    # Session loop - option 0 returns here for new connection
     while true; do
         # Main menu loop
         while true; do
@@ -7859,7 +8015,7 @@ main() {
             case "${choice}" in
                 1) menu_create_empty ;;
                 2) menu_create_from_csv ;;
-                3) menu_delete_datagroup ;;
+                3) menu_delete ;;
                 4) menu_export_to_csv ;;
                 5) menu_edit_datagroup_or_category ;;
                 6) menu_fleet_looking_glass ;;
@@ -7934,7 +8090,7 @@ main() {
     done
 }
 
-# Global arrays for CSV parsing
+# CSV parse results (parallel arrays - same index = same entry)
 declare -a CSV_KEYS
 declare -a CSV_VALUES
 

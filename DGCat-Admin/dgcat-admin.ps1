@@ -1,12 +1,12 @@
 ﻿# =============================================================================
 # DGCat-Admin - F5 BIG-IP Datagroup and URL Category Administration Tool
 # =============================================================================
-# Version: 5.8
+# Version: 5.9
 # Author: Eric Haupt
 # Released under the MIT License. See LICENSE file for details.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
 #
-# Requirements: PowerShell 5.1+, BIG-IP TMOS 17.x or higher
+# Requirements: Windows PowerShell 5.1 (Desktop edition), BIG-IP TMOS 17.x or higher
 #
 # PURPOSE:
 #   Menu-driven tool for managing LTM datagroups and URL categories used in
@@ -33,9 +33,9 @@ $script:BACKUPS_ENABLED = 0
 # Session logging (set to 1 to enable log file creation)
 $script:LOGGING_ENABLED = 0
 
-# API tracing (set to 1 to echo every request and response)
+# API tracing (set to 1 to trace every request and response)
 # Traces method, URI, decoded tmsh options, request body, HTTP status,
-# WebException status and the BIG-IP error body. Credentials are never traced.
+# WebException status, and the BIG-IP error body. Credentials are never traced.
 # Verbose - enable only while diagnosing an API failure
 $script:DEBUG_ENABLED = 0
 
@@ -57,12 +57,16 @@ $script:CONNECTION_DROP_STATUSES = @(
 $script:PARTITIONS = @("Common")
 
 # Protected system datagroups - DO NOT MODIFY
+# Pre-configured BIG-IP datagroups that must not be modified or deleted;
+# changing them can produce adverse system results
 $script:PROTECTED_DATAGROUPS = @("private_net", "images", "aol", "sys_APM_MS_Office_OFBA_DG")
 
 # Protected TMOS folders - datagroups inside these are owned by an external
 # declaration engine (AS3, Service Discovery) and are rewritten on its next
-# push - edits made here are silently discarded. Matched on the first folder
-# segment only; AS3 nests its tenants below its own folder
+# push - edits made here are silently discarded. They are shown in listings
+# but blocked from create, edit, and delete. Matched on the first folder
+# segment only; AS3 nests its tenants below its own folder. Remove entries
+# to disable the guard
 $script:PROTECTED_FOLDERS = @("appsvcs", "ServiceDiscovery")
 
 # tmsh passthrough chunk size (records per request)
@@ -90,9 +94,14 @@ $script:AuthHeader = ""
 # FLEET CONFIGURATION
 # =============================================================================
 
+# Fleet configuration file (set at startup)
 $script:FLEET_CONFIG_FILE = ""
+
+# Runtime fleet arrays (parallel arrays - same index = same device)
 $script:FleetSites = @()
 $script:FleetHosts = @()
+
+# Unique site IDs, for the scope menus
 $script:FleetUniqueSites = @()
 
 # =============================================================================
@@ -113,6 +122,8 @@ $script:LogFile = ""
 # SSL CERTIFICATE BYPASS (required for self-signed BIG-IP management certs)
 # =============================================================================
 
+# Trust self-signed management certificates and require TLS 1.2
+# Exits when run outside Windows PowerShell 5.1
 function Initialize-SslBypass {
     # ServicePointManager.CertificatePolicy is ignored by PowerShell 7+ (Core),
     # so the bypass would silently not apply and every connection would fail
@@ -148,6 +159,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 # LOGGING FUNCTIONS
 # =============================================================================
 
+# Write a line to the console and, when logging is enabled, the session log
 function Write-Log {
     param([string]$Message)
     Write-Host $Message
@@ -156,6 +168,7 @@ function Write-Log {
     }
 }
 
+# Write a section banner
 function Write-LogSection {
     param([string]$Title)
     Write-Log ""
@@ -171,6 +184,7 @@ function Write-LogSection {
     }
 }
 
+# Status lines: [INFO], [ OK ], [WARN], [FAIL], [....]
 function Write-LogInfo {
     param([string]$Message)
     Write-Host "  [INFO]  " -NoNewline -ForegroundColor White
@@ -218,6 +232,7 @@ function Write-LogDebug {
 # UTILITY FUNCTIONS
 # =============================================================================
 
+# Pause until the operator presses Enter
 function Wait-EnterKey {
     Write-Host ""
     Read-Host "  Press Enter to continue"
@@ -623,21 +638,25 @@ function Invoke-F5Api {
     }
 }
 
+# GET wrapper for Invoke-F5Api
 function Invoke-F5Get {
     param([string]$Endpoint)
     return Invoke-F5Api -Method "GET" -Endpoint $Endpoint
 }
 
+# POST wrapper for Invoke-F5Api
 function Invoke-F5Post {
     param([string]$Endpoint, [object]$Body)
     return Invoke-F5Api -Method "POST" -Endpoint $Endpoint -Body $Body
 }
 
+# PATCH wrapper for Invoke-F5Api
 function Invoke-F5Patch {
     param([string]$Endpoint, [object]$Body)
     return Invoke-F5Api -Method "PATCH" -Endpoint $Endpoint -Body $Body
 }
 
+# DELETE wrapper for Invoke-F5Api
 function Invoke-F5Delete {
     param([string]$Endpoint)
     return Invoke-F5Api -Method "DELETE" -Endpoint $Endpoint
@@ -838,7 +857,8 @@ function Test-DatagroupExistsRemote {
     return $result.Success
 }
 
-# Get a datagroup's type (string, address, or integer)
+# Get a datagroup's type as the API reports it (string, ip, or integer)
+# Returns: type, or empty string if the read failed
 function Get-DatagroupTypeRemote {
     param([string]$Partition, [string]$Name, [string]$SubPath = "")
     $objectPath = Get-DatagroupPath -Partition $Partition -Name $Name -SubPath $SubPath
@@ -958,7 +978,7 @@ function ConvertTo-TmshRecordsDelete {
 # read-back subsequently showed the change had been applied
 $script:IncrementalErrorMsg = ""
 
-# Confirm an incremental record change actually landed on the device
+# Confirm an incremental record change reached the device
 # The tmsh passthrough can report failure after TMOS has already applied the
 # modification. Reissuing the request is not safe here the way it is for a
 # config save - tmsh rejects an add for an existing key and a delete for a
@@ -1591,6 +1611,7 @@ function Import-FleetConfig {
     return $script:FleetHosts.Count -gt 0
 }
 
+# Test whether a fleet is configured and loaded
 function Test-FleetAvailable {
     return $script:FleetHosts.Count -gt 0
 }
@@ -1607,9 +1628,9 @@ function Get-SiteHosts {
 
 # Get the site ID for a fleet host (empty string if not in fleet)
 function Get-HostSite {
-    param([string]$Hostname)
+    param([string]$HostName)
     for ($i = 0; $i -lt $script:FleetHosts.Count; $i++) {
-        if ($script:FleetHosts[$i] -eq $Hostname) { return $script:FleetSites[$i] }
+        if ($script:FleetHosts[$i] -eq $HostName) { return $script:FleetSites[$i] }
     }
     return ""
 }
@@ -1634,7 +1655,7 @@ function Confirm-SiteLogDir {
 # Get the correct backup directory for the connected host
 # Fleet hosts use site subfolder, non-fleet hosts use root backup directory
 function Get-ConnectedBackupDir {
-    $hostSite = Get-HostSite -Hostname $script:RemoteHost
+    $hostSite = Get-HostSite -HostName $script:RemoteHost
     if ($hostSite) {
         Confirm-SiteLogDir -SiteId $hostSite | Out-Null
         return Join-Path $script:BACKUP_DIR $hostSite
@@ -1699,13 +1720,13 @@ function Backup-RemoteDatagroup {
     }
 
     Confirm-SiteLogDir -SiteId $SiteId | Out-Null
-    $safeHost = $HostName -replace '[^a-zA-Z0-9_-]', '_'
+    $safeHostname = $HostName -replace '[^a-zA-Z0-9_-]', '_'
     $safeScope = Get-DatagroupScopeToken -Partition $Partition -SubPath $SubPath
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
     # Same name shape as connected-host backups (including the internal class
     # segment) so both paths share one rotation pool per host and object
     $backupDir = Join-Path $script:BACKUP_DIR $SiteId
-    $backupFile = Join-Path $backupDir "${safeHost}_${safeScope}_${Name}_internal_${ts}.csv"
+    $backupFile = Join-Path $backupDir "${safeHostname}_${safeScope}_${Name}_internal_${ts}.csv"
 
     $lines = @(
         "# Datagroup Backup: $(Get-DatagroupDisplayPath -Partition $Partition -Name $Name -SubPath $SubPath)",
@@ -1721,7 +1742,7 @@ function Backup-RemoteDatagroup {
 
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
-        Remove-OldBackups -Pattern "${safeHost}_${safeScope}_${Name}_internal" -Directory $backupDir
+        Remove-OldBackups -Pattern "${safeHostname}_${safeScope}_${Name}_internal" -Directory $backupDir
         return $backupFile
     } catch {
         return ""
@@ -1746,11 +1767,11 @@ function Backup-RemoteUrlCategory {
     }
 
     Confirm-SiteLogDir -SiteId $SiteId | Out-Null
-    $safeHost = $HostName -replace '[^a-zA-Z0-9_-]', '_'
-    $safeCat = $CatName -replace '[^a-zA-Z0-9_-]', '_'
+    $safeHostname = $HostName -replace '[^a-zA-Z0-9_-]', '_'
+    $safeCatName = $CatName -replace '[^a-zA-Z0-9_-]', '_'
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
     $backupDir = Join-Path $script:BACKUP_DIR $SiteId
-    $backupFile = Join-Path $backupDir "${safeHost}_urlcat_${safeCat}_${ts}.csv"
+    $backupFile = Join-Path $backupDir "${safeHostname}_urlcat_${safeCatName}_${ts}.csv"
 
     $lines = @(
         "# URL Category Backup: $CatName",
@@ -1764,7 +1785,7 @@ function Backup-RemoteUrlCategory {
 
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
-        Remove-OldBackups -Pattern "${safeHost}_urlcat_${safeCat}" -Directory $backupDir
+        Remove-OldBackups -Pattern "${safeHostname}_urlcat_${safeCatName}" -Directory $backupDir
         return $backupFile
     } catch {
         return ""
@@ -1882,8 +1903,8 @@ function Deploy-DatagroupToHost {
         # The delta was computed against the source device. A target that
         # already holds one of the added keys rejects the whole records add
         # chunk, and the deletions would then run against a half-applied
-        # set. Read the target and reduce the delta to what it
-        # lacks or holds; a failed read aborts before anything is written
+        # set. Read the target and reduce the delta to what it lacks or
+        # holds; a failed read aborts before anything is written
         $targetRecords = Get-DatagroupRecordsRemote -Partition $Partition -Name $DgName -SubPath $SubPath
         if ($null -eq $targetRecords) {
             Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Reading target records" -ForegroundColor White
@@ -1913,7 +1934,7 @@ function Deploy-DatagroupToHost {
         }
         
         # Deletions second
-        $delKeys = @($DeletionsList | Where-Object { $targetKeys.ContainsKey($_) })
+        $delKeys = @($DeletionsList | Where-Object { $_ -and $targetKeys.ContainsKey($_) })
         if ($delKeys.Count -gt 0) {
             if (-not (Remove-DatagroupRecordsIncremental -Partition $Partition -Name $DgName -Keys $delKeys -SubPath $SubPath)) {
                 Write-Host "  [FAIL]" -NoNewline -ForegroundColor Red; Write-Host "  Deleting records" -ForegroundColor White
@@ -2019,7 +2040,7 @@ function Invoke-PreDeployValidation {
     
     foreach ($hostName in $Targets) {
         if ([string]::IsNullOrWhiteSpace($hostName)) { continue }
-        $siteId = Get-HostSite -Hostname $hostName
+        $siteId = Get-HostSite -HostName $hostName
         
         Write-Host "`r  [....] $hostName ($siteId)" -NoNewline -ForegroundColor White
         
@@ -2219,11 +2240,11 @@ function Backup-Datagroup {
 
     # Folder is folded into the scope token so two datagroups sharing a leaf
     # name in different folders keep separate files and rotation pools
-    $safePartition = Get-DatagroupScopeToken -Partition $Partition -SubPath $SubPath
+    $safeScope = Get-DatagroupScopeToken -Partition $Partition -SubPath $SubPath
     $safeHostname = $script:RemoteHost -replace '[^a-zA-Z0-9_-]', '_'
     $backupPath = Get-ConnectedBackupDir
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
-    $backupFile = Join-Path $backupPath "${safeHostname}_${safePartition}_${Name}_internal_${ts}.csv"
+    $backupFile = Join-Path $backupPath "${safeHostname}_${safeScope}_${Name}_internal_${ts}.csv"
 
     $lines = @(
         "# Datagroup Backup: $(Get-DatagroupDisplayPath -Partition $Partition -Name $Name -SubPath $SubPath)",
@@ -2239,7 +2260,7 @@ function Backup-Datagroup {
 
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
-        Remove-OldBackups -Pattern "${safeHostname}_${safePartition}_${Name}_internal" -Directory $backupPath
+        Remove-OldBackups -Pattern "${safeHostname}_${safeScope}_${Name}_internal" -Directory $backupPath
         return $backupFile
     } catch {
         return ""
@@ -2260,11 +2281,11 @@ function Backup-UrlCategory {
         foreach ($url in $result.Response.urls) { $entries += $url.name }
     }
 
-    $safeName = $CatName -replace '[^a-zA-Z0-9_-]', '_'
+    $safeCatName = $CatName -replace '[^a-zA-Z0-9_-]', '_'
     $safeHostname = $script:RemoteHost -replace '[^a-zA-Z0-9_-]', '_'
     $backupPath = Get-ConnectedBackupDir
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
-    $backupFile = Join-Path $backupPath "${safeHostname}_urlcat_${safeName}_${ts}.csv"
+    $backupFile = Join-Path $backupPath "${safeHostname}_urlcat_${safeCatName}_${ts}.csv"
 
     $lines = @(
         "# URL Category Backup: $CatName",
@@ -2276,7 +2297,7 @@ function Backup-UrlCategory {
 
     try {
         $lines | Out-File -FilePath $backupFile -Encoding UTF8
-        Remove-OldBackups -Pattern "${safeHostname}_urlcat_${safeName}" -Directory $backupPath
+        Remove-OldBackups -Pattern "${safeHostname}_urlcat_${safeCatName}" -Directory $backupPath
         return $backupFile
     } catch {
         return ""
@@ -2411,7 +2432,7 @@ function Invoke-PreFlightChecks {
         $siteWord = $(if ($script:FleetUniqueSites.Count -eq 1) { "site" } else { "sites" })
         Write-LogOk "Fleet loaded: $($script:FleetHosts.Count) $hostWord across $($script:FleetUniqueSites.Count) $siteWord"
     } else {
-        # Create boilerplate fleet.conf for the user
+        # Create boilerplate fleet.conf for the operator
         if (-not (Test-Path $script:FLEET_CONFIG_FILE) -and (Test-Path $script:BACKUP_DIR)) {
             $template = @(
                 "# DGCat-Admin Fleet Configuration File",
@@ -2500,7 +2521,7 @@ function Show-MainMenu {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.8                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.9                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
@@ -2810,7 +2831,8 @@ function Invoke-CreateDatagroup {
     if ($exists) {
         $dgType = Get-DatagroupTypeRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
         $records = Get-DatagroupRecordsRemote -Partition $partition -Name $dgName -SubPath $dgSubPath
-        if ($null -eq $records) {
+        # The type drives entry validation, so a failed type read aborts too
+        if ($null -eq $records -or [string]::IsNullOrWhiteSpace($dgType)) {
             Write-LogError "Could not read datagroup '$dgPath'. No changes have been made."
             Write-LogInfo "For large datagroups, raise API_TIMEOUT and retry."
             Wait-EnterKey
@@ -3585,9 +3607,9 @@ function Invoke-ExportDatagroup {
     $dgSubPath = $selection.SubPath
     # Folder is folded into the scope token so exports of two same-named
     # datagroups in different folders do not overwrite each other
-    $safePartition = Get-DatagroupScopeToken -Partition $partition -SubPath $dgSubPath
+    $safeScope = Get-DatagroupScopeToken -Partition $partition -SubPath $dgSubPath
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
-    $defaultPath = Join-Path $script:BACKUP_DIR "${safePartition}_${dgName}_internal_${ts}.csv"
+    $defaultPath = Join-Path $script:BACKUP_DIR "${safeScope}_${dgName}_internal_${ts}.csv"
     Write-Host ""
     $exportPath = Read-Host "  Export path [$defaultPath]"
     if ([string]::IsNullOrWhiteSpace($exportPath)) { $exportPath = $defaultPath }
@@ -3706,9 +3728,9 @@ function Invoke-ExportUrlCategory {
     if ($urlCount -eq 0) { Write-LogWarn "Category '$selectedCategory' has no URLs."; Wait-EnterKey; return }
     Write-LogInfo "URLs in category: $urlCount"
     
-    $safeName = $selectedCategory -replace '[^a-zA-Z0-9_-]', '_'
+    $safeCatName = $selectedCategory -replace '[^a-zA-Z0-9_-]', '_'
     $ts = Get-Date -Format "yyyyMMdd_HHmmss"
-    $defaultPath = Join-Path $script:BACKUP_DIR "urlcat_${safeName}_${ts}.csv"
+    $defaultPath = Join-Path $script:BACKUP_DIR "urlcat_${safeCatName}_${ts}.csv"
     Write-Host ""
     $exportPath = Read-Host "  Export path [$defaultPath]"
     if ([string]::IsNullOrWhiteSpace($exportPath)) { $exportPath = $defaultPath }
@@ -4544,6 +4566,12 @@ function Invoke-EditorSubmenu {
     
     if ($EditType -eq "datagroup") {
         $dgType = Get-DatagroupTypeRemote -Partition $Partition -Name $DgName -SubPath $DgSubPath
+        # The type drives key validation in the add and edit commands
+        if ([string]::IsNullOrWhiteSpace($dgType)) {
+            Write-LogError "Could not read datagroup type. Editor not opened."
+            Wait-EnterKey
+            return
+        }
         $displayInfo1 = "Path:  $(Get-DatagroupDisplayPath -Partition $Partition -Name $DgName -SubPath $DgSubPath)"
         $displayInfo2 = "Class: $DgClass  |  Type: $dgType"
     } else {
@@ -5299,7 +5327,7 @@ function Invoke-EditorSubmenu {
                     $tNum++
                 }
                 foreach ($t in $deployTargets) {
-                    $tSite = Get-HostSite -Hostname $t
+                    $tSite = Get-HostSite -HostName $t
                     Write-Host "    $tNum. $t ($tSite)" -ForegroundColor White
                     $tNum++
                 }
@@ -5334,7 +5362,7 @@ function Invoke-EditorSubmenu {
                     continue
                 }
                 
-                # Only prompt if some hosts failed - user already typed DEPLOY
+                # Only prompt if some hosts failed - the operator already typed DEPLOY
                 if ($readyCount -lt $targetCount) {
                     Write-Host ""
                     if ($hasPending) {
@@ -5408,12 +5436,12 @@ function Invoke-EditorSubmenu {
                     if ($EditType -eq "datagroup") {
                         $records = ConvertTo-RecordsJson -Keys @($workingKeys) -Values @($workingValues)
                         $currentSuccess = Deploy-DatagroupToHost -HostName $script:RemoteHost -Partition $Partition -DgName $DgName `
-                            -RecordsJson $records -SiteId (Get-HostSite -Hostname $script:RemoteHost) -DeployMode $deployMode `
+                            -RecordsJson $records -SiteId (Get-HostSite -HostName $script:RemoteHost) -DeployMode $deployMode `
                             -AdditionsJson $additionsJson -DeletionsList $deletionsList -SubPath $DgSubPath
                     } else {
                         $urlObjects = ConvertTo-UrlObjects -Urls @($workingKeys)
                         $currentSuccess = Deploy-UrlCategoryToHost -HostName $script:RemoteHost -CatName $CatName -UrlsJson $urlObjects `
-                            -SiteId (Get-HostSite -Hostname $script:RemoteHost) -DeployMode $deployMode `
+                            -SiteId (Get-HostSite -HostName $script:RemoteHost) -DeployMode $deployMode `
                             -AdditionsJson $additionsJson -DeletionsList $deletionsList
                     }
                     
@@ -5758,7 +5786,7 @@ function Invoke-BootstrapImport {
     
     foreach ($host_ in $deployTargets) {
         $script:RemoteHost = $host_
-        $hostSite = Get-HostSite -Hostname $host_
+        $hostSite = Get-HostSite -HostName $host_
         
         # Test connectivity
         $testResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/version"
@@ -5877,7 +5905,7 @@ function Main {
     Write-Host ""
     Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
-    Write-Host "                    DGCAT-Admin v5.8                        " -NoNewline -ForegroundColor White
+    Write-Host "                    DGCAT-Admin v5.9                        " -NoNewline -ForegroundColor White
     Write-Host "║" -ForegroundColor Cyan
     Write-Host "  ║" -NoNewline -ForegroundColor Cyan
     Write-Host "               F5 BIG-IP Administration Tool                " -NoNewline -ForegroundColor White
