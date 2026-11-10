@@ -11,7 +11,7 @@
 - Replay plan counts are correct when exactly one object is pending or existing. A single match was counted as 7
 - Topology delete stops when the post-delete verification read fails instead of counting the object as deleted
 - Import drops invalid block entries after warning, and rejects an unreadable snapshotVersion
-- Objects in /Common subfolders are addressed correctly (~Common~folder~object) in capture and validation
+- Objects in /Common subfolders are addressed correctly (/Common/folder-object) in capture and validation
 - Dependency manifest: custom URL category configs are fetched by object name when the display name differs; references that cannot be read from the source are recorded by name instead of dropped; a VLAN reached through both a topology and a Client VLAN condition is listed once
 - Prerequisite validation is one function shared by replay and policy swap
 
