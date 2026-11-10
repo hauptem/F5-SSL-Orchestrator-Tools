@@ -11,6 +11,8 @@
 - [Deleting a Topology](#deleting-a-topology)
 - [Preparing a Target Device](#preparing-a-target-device)
 - [Troubleshooting](#troubleshooting)
+- [License](#license)
+- [Disclaimer](#disclaimer)
 
 ## Running the Tool
 
@@ -20,7 +22,7 @@ powershell.exe -File .\sslo-replay.ps1
 
 Windows PowerShell 5.1 (Desktop edition) only. PowerShell 7+ (pwsh) is not supported because it ignores the certificate bypass the tool uses for self-signed BIG-IP management certs. If launched under pwsh the tool exits at startup and prints the correct invocation. No modules or dependencies required.
 
-On launch you get a connection prompt. Enter the BIG-IP management IP and credentials. The tool validates connectivity, checks the TMOS version, confirms SSL Orchestrator is installed and provisioned, and drops you into the main menu. A device without SSLO is rejected and you are offered a retry. The connection uses iControl REST over HTTPS on port 443.
+On launch you get a connection prompt. Enter the BIG-IP management IP and credentials. The tool validates connectivity, checks the TMOS version, confirms SSL Orchestrator is installed and provisioned, and drops you into the main menu. A device without SSLO is rejected and you are offered a retry against the same device with the same credentials, so you can install or provision SSLO and continue without re-entering anything. Answer `other` at that prompt to connect to a different BIG-IP instead; the credentials are kept. The connection uses iControl REST over HTTPS on port 443.
 
 ## Main Menu
 
@@ -92,7 +94,7 @@ The target device must run the same or a newer SSLO version than the snapshot so
 
 See [Preparing a Target Device](#preparing-a-target-device) for the full step-by-step checklist covering these prerequisites.
 
-The tool validates the named object references before touching the blocks API: certs, keys, CA bundles, OCSP and CRL validators, cipher groups, log publishers, VLANs, SNAT pools, gateway and application pools, DNS resolvers, TCP, HTTP, SSL and persistence profiles, iRules (including egress iRules), LTM policies, access profiles, WAF security policies with their DoS, bot defense and log profiles, datagroups (including type for subnet-match datagroups), and URL categories. URL categories are checked against the target's URL database, which also catches built-in categories that the target TMOS version renamed or removed; a snapshot from TMOS 17.5 that uses Illegal or Questionable fails this check on 21.1, which has no category by that name. Record uses the same reference walk, so the dependency manifest and the prerequisite check always cover the same objects. IP reputation categories are built in and are not checked. If something is missing, it tells you what and where it is referenced. Two things it cannot pre-validate: network reachability (self IPs, routes, whether service IPs answer) and monitors, which the gc processor validates at deploy time.
+The tool validates the named object references before touching the blocks API: certs, keys, CA bundles, OCSP and CRL validators, cipher groups, log publishers, VLANs, SNAT pools, gateway and application pools, DNS resolvers, TCP, HTTP, SSL and persistence profiles, iRules (including egress iRules), LTM policies, access profiles, WAF security policies with their DoS, bot defense and log profiles, datagroups (including type for subnet-match datagroups), and URL categories. URL categories are checked against the target's URL database, which also catches built-in categories that the target TMOS version renamed or removed; a snapshot from TMOS 17.5 that uses Illegal or Questionable fails this check on 21.1, which has no category by that name. Record uses the same reference walk, so the dependency manifest and the prerequisite check always cover the same objects. IP reputation categories are built in and are not checked. Paths inside an SSLO application folder, and the `sslo-default-*` objects General Settings installs, are skipped because SSLO creates them. Any other object named `/Common/sslo...` is checked like the rest, but if it is missing you get a warning and a prompt instead of a hard stop, because the name alone cannot show whether SSLO or an operator owns it. If something is missing, it tells you what and where it is referenced. Two things it cannot pre-validate: network reachability (self IPs, routes, whether service IPs answer) and monitors, which the gc processor validates at deploy time. For a service whose VLANs SSLO created on the source, replay recreates those networks from the service block; the interfaces and VLAN tags they name must be free on the target, and that is not checked either.
 
 ### Replay modes
 
@@ -113,10 +115,12 @@ The rename replaces whole names only: renaming `sslo_web` leaves a chain called 
 5. Prerequisite validation walks every block and checks all external references on the target
 6. Pre-replay analysis checks which objects already exist on the target and skips them, displays a plan of what will be deployed. Existing objects in a failed or stuck state are flagged. Remove them on the target before re-replaying those objects
 7. Confirmation prompt. Type `REPLAY` to proceed; anything else cancels
-8. Block deployment. Each block is POSTed to `/mgmt/shared/iapp/blocks` as a CREATE operation. The tool waits for each block to reach BOUND state before proceeding to the next. If the wait times out, the tool checks for the deployment's component block - the durable evidence that the deployment landed - and counts the object as replayed if it is found. If SSL settings reference private keys, you are prompted for each key's passphrase (press Enter if the key has none); each key is asked once per replay run
+8. Block deployment. Each block is rebuilt as a CREATE operation and POSTed to `/mgmt/shared/iapp/blocks`. The tool waits for each block to reach BOUND state before proceeding to the next. If the wait times out, the tool checks for the deployment's component block - the durable evidence that the deployment landed - and counts the object as replayed if it is found. If SSL settings reference private keys, you are prompted for each key's passphrase (press Enter if the key has none); each key is asked once per replay run
 9. Configuration save; tmsh save and mcpBlockIO block database save
 
 Deployment order: SSL settings, then services, service chains, security policies, and topologies last. Each object waits up to 120 seconds for the gc processor to complete; topologies get 180 seconds.
+
+When an object fails, the objects that depend on it are not posted: a chain waits on its services, a policy on its chains, a topology on its SSL settings and policy. They appear in the summary as not attempted, with the failed dependency named. Fix the cause and replay again; everything that already landed is skipped.
 
 If 3 objects fail in a row, the replay halts and asks whether to continue with the remaining objects. A timed-out object that could not be verified is safe to retry: the gc processor may still complete it after the tool moves on, and a re-replay skips anything that landed. Objects that post without a returned block ID are reported as unverified, so confirm their state in the SSLO GUI. "Replay complete" is only reported with zero failed and zero unverified objects.
 
@@ -139,7 +143,7 @@ Use this when you want to push a policy from one environment to another without 
 1. Select a source policy from the snapshot
 2. Select a target topology on the connected device. Topologies whose component block is not UNBOUND are not offered; the tool lists them with their state
 3. Name the policy on the target (defaults to the target topology's naming convention). Same rule as replay-time renaming: 1-20 characters after the `ssloP_` prefix - letters, numbers, underscores
-4. The tool shows a pre-flight plan: what will be created, what will be overwritten, what already exists
+4. The tool shows a pre-flight plan: what will be created, what will be overwritten, what already exists. The plan also checks the external objects the policy needs on the target (datagroups, URL categories, Client VLAN entries). Anything missing blocks the swap before a single change is made
 5. Confirm to proceed
 
 The tool creates any missing service chains referenced by the policy, renames the policy to the name you chose, and pushes a MODIFY to the topology to bind the new policy. If the target policy name already exists, it is overwritten with the snapshot's content. The plan warns you before anything runs.
@@ -171,7 +175,7 @@ The topology's own component block is never deleted, because it is the object th
 
 ## Deleting a Topology
 
-Menu option 4. Deletes a topology and its now-unreferenced dependents from the connected device, through the gc processor. 
+Menu option 4. Deletes a topology and its now-unreferenced dependents from the connected device, through the gc processor. No snapshot file is needed.
 
 The tool reads the live SSLO configuration, resolves the selected topology's stack (its SSL settings, security policy, the policy's service chains, and the chains' services) and reference-counts every object against the surviving configuration. Objects still referenced by another topology, policy, or chain are retained. Only objects that would be orphaned by the delete are removed.
 
@@ -185,7 +189,7 @@ Deletion runs in reverse deployment order: topology first, then security policy,
 
 After a successful delete you are offered a configuration save (tmsh save and mcpBlockIO block database save).
 
-External objects such as VLANs, certs, datagroups, and monitors are never deleted. 
+External objects such as VLANs, certs, datagroups, and monitors are never deleted. Only SSLO iAppsLX objects are in scope.
 
 ---
 
@@ -245,3 +249,25 @@ The tool lists every missing object with its type and which SSLO object referenc
 
 The policy references a service chain that references a service not present on the target. Services are not auto-created during policy swap because they require network infrastructure (VLANs, self IPs, pool members) that the tool cannot verify. Deploy the service first through a full replay or the SSLO GUI, then retry the policy swap.
 
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## Disclaimer
+
+- This solution is **NOT** officially endorsed, supported, or maintained by F5 Inc.
+- F5 Inc. retains all rights to their trademarks, including but not limited to "F5", "BIG-IP", "TMOS", "SSL Orchestrator", and related marks
+- This is an independent, community-developed solution that utilizes F5 products but is not affiliated with F5 Inc.
+- For official F5 support and solutions, please contact F5 Inc. directly
+
+**Technical Disclaimer:**
+
+- This software is provided "AS IS" without warranty of any kind
+- The authors and contributors are not responsible for any damages or issues that may arise from its use
+- Always test thoroughly in non-production environments before deployment
+- Backup your F5 configuration before implementing any changes
+- Review and understand all code before deploying to production systems
+
+By using this software, you acknowledge that you have read and understood these disclaimers and agree to use this solution at your own risk.

@@ -1,10 +1,28 @@
+## b12.3.15.0-devel (Beta 12 - November 10 2026)
+
+- Services whose networks SSLO created (Layer 2, TAP, and Layer 3 or HTTP services built with a new VLAN) are replayed with their network objects. The service block keeps them in create form and the Ansible create templates post them in the network property; replay previously sent that property empty, leaving the service pointing at VLANs that do not exist on the target. Verified against the collection's deployed-block fixtures, not yet against a device. Interfaces and VLAN tags named by those networks are not prevalidated
+- networkBlockId values, which are block IDs of the source's network blocks, are blanked at record and again at replay, so snapshots from earlier betas are covered
+- Policy swap validates prerequisites. Datagroups, URL categories, and Client VLAN entries of everything the plan creates or overwrites are checked in the pre-flight, before anything is posted. The swap previously ran no external checks
+- Replay does not post an object whose SSLO dependency failed in the same run. It is listed as not attempted with the dependency named. A topology was previously still posted after its SSL settings or policy failed
+- Topology CREATE and MODIFY blocks are not built when General Settings, the named security policy, or the named SSL settings cannot be read from the target. Each failed read previously fell back to an empty value and the topology was posted anyway. General Settings are matched by property id instead of position, and the replay gate reads the General Settings block instead of its application folder
+- Generated-object detection narrowed. Only paths inside an application folder and the /Common objects General Settings installs (sslo-default-*, ssloDefault*) are skipped. Any other /Common/sslo* path is captured and checked; a miss is a warning that needs confirmation, not a blocker. Previously every /Common/sslo* path was skipped, so an operator object named that way was neither recorded nor validated, and replay-time renaming could rewrite it
+- Every block is rebuilt through CREATE conversion. Replayable service, chain, and policy blocks were posted as captured, carrying the source SSLO version in the operation context
+- Connection retry after a failed SSLO check accepts "other" to connect to a different BIG-IP with the same credentials. Beta 11 offered only the same device or exit
+- Replay plan counts are correct when exactly one object is pending or existing. A single match was counted as 7
+- Topology delete stops when the post-delete verification read fails instead of counting the object as deleted
+- Import drops invalid block entries after warning, and rejects an unreadable snapshotVersion
+- Objects in /Common subfolders are addressed correctly (~Common~folder~object) in capture and validation
+- Dependency manifest: custom URL category configs are fetched by object name when the display name differs; references that cannot be read from the source are recorded by name instead of dropped; a VLAN reached through both a topology and a Client VLAN condition is listed once
+- Prerequisite validation is one function shared by replay and policy swap
+
 ## b11.3.15.0-devel (Beta 11 - September 30 2026)
 
 - Connecting requires SSL Orchestrator to be installed and provisioned. A device without the SSLO package previously produced a warning and the session continued, leaving replay to post blocks with no SSLO version in the operation context. The connection is now rejected when the package is missing, its release cannot be parsed, SSLO is not provisioned (matching the collection's check_sslo_provisioned), or either check cannot be read
+- Connection retry keeps what the failure did not invalidate. After an SSLO check fails, the retry reconnects to the same device with the same credentials; after a network failure, it asks for the host and keeps the credentials. Previously every retry asked for host, username, and password again
 
 ## b10.3.15.0-devel (Beta 10 - September 29 2026)
 
-- **API reference moved from F5 Ansible collection f5networks.f5_bigip 3.14.0 to 3.15.0**. 3.15.0 extends SSLO support from 12.0 to versions below 15.0 and documents the SSLO 13 and 14 schema fields; 3.14.0 capped at 12.0. Tool version is now 0.3.15-devel. Operation block templates, per-type inputProperty sets, and pfId token format are unchanged between the two collections, so snapshots recorded by earlier betas remain valid
+- API reference moved from F5 Ansible collection f5networks.f5_bigip 3.14.0 to 3.15.0 (released September 29 2026). 3.15.0 extends SSLO support from 12.0 to versions below 15.0 and documents the SSLO 13 and 14 schema fields; 3.14.0 capped at 12.0. Tool version is now 0.3.15-devel. Operation block templates, per-type inputProperty sets, and pfId token format are unchanged between the two collections, so snapshots recorded by earlier betas remain valid
 - IP reputation conditions no longer block replay. Client/Server IP Reputation conditions store reputation categories (Spam Sources, BotNets, Tor Proxy) in options.category; they were captured and validated as custom URL categories and reported missing on every target
 - Layer 2 service VLANs are captured and validated from customService.connectionInformation.interfaces[], the path the collection reads in 3.14.0 and 3.15.0. The previous serviceSpecific.devices[] path does not exist, so Layer 2 VLANs were never checked
 - Service SNAT pools are read from customService.snatConfiguration. The previous top-level path does not exist, so service SNAT pools were never checked
@@ -14,16 +32,47 @@
 - Built-in URL category list extended from 168 to 221 entries: the Ansible condition_category_list plus the TMOS 17.5 and 21.1 URL databases. TMOS 21.1 no longer has five 17.5 categories (Illegal or Questionable, Gay or Lesbian or Bisexual Interest, Non-Traditional Religions, Traditional Religions, Society and Lifestyles) and adds 53, including Generative AI, DNS Over HTTPS, and LGBTQIA. Both old and new names are kept
 - Replay checks every URL category a policy uses, built-in or custom, against the target's URL database. A built-in category that does not exist on the target TMOS version (a 17.5 snapshot replayed to 21.1) is reported as missing instead of failing at deploy. When the URL database cannot be read, built-ins are assumed present and custom categories are checked individually
 - Record prefers the component (state) block over a CREATE operation block when both exist for an object. A record taken within the operation block's BOUND window previously captured the transient request instead of the deployed configuration
+- Supported replay direction documented: same or newer SSLO version. Verified 17.5 (SSLO 12.4.2) to 21.1 (SSLO 14.1.5) full replay
 - Record and replay prerequisite validation share one reference walker. The two copies had drifted, which is how the Layer 2 and SNAT paths stayed wrong in both
 - Replayable SSL settings blocks go through CREATE conversion like state blocks. A CREATE operation block captured inside its 120-second BOUND window previously replayed with the source pfId tokens and no passphrase prompt
+- restrictedProperties is stripped at capture. Snapshots never carry key passphrase values
 - Record lists SSLO objects whose component block is not UNBOUND (ERROR, stuck BINDING/UNBINDING) and requires confirmation before writing a snapshot without them. They were previously dropped silently
 - Record refuses blocks nested too deep for ConvertTo-Json, and snapshot verification compares each block's nesting depth after the round trip. PS 5.1 truncation replaces deep objects with strings, which the previous count check could not detect
 - Redeploy stuck-block cleanup touches only operation blocks for the selected topology, matched by the operation context's deploymentName. The topology's own component block is never deleted; if it left UNBOUND since selection, redeploy aborts with no changes
 - Dynamic naming substitutes names at identifier boundaries. Renaming sslo_web no longer rewrites a chain named ssloSC_sslo_web_bypass or a topology named sslo_web2. Each renamed block is verified: no other SSLO object reference and no external /Common/ dependency may change, and the new base name must not collide with existing content
 - Monitor capture probes gateway-icmp, icmp, udp, tcp-half-open, and external monitors in addition to tcp, http, and https. Gateway ICMP monitors are recorded as monitor_gateway_icmp; monitor_icmp now means /ltm/monitor/icmp
 - Custom access profiles referenced by a topology are validated during replay prerequisites. The user guide already listed them; the check was missing
+- Policy swap and redeploy list topologies excluded because their component block is not UNBOUND
+- Replay, policy swap, redeploy, and delete share one post/poll/verify implementation
+- Removed the unreachable SSL settings branch from the policy swap pre-flight
+- Script saved as UTF-8 with BOM. Windows PowerShell 5.1 reads BOM-less files as ANSI, and the menu's box-drawing characters then decode to curly quotes that break parsing
+- Script header version corrected. Beta 9 shipped with a Beta 8 header
 
-## SSLO Replay Snapshot Format v1.0
+## b9.3.14.0-devel (Beta 9 - September 2 2026)
+
+- Dependency config cleaning is now recursive. The *Reference link strip and instance-field strip previously applied at the top level only, so nested collection members (cipher group allow[], log publisher destinations[]) kept nameReference links carrying the source TMOS version in the query string
+- Script header corrected to describe the current design: dependency configs go to the companion text manifest, which the tool does not read, and replay re-derives dependencies from the snapshot blocks.
+
+## b8.3.14.0-devel (Beta 8 - August 2026)
+
+- Corrected all F5 Ansible references to 3.14.0
+
+## b7.3.14.0-devel (Beta 7 - July 19 2026)
+
+- Poll timeout no longer reports a deployment as failed without checking for it. The gc processor does not stop when the poll gives up, and a completed operation block self-destructs 120 seconds after BOUND - so re-checking the operation block later is ambiguous (absent means succeeded-and-gone or never-bound). On timeout the tool now checks for the deployment's component block, the durable evidence that the deployment landed. Applies to CREATE operations only; a component block that predates a MODIFY or DELETE proves nothing. Late-verified objects count as replayed and reset the circuit breaker, so slow deployments can no longer trip the systemic-failure prompt
+- Timed-out objects that cannot be verified now report that the gc processor may still complete, and that a re-replay will safely skip anything that lands
+- Policy swap validates the target policy name with the same rule as replay-time renaming: 1-20 characters after ssloP_, letters, numbers, underscores. An unvalidated name previously flowed into OData filter queries, operation block names, and gc processor config data
+
+## b6.3.14.0-devel (Beta 6 - July 17 2026)
+
+- Snapshot block field backupType renamed to captureType. **SSLO Snapshots recorded by Beta 5 and earlier will fail import validation using Beta 6 - re-record your SSLO's using Beta 6**. The updated snapshot format version remains at 1.0 since we are still in beta.
+- Windows PowerShell 5.1 is enforced at startup. PowerShell 7+ ignores the ServicePointManager certificate bypass, so every connection would fail with opaque TLS errors. The tool now exits with the correct powershell.exe invocation instead
+- Config save connection-drop detection uses locale-invariant WebException status enums instead of matching the exception message, which .NET localizes per Windows display language. On a drop signature the tool confirms the management plane is reachable and re-issues the idempotent save before reporting success
+- Topology detection excludes operation blocks by their exact prefixes (sslo_ob_, sslo_obj_) instead of the bare sslo_ob stem. The stem match also swallowed legitimate topology names like sslo_observability, silently dropping them from snapshots, redeploy, and delete accounting
+- Replay circuit breaker consolidated into a single function. 
+- Terminology aligned across functions, prompts, and output: record/snapshot/replay replaces dump/backup/restore
+
+## SSLO Replay Snapshot Format v1.0 (updated in beta 12)
 
 ```
 {
@@ -54,35 +103,13 @@ Top level: id, selfLink, generation, lastUpdateMicros, kind, state, restrictedId
 
 inputProperties values: existingBlockId, deploymentReference, obRestrictedAttribute
 
+Blanked wherever nested: networkBlockId
+
 ### File naming
 
 sslo-snapshot_{hostname}_{yyyyMMdd-HHmmss}.json
 
 sslo-dependencies_{hostname}_{yyyyMMdd-HHmmss}.txt
-
-## b9.3.14.0-devel (Beta 9 - September 2 2026)
-
-- Dependency config cleaning is now recursive. The *Reference link strip and instance-field strip previously applied at the top level only, so nested collection members (cipher group allow[], log publisher destinations[]) kept nameReference links carrying the source TMOS version in the query string
-- Script header corrected to describe the current design: dependency configs go to the companion text manifest, which the tool does not read, and replay re-derives dependencies from the snapshot blocks.
-
-## b8.3.14.0-devel (Beta 8 - August 2026)
-
-- Corrected all F5 Ansible references to 3.14.0
-
-## b7.3.14.0-devel (Beta 7 - July 19 2026)
-
-- Poll timeout no longer reports a deployment as failed without checking for it. The gc processor does not stop when the poll gives up, and a completed operation block self-destructs 120 seconds after BOUND - so re-checking the operation block later is ambiguous (absent means succeeded-and-gone or never-bound). On timeout the tool now checks for the deployment's component block, the durable evidence that the deployment landed. Applies to CREATE operations only; a component block that predates a MODIFY or DELETE proves nothing. Late-verified objects count as replayed and reset the circuit breaker, so slow deployments can no longer trip the systemic-failure prompt
-- Timed-out objects that cannot be verified now report that the gc processor may still complete, and that a re-replay will safely skip anything that lands
-- Policy swap validates the target policy name with the same rule as replay-time renaming: 1-20 characters after ssloP_, letters, numbers, underscores. An unvalidated name previously flowed into OData filter queries, operation block names, and gc processor config data
-
-## b6.3.14.0-devel (Beta 6 - July 17 2026)
-
-- Snapshot block field backupType renamed to captureType. **SSLO Snapshots recorded by Beta 5 and earlier will fail import validation using Beta 6 - re-record your SSLO's using Beta 6**. The updated snapshot format version remains at 1.0 since we are still in beta.
-- Windows PowerShell 5.1 is enforced at startup. PowerShell 7+ ignores the ServicePointManager certificate bypass, so every connection would fail with opaque TLS errors. The tool now exits with the correct powershell.exe invocation instead
-- Config save connection-drop detection uses locale-invariant WebException status enums instead of matching the exception message, which .NET localizes per Windows display language. On a drop signature the tool confirms the management plane is reachable and re-issues the idempotent save before reporting success
-- Topology detection excludes operation blocks by their exact prefixes (sslo_ob_, sslo_obj_) instead of the bare sslo_ob stem. The stem match also swallowed legitimate topology names like sslo_observability, silently dropping them from snapshots, redeploy, and delete accounting
-- Replay circuit breaker consolidated into a single function. 
-- Terminology aligned across functions, prompts, and output: record/snapshot/replay replaces dump/backup/restore
 
 ## b5.3.14.0-devel (Beta 5 - June 12 2026)
 

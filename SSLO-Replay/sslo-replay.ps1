@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # SSLO-Replay - F5 SSL Orchestrator Snapshot and Replay Tool
 # =============================================================================
-# Version: b11.3.15.0-devel (Beta 11 September 30 2026)
+# Version: b12.3.15.0-devel (Beta 12 November 10 2026)
 # Author: Eric Haupt
 # Released under the MIT License.
 # https://github.com/hauptem/F5-SSL-Orchestrator-Tools
@@ -53,6 +53,9 @@
 #     URL categories.
 #   - Monitors are not validated at prereq time - the gc processor
 #     validates at deploy time. Custom monitors must exist on target.
+#   - Networks SSLO creates for a service (VLAN on an interface, self IPs)
+#     are replayed from the service block. Their interfaces and VLAN tags
+#     are not validated at prereq time.
 #
 # USAGE:
 #   .\sslo-replay.ps1
@@ -101,7 +104,8 @@ $script:DEPENDENCY_ORDER = @(
     "TOPOLOGY"
 )
 
-# Block categories
+# Capture types, recorded per block. Replay treats both the same: every block
+# is rebuilt through Convert-StateBlockToCreate
 $script:CAT_REPLAYABLE = "replayable"
 $script:CAT_STATE = "state"
 
@@ -436,7 +440,6 @@ $script:SSLOVersionNum = $null
 $script:PfIdRegenerated = 0
 $script:PassphraseCache = @{}
 $script:ConsecutiveFailures = 0
-$script:TargetUrlCategories = $null
 $script:ConnectFailure = ""
 
 # =============================================================================
@@ -819,8 +822,9 @@ function Initialize-RemoteConnection {
 
 # Connect with a retry loop. A retry keeps whatever the failure did not
 # invalidate: an SSLO check failure keeps host and credentials (the device
-# answered and accepted the login), a network failure keeps credentials and
-# asks for the host, anything else prompts as on the first attempt
+# answered and accepted the login) or, on "other", keeps the credentials and
+# asks for a different host; a network failure keeps credentials and asks for
+# the host; anything else prompts as on the first attempt
 # Returns: $true when connected, $false when the operator declines to retry
 function Connect-WithRetry {
     param([switch]$HostOnly)
@@ -830,9 +834,16 @@ function Connect-WithRetry {
         if (Initialize-RemoteConnection @mode) { return $true }
         
         Write-Host ""
-        $target = if ($script:ConnectFailure -eq "sslo") { " to $($script:RemoteHostname)" } else { "" }
-        $retry = Read-Host "  Retry connection${target}? (yes/no) [yes]"
+        if ($script:ConnectFailure -eq "sslo") {
+            $retry = Read-Host "  Retry connection to $($script:RemoteHostname)? (yes/no/other = different BIG-IP) [yes]"
+        } else {
+            $retry = Read-Host "  Retry connection? (yes/no) [yes]"
+        }
         if ([string]::IsNullOrWhiteSpace($retry)) { $retry = "yes" }
+        if ($retry -eq "other" -and $script:ConnectFailure -eq "sslo") {
+            $mode = @{ HostOnly = $true }
+            continue
+        }
         if ($retry -ne "yes") { return $false }
         
         switch ($script:ConnectFailure) {
@@ -1021,6 +1032,66 @@ function Remove-GeneratedFields {
     return $clean
 }
 
+# Read one inputProperty value of a component block on the target
+# Returns: @{ Found; Value }
+function Get-TargetBlockConfig {
+    param([string]$BlockName, [string]$PropertyId)
+    
+    $result = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$BlockName'"
+    if ($result.Success -and $result.Response.items) {
+        foreach ($block in @($result.Response.items)) {
+            foreach ($prop in $block.inputProperties) {
+                if ($prop.id -eq $PropertyId) {
+                    return @{ Found = $true; Value = $prop.value }
+                }
+            }
+        }
+    }
+    return @{ Found = $false; Value = $null }
+}
+
+# Read the dependent configs a topology operation block must carry: General
+# Settings, and the security policy and SSL settings the topology names.
+# A named dependent that cannot be read fails the build - posting the
+# topology with an empty placeholder would deploy it against nothing
+# Returns: @{ Values = property id -> value; Error = "" or the first failure }
+function Get-TopologyDependentConfigs {
+    param([string]$PolicyName, [object]$SslSettingReference)
+    
+    $out = @{ Values = @{}; Error = "" }
+    
+    $gs = Get-TargetBlockConfig -BlockName "ssloGS_global" -PropertyId "f5-ssl-orchestrator-general-settings"
+    if ($gs.Found) {
+        $out.Values["f5-ssl-orchestrator-general-settings"] = $gs.Value
+    } else {
+        $out.Error = "General Settings (ssloGS_global) could not be read from the target"
+        return $out
+    }
+    
+    if ($PolicyName) {
+        $pol = Get-TargetBlockConfig -BlockName $PolicyName -PropertyId "f5-ssl-orchestrator-policy"
+        if ($pol.Found) {
+            $out.Values["f5-ssl-orchestrator-policy"] = $pol.Value
+        } else {
+            $out.Error = "security policy $PolicyName could not be read from the target"
+            return $out
+        }
+    }
+    
+    $sslName = [string](@($SslSettingReference) | Where-Object { $_ } | Select-Object -First 1)
+    if ($sslName) {
+        $ssl = Get-TargetBlockConfig -BlockName $sslName -PropertyId "f5-ssl-orchestrator-tls"
+        if ($ssl.Found) {
+            $out.Values["f5-ssl-orchestrator-tls"] = $ssl.Value
+        } else {
+            $out.Error = "SSL settings $sslName could not be read from the target"
+            return $out
+        }
+    }
+    
+    return $out
+}
+
 # Build a CREATE operation block from a snapshot state block
 # Returns: block object ready to POST, or $null on failure
 function Convert-StateBlockToCreate {
@@ -1082,6 +1153,23 @@ function Convert-StateBlockToCreate {
         value = $opCtxValue
     }
     
+    # Topology CREATE carries dependent object configs read from the target.
+    # They were replayed in earlier steps
+    $topoDeps = $null
+    if ($DeploymentType -eq "TOPOLOGY") {
+        $topoDeps = Get-TopologyDependentConfigs `
+            -PolicyName ([string]$configData.securityPolicyReference) `
+            -SslSettingReference $configData.sslSettingReference
+        if ($topoDeps.Error) {
+            Write-LogError "$DeploymentName - $($topoDeps.Error)"
+            return $null
+        }
+    }
+    
+    if ($DeploymentType -eq "SERVICE") {
+        Clear-NetworkBlockIds -Node $configData
+    }
+    
     # Type-specific properties - slot config data into the matching one
     foreach ($propDef in $typeProperties) {
         if ($propDef.id -eq $dataPropertyId) {
@@ -1092,55 +1180,29 @@ function Convert-StateBlockToCreate {
                 value = $configData
             }
         } elseif ($DeploymentType -eq "TOPOLOGY") {
-            # Topology CREATE requires dependent object configs from the target
-            # These were already replayed in earlier steps
-            $depValue = $null
-            
-            switch ($propDef.id) {
-                "f5-ssl-orchestrator-general-settings" {
-                    # Fetch from ssloGS_global state block on target
-                    $gsBlockResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'ssloGS_global'"
-                    if ($gsBlockResult.Success -and $gsBlockResult.Response.items.Count -gt 0) {
-                        $depValue = $gsBlockResult.Response.items[0].inputProperties[0].value
-                    }
-                }
-                "f5-ssl-orchestrator-policy" {
-                    # Fetch security policy config from target
-                    $policyName = $configData.securityPolicyReference
-                    if ($policyName) {
-                        $policyResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$policyName'"
-                        if ($policyResult.Success -and $policyResult.Response.items.Count -gt 0) {
-                            foreach ($pp in $policyResult.Response.items[0].inputProperties) {
-                                if ($pp.id -eq "f5-ssl-orchestrator-policy") {
-                                    $depValue = $pp.value
-                                    break
-                                }
-                            }
-                        }
-                    }
-                }
-                "f5-ssl-orchestrator-tls" {
-                    # Fetch SSL settings config from target
-                    $sslRefs = $configData.sslSettingReference
-                    if ($sslRefs -and $sslRefs.Count -gt 0) {
-                        $sslName = if ($sslRefs -is [System.Array]) { $sslRefs[0] } else { $sslRefs }
-                        $sslResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$sslName'"
-                        if ($sslResult.Success -and $sslResult.Response.items.Count -gt 0) {
-                            foreach ($sp in $sslResult.Response.items[0].inputProperties) {
-                                if ($sp.id -eq "f5-ssl-orchestrator-tls") {
-                                    $depValue = $sp.value
-                                    break
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
             $inputProps += @{
                 id = $propDef.id
                 type = "JSON"
-                value = if ($null -ne $depValue) { $depValue } else { $propDef.empty }
+                value = if ($topoDeps.Values.ContainsKey($propDef.id)) { $topoDeps.Values[$propDef.id] } else { $propDef.empty }
+            }
+        } elseif ($DeploymentType -eq "SERVICE" -and $propDef.id -eq "f5-ssl-orchestrator-network") {
+            # Network objects SSLO creates for the service (VLANs, self IPs).
+            # The block keeps them in create form and the Ansible create
+            # templates post them in this property. Empty when the service
+            # uses existing networks
+            $netObjects = @()
+            foreach ($prop in $StateBlock.inputProperties) {
+                if ($prop.id -ne $propDef.id) { continue }
+                foreach ($netObj in @($prop.value)) {
+                    if ($netObj -is [PSCustomObject]) {
+                        $netObjects += (Remove-GeneratedFields -ConfigData $netObj)
+                    }
+                }
+            }
+            $inputProps += @{
+                id = $propDef.id
+                type = "JSON"
+                value = $netObjects
             }
         } else {
             # Empty placeholder
@@ -1278,6 +1340,25 @@ function Get-ObjectDepth {
     return 1 + $max
 }
 
+# Blank every networkBlockId in a block, in place. The values are block IDs of
+# the source's network blocks; the Ansible create templates send them empty
+function Clear-NetworkBlockIds {
+    param([object]$Node)
+    
+    if ($Node -is [System.Collections.IList]) {
+        foreach ($item in $Node) { Clear-NetworkBlockIds -Node $item }
+        return
+    }
+    if (-not ($Node -is [PSCustomObject])) { return }
+    foreach ($prop in @($Node.PSObject.Properties)) {
+        if ($prop.Name -eq "networkBlockId") {
+            $prop.Value = ""
+        } elseif ($prop.Value -is [PSCustomObject] -or $prop.Value -is [System.Collections.IList]) {
+            Clear-NetworkBlockIds -Node $prop.Value
+        }
+    }
+}
+
 # Strip runtime and audit fields from a block before snapshot
 function Remove-RuntimeFields {
     param([object]$Block)
@@ -1318,6 +1399,9 @@ function Remove-RuntimeFields {
         }
     }
     
+    # Blank source network block IDs wherever they are nested
+    Clear-NetworkBlockIds -Node $clean.inputProperties
+    
     # Strip dataProperties (runtime state, not configuration)
     if ($clean.PSObject.Properties["dataProperties"]) {
         $clean.PSObject.Properties.Remove("dataProperties")
@@ -1335,15 +1419,30 @@ function Remove-RuntimeFields {
 # DEPENDENCY CAPTURE
 # =============================================================================
 
-# Paths matching these patterns are created by the gc processor, not prereqs
+# Paths SSLO creates itself: anything inside an application folder, and the
+# /Common objects General Settings installs (sslo-default-* profiles,
+# ssloDefault_* objects). These are never prerequisites
 function Test-IsSsloGenerated {
     param([string]$ObjPath)
     if ([string]::IsNullOrWhiteSpace($ObjPath)) { return $true }
-    if ($ObjPath -eq "none" -or $ObjPath -eq "") { return $true }
+    if ($ObjPath -eq "none") { return $true }
     if ($ObjPath -match "\.app/") { return $true }
-    if ($ObjPath -match "/Common/sslo") { return $true }
-    if ($ObjPath -match "/Common/f5-ssl-orchestrator") { return $true }
+    if ($ObjPath -cmatch "^/Common/(sslo-default-|ssloDefault|f5-ssl-orchestrator)") { return $true }
     return $false
+}
+
+# Other /Common/sslo* paths cannot be told apart by name: SSLO may own them,
+# or an operator may have named an object that way. They are captured and
+# checked, but a miss on the target is a warning, never a blocker
+function Test-IsSsloReservedName {
+    param([string]$ObjPath)
+    return ($ObjPath -cmatch "^/Common/sslo")
+}
+
+# iControl REST object name for a full path: /Common/folder/obj -> ~Common~folder~obj
+function ConvertTo-RestName {
+    param([string]$Path)
+    return ($Path -replace "/", "~")
 }
 
 # Cert/key endpoints are handled separately in SSL_SETTINGS to capture names
@@ -1363,11 +1462,11 @@ function Get-MonitorDependency {
     # Skip built-in monitors
     if ($MonitorPath -in $script:BUILTIN_MONITORS) { return $null }
     
-    $objName = $MonitorPath -replace "^/Common/", ""
+    $restName = ConvertTo-RestName -Path $MonitorPath
     
     # Probe each monitor type endpoint until one succeeds
     foreach ($probe in $script:MONITOR_PROBE_ORDER) {
-        $fullEndpoint = "$($probe.Endpoint)~Common~${objName}"
+        $fullEndpoint = "$($probe.Endpoint)${restName}"
         $result = Invoke-F5Get -Endpoint $fullEndpoint
         if ($result.Success) {
             return [ordered]@{
@@ -1444,9 +1543,9 @@ function Resolve-DepObject {
         return @{ Found = $false; Type = $Type; Endpoint = ""; Response = $null }
     }
     
-    $objName = $Path -replace "^/Common/", ""
+    $restName = ConvertTo-RestName -Path $Path
     foreach ($probe in $script:DEP_PROBE_ENDPOINTS[$Type]) {
-        $ep = "$($probe.Endpoint)~Common~${objName}"
+        $ep = "$($probe.Endpoint)${restName}"
         $r = Invoke-F5Get -Endpoint $ep
         if ($r.Success) {
             $resolvedType = if ($probe.Type) { $probe.Type } else { $Type }
@@ -1456,12 +1555,36 @@ function Resolve-DepObject {
     return @{ Found = $false; Type = $Type; Endpoint = ""; Response = $null }
 }
 
+# URL categories on the connected device, keyed by object name and by display
+# name, each mapped to the object name. SSLO policies store display names; the
+# REST API addresses a category by object name
+# Returns: hashtable, or $null when the list cannot be read or carries no
+# display names (callers fall back to per-category lookups)
+function Get-UrlCategoryMap {
+    $result = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category?`$select=name,displayName"
+    if (-not $result.Success -or -not $result.Response.items) { return $null }
+    
+    $map = @{}
+    $hasDisplayName = $false
+    foreach ($cat in $result.Response.items) {
+        if (-not $cat.name) { continue }
+        $map[[string]$cat.name] = [string]$cat.name
+        if ($cat.displayName) {
+            $map[[string]$cat.displayName] = [string]$cat.name
+            $hasDisplayName = $true
+        }
+    }
+    if (-not $hasDisplayName) { return $null }
+    return $map
+}
+
 # Extract all external dependency references from a single block's config data.
 # Single implementation for record (dependency capture) and replay
 # (prerequisite validation). Field paths follow the Ansible module
 # ApiParameters classes, which parse these same state blocks
-# Returns: array of @{ Type; Path; Endpoint [; ExpectedType] } records.
-# Endpoint is "" for types resolved through Resolve-DepObject
+# Returns: array of @{ Type; Path; Endpoint [; ExpectedType] [; Advisory] } records.
+# Endpoint is "" for types resolved through Resolve-DepObject. Advisory marks
+# a /Common/sslo* path that may be SSLO's own (Test-IsSsloReservedName)
 function Get-BlockDependencyRefs {
     param(
         [string]$DeploymentType,
@@ -1483,6 +1606,7 @@ function Get-BlockDependencyRefs {
         if (Test-IsCertKeyEndpoint -Endpoint $Endpoint) { return }
         $rec = [ordered]@{ Type = $Type; Path = $Path; Endpoint = $Endpoint }
         foreach ($k in $Extra.Keys) { $rec[$k] = $Extra[$k] }
+        if (Test-IsSsloReservedName -ObjPath $Path) { $rec["Advisory"] = $true }
         [void]$depRefs.Add($rec)
     }
     
@@ -1732,7 +1856,10 @@ function Invoke-DependencyCapture {
     
     Write-LogStep "Recording dependencies..."
     
-    $depMap = @{}  # Keyed by type:path for deduplication
+    $depMap = @{}       # Unique dependencies, keyed by resolved type:path
+    $depAliases = @{}   # Reference type:path -> its entry in $depMap
+    $urlCatMap = $null
+    $urlCatMapRead = $false
     
     foreach ($entry in $OutputBlocks) {
         $dataPropertyId = $script:TYPE_PROPERTY_MAP[$entry.deploymentType]
@@ -1755,14 +1882,18 @@ function Invoke-DependencyCapture {
             
             # Deduplicate - key by type:path so cert and key for same name don't collide
             $dedupKey = "$($ref.Type):${path}"
-            if ($depMap.ContainsKey($dedupKey)) {
-                if ($entry.deploymentName -notin $depMap[$dedupKey].referencedBy) {
-                    $depMap[$dedupKey].referencedBy += $entry.deploymentName
+            if ($depAliases.ContainsKey($dedupKey)) {
+                $known = $depAliases[$dedupKey]
+                if ($entry.deploymentName -notin $known["referencedBy"]) {
+                    $known["referencedBy"] += $entry.deploymentName
                 }
                 continue
             }
             
-            # Fetch from source - full config capture for recreatable types
+            # Fetch from source - full config capture for recreatable types.
+            # A reference that cannot be fetched is still recorded, without
+            # config, so the manifest names it. Advisory references are the
+            # exception: a miss most likely means SSLO owns the object
             $dep = $null
             if ($ref.Type -in @("certificate", "key", "ca_bundle")) {
                 # Cert/key/CA bundle - name only, no content, no secrets
@@ -1775,11 +1906,16 @@ function Invoke-DependencyCapture {
                     config     = $null
                 }
             } elseif ($ref.Type -eq "url_category") {
-                # Only capture custom URL categories - built-in always exist on any licensed BIG-IP
-                # Built-in list from Ansible bigip_sslo_config_policy.py condition_category_list
+                # Only capture custom URL categories - built-in always exist on any licensed BIG-IP.
+                # The policy stores the display name; the config is fetched by object name
                 if (-not $script:BUILTIN_URL_CATEGORIES.ContainsKey($path)) {
-                    $catEncoded = $path -replace " ", "%20"
-                    $catResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~${catEncoded}"
+                    if (-not $urlCatMapRead) {
+                        $urlCatMap = Get-UrlCategoryMap
+                        $urlCatMapRead = $true
+                    }
+                    $catObjName = if ($urlCatMap -and $urlCatMap.ContainsKey($path)) { $urlCatMap[$path] } else { $path }
+                    $catEndpoint = "/mgmt/tm/sys/url-db/url-category/~Common~$([uri]::EscapeDataString($catObjName))"
+                    $catResult = Invoke-F5Get -Endpoint $catEndpoint
                     $catConfig = $null
                     if ($catResult.Success) {
                         $catConfig = Remove-DepRuntimeFields -Config $catResult.Response
@@ -1787,9 +1923,10 @@ function Invoke-DependencyCapture {
                     $dep = [ordered]@{
                         type       = "url_category"
                         path       = $path
-                        endpoint   = "/mgmt/tm/sys/url-db/url-category/~Common~${catEncoded}"
+                        endpoint   = $catEndpoint
                         portable   = $true
                         config     = $catConfig
+                        unread     = (-not $catResult.Success)
                     }
                 }
             } elseif ($ref.Type -eq "monitor") {
@@ -1799,51 +1936,56 @@ function Invoke-DependencyCapture {
                     $dep["config"] = Remove-DepRuntimeFields -Config $dep["config"]
                 }
             } elseif ($script:DEP_PROBE_ENDPOINTS.ContainsKey($ref.Type) -or $ref.Type -eq "waf_policy") {
-                # Endpoint depends on the object's subtype - probe. Recorded even
-                # when not found on the source so the manifest names it
+                # Endpoint depends on the object's subtype - probe
                 $res = Resolve-DepObject -Type $ref.Type -Path $path
-                $depConfig = $null
-                if ($res.Found) { $depConfig = Remove-DepRuntimeFields -Config $res.Response }
-                $dep = [ordered]@{
-                    type       = $res.Type
-                    path       = $path
-                    endpoint   = $res.Endpoint
-                    portable   = ($res.Type -in $script:PORTABLE_DEP_TYPES)
-                    config     = $depConfig
-                }
-            } elseif ($ref.Type -eq "datagroup") {
-                # Datagroups - full capture including records for accurate recreation
-                $dgName = $path -replace "^/Common/", ""
-                $dgResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
-                if ($dgResult.Success) {
+                if ($res.Found -or -not $ref.Advisory) {
+                    $depConfig = $null
+                    if ($res.Found) { $depConfig = Remove-DepRuntimeFields -Config $res.Response }
                     $dep = [ordered]@{
-                        type       = "datagroup"
+                        type       = $res.Type
                         path       = $path
-                        endpoint   = "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
-                        portable   = $true
-                        config     = Remove-DepRuntimeFields -Config $dgResult.Response
+                        endpoint   = $res.Endpoint
+                        portable   = ($res.Type -in $script:PORTABLE_DEP_TYPES)
+                        config     = $depConfig
+                        unread     = (-not $res.Found)
                     }
                 }
             } else {
-                # All other types - fetch full config for snapshot completeness
-                $objName = $path -replace "^/Common/", ""
-                $endpoint = $ref.Endpoint
-                $fullEndpoint = "${endpoint}~Common~${objName}"
+                # All other types, datagroups included (records and all) -
+                # fetch full config for manifest completeness
+                $fullEndpoint = "$($ref.Endpoint)$(ConvertTo-RestName -Path $path)"
                 $result = Invoke-F5Get -Endpoint $fullEndpoint
-                if ($result.Success) {
+                if ($result.Success -or -not $ref.Advisory) {
+                    $depConfig = $null
+                    if ($result.Success) { $depConfig = Remove-DepRuntimeFields -Config $result.Response }
                     $dep = [ordered]@{
                         type       = $ref.Type
                         path       = $path
                         endpoint   = $fullEndpoint
                         portable   = ($ref.Type -in $script:PORTABLE_DEP_TYPES)
-                        config     = Remove-DepRuntimeFields -Config $result.Response
+                        config     = $depConfig
+                        unread     = (-not $result.Success)
                     }
                 }
             }
             
-            if ($dep) {
+            if (-not $dep) { continue }
+            
+            # Store under the resolved type: a probed reference (monitor,
+            # VLAN-or-datagroup) may resolve to an object already recorded
+            # through a typed reference
+            $storeKey = "$($dep["type"]):${path}"
+            if ($depMap.ContainsKey($storeKey)) {
+                $known = $depMap[$storeKey]
+                if ($entry.deploymentName -notin $known["referencedBy"]) {
+                    $known["referencedBy"] += $entry.deploymentName
+                }
+                $depAliases[$dedupKey] = $known
+            } else {
                 $dep["referencedBy"] = @($entry.deploymentName)
-                $depMap[$dedupKey] = $dep
+                $depMap[$storeKey] = $dep
+                $depAliases[$dedupKey] = $dep
+                $depAliases[$storeKey] = $dep
             }
         }
     }
@@ -2319,6 +2461,9 @@ function Invoke-SsloRecord {
                 $refs = ($dep.referencedBy -join ", ")
                 $lines += "  ${displayType}: $($dep.path)"
                 $lines += "  Referenced by: $refs"
+                if ($dep["unread"]) {
+                    $lines += "  Could not be read from the source - recorded by name only"
+                }
                 
                 if ($dep.config) {
                     $lines += ""
@@ -2455,7 +2600,13 @@ function Import-SsloSnapshot {
         return $null
     }
     
-    if ([version]$snapshot.metadata.snapshotVersion -gt [version]$script:SNAPSHOT_FORMAT_VERSION) {
+    $formatVersion = $null
+    try { $formatVersion = [version]$snapshot.metadata.snapshotVersion } catch { <# reported below #> }
+    if ($null -eq $formatVersion) {
+        Write-LogError "Unreadable snapshotVersion: $($snapshot.metadata.snapshotVersion)"
+        return $null
+    }
+    if ($formatVersion -gt [version]$script:SNAPSHOT_FORMAT_VERSION) {
         Write-LogWarn "Snapshot format v$($snapshot.metadata.snapshotVersion) is newer than this tool supports (v$($script:SNAPSHOT_FORMAT_VERSION))."
         Write-LogWarn "Update SSLO-Replay to the latest version."
         Write-Host "  https://github.com/hauptem/F5-SSL-Orchestrator-Tools" -ForegroundColor Cyan
@@ -2468,7 +2619,10 @@ function Import-SsloSnapshot {
         return $null
     }
     
-    # Validate each block entry
+    # Validate each block entry. Invalid entries are dropped so no later step
+    # has to defend against them
+    $actualCount = @($snapshot.blocks).Count
+    $validBlocks = @()
     $validCount = 0
     $invalidCount = 0
     foreach ($entry in $snapshot.blocks) {
@@ -2482,9 +2636,10 @@ function Import-SsloSnapshot {
         
         if ($valid) {
             $validCount++
+            $validBlocks += $entry
         } else {
             $invalidCount++
-            Write-LogWarn "Invalid block entry: $($entry.deploymentName)"
+            Write-LogWarn "Invalid block entry ignored: $($entry.deploymentName)"
         }
     }
     
@@ -2493,8 +2648,10 @@ function Import-SsloSnapshot {
         return $null
     }
     
-    if ([int]$snapshot.metadata.blockCount -ne @($snapshot.blocks).Count) {
-        Write-LogWarn "Snapshot blockCount metadata ($($snapshot.metadata.blockCount)) does not match actual blocks ($(@($snapshot.blocks).Count))."
+    $snapshot.blocks = $validBlocks
+    
+    if ([int]$snapshot.metadata.blockCount -ne $actualCount) {
+        Write-LogWarn "Snapshot blockCount metadata ($($snapshot.metadata.blockCount)) does not match actual blocks ($actualCount)."
         Write-LogWarn "The file may have been modified or truncated since it was recorded."
     }
     
@@ -2580,6 +2737,32 @@ function Get-PolicyServiceChainNames {
         $chains += [string]$PolicyConfig.defaultActionOptions.serviceChain
     }
     return @($chains | Sort-Object -Unique | Where-Object { $_ })
+}
+
+# Names of the SSLO objects a block's configuration references: a chain's
+# services, a policy's chains, a topology's SSL settings and policy
+function Get-SsloReferences {
+    param([string]$DeploymentType, [object]$ConfigData)
+    
+    $names = @()
+    if ($null -eq $ConfigData) { return ,$names }
+    switch ($DeploymentType) {
+        "SERVICE_CHAIN" {
+            foreach ($svc in @($ConfigData.orderedServiceList)) {
+                if ($svc -and $svc.name) { $names += [string]$svc.name }
+            }
+        }
+        "SECURITY_POLICY" {
+            $names += @(Get-PolicyServiceChainNames -PolicyConfig $ConfigData)
+        }
+        "TOPOLOGY" {
+            foreach ($sslName in @($ConfigData.sslSettingReference)) {
+                if ($sslName) { $names += [string]$sslName }
+            }
+            if ($ConfigData.securityPolicyReference) { $names += [string]$ConfigData.securityPolicyReference }
+        }
+    }
+    return ,$names
 }
 
 # Resolve the dependency tree for a security policy from a snapshot
@@ -2706,6 +2889,14 @@ function Convert-StateBlockToModify {
     }
     
     # Type-specific properties - same as CREATE, with dependent configs from target
+    $topoDeps = Get-TopologyDependentConfigs `
+        -PolicyName $NewPolicyName `
+        -SslSettingReference $configData.sslSettingReference
+    if ($topoDeps.Error) {
+        Write-LogError "$TopologyName - $($topoDeps.Error)"
+        return $null
+    }
+    
     foreach ($propDef in $typeProperties) {
         if ($propDef.id -eq $dataPropertyId) {
             $inputProps += @{
@@ -2714,48 +2905,10 @@ function Convert-StateBlockToModify {
                 value = $configData
             }
         } else {
-            $depValue = $null
-            
-            switch ($propDef.id) {
-                "f5-ssl-orchestrator-general-settings" {
-                    $gsBlockResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'ssloGS_global'"
-                    if ($gsBlockResult.Success -and $gsBlockResult.Response.items.Count -gt 0) {
-                        $depValue = $gsBlockResult.Response.items[0].inputProperties[0].value
-                    }
-                }
-                "f5-ssl-orchestrator-policy" {
-                    # Fetch the NEW policy's config from target (just created)
-                    $policyResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$NewPolicyName'"
-                    if ($policyResult.Success -and $policyResult.Response.items.Count -gt 0) {
-                        foreach ($pp in $policyResult.Response.items[0].inputProperties) {
-                            if ($pp.id -eq "f5-ssl-orchestrator-policy") {
-                                $depValue = $pp.value
-                                break
-                            }
-                        }
-                    }
-                }
-                "f5-ssl-orchestrator-tls" {
-                    $sslRefs = $configData.sslSettingReference
-                    if ($sslRefs -and $sslRefs.Count -gt 0) {
-                        $sslName = if ($sslRefs -is [System.Array]) { $sslRefs[0] } else { $sslRefs }
-                        $sslResult = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$sslName'"
-                        if ($sslResult.Success -and $sslResult.Response.items.Count -gt 0) {
-                            foreach ($sp in $sslResult.Response.items[0].inputProperties) {
-                                if ($sp.id -eq "f5-ssl-orchestrator-tls") {
-                                    $depValue = $sp.value
-                                    break
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
             $inputProps += @{
                 id = $propDef.id
                 type = "JSON"
-                value = if ($null -ne $depValue) { $depValue } else { $propDef.empty }
+                value = if ($topoDeps.Values.ContainsKey($propDef.id)) { $topoDeps.Values[$propDef.id] } else { $propDef.empty }
             }
         }
     }
@@ -2889,6 +3042,113 @@ function Invoke-BlockPost {
     
     $status = Invoke-BlockPostStatus -Block $Block -Label $Label -PollMax $PollMax -VerifyName $VerifyName
     return ($status -ne "FAILED")
+}
+
+# Validate the external references of snapshot entries on the connected target.
+# Same reference walk as record (Get-BlockDependencyRefs), so capture and
+# validation cannot drift apart. Prints one line per object checked.
+# Monitors are not checked - the gc processor validates them at deploy time.
+# A missing advisory reference (Test-IsSsloReservedName) is a warning
+# Returns: @{ Missing; Warnings; Checked } - Missing and Warnings hold
+# @{ Label; Path; RequiredBy } records, Checked is the object count
+function Test-EntryPrerequisites {
+    param([array]$Entries)
+    
+    $missing = @()
+    $warnings = @()
+    $checked = @{}
+    
+    # Target URL database, read once. $null when it cannot be read: built-in
+    # categories are then assumed present and custom ones looked up one by one
+    $urlCatMap = Get-UrlCategoryMap
+    
+    foreach ($entry in $Entries) {
+        $depName = $entry.deploymentName
+        $dataPropertyId = $script:TYPE_PROPERTY_MAP[$entry.deploymentType]
+        $configData = $null
+        if ($dataPropertyId) {
+            foreach ($prop in $entry.block.inputProperties) {
+                if ($prop.id -eq $dataPropertyId) {
+                    $configData = $prop.value
+                    break
+                }
+            }
+        }
+        if ($null -eq $configData) { continue }
+        
+        Write-Host ""
+        Write-Host "  $(Get-TypeLabel $entry.deploymentType) $depName" -ForegroundColor White
+        
+        $refs = Get-BlockDependencyRefs -DeploymentType $entry.deploymentType -ConfigData $configData
+        foreach ($ref in $refs) {
+            if ($ref.Type -eq "monitor") { continue }
+            if (Test-IsSsloGenerated -ObjPath $ref.Path) { continue }
+            
+            $checkKey = "$($ref.Type):$($ref.Path):$($ref.ExpectedType)"
+            if ($checked.ContainsKey($checkKey)) { continue }
+            $checked[$checkKey] = $true
+            
+            $label = Get-DepDisplayType $ref.Type
+            $found = $false
+            $problem = "MISSING"
+            $detail = ""
+            $quiet = $false
+            
+            if ($ref.Type -eq "datagroup") {
+                # Type is asserted only where the reference carries one
+                # (subnet conditions need internal type "ip")
+                $dgResult = Invoke-F5Get -Endpoint "$($ref.Endpoint)$(ConvertTo-RestName -Path $ref.Path)"
+                if ($dgResult.Success) {
+                    $actualType = $dgResult.Response.type
+                    if ($ref.ExpectedType -and $actualType -ne $ref.ExpectedType) {
+                        $label = "Datagroup (type mismatch)"
+                        $problem = "WRONG TYPE (is $actualType, policy expects $($ref.ExpectedType))"
+                    } else {
+                        $found = $true
+                        $detail = " ($actualType)"
+                    }
+                }
+            } elseif ($ref.Type -eq "url_category") {
+                # Checked by name and display name, so built-ins renamed
+                # between TMOS versions are caught
+                $isBuiltin = $script:BUILTIN_URL_CATEGORIES.ContainsKey($ref.Path)
+                if ($null -ne $urlCatMap) {
+                    $found = $urlCatMap.ContainsKey($ref.Path)
+                } elseif ($isBuiltin) {
+                    $found = $true
+                } else {
+                    $found = (Invoke-F5Get -Endpoint "$($ref.Endpoint)~Common~$([uri]::EscapeDataString($ref.Path))").Success
+                }
+                if ($isBuiltin) {
+                    $quiet = $true
+                    $label = "URL category (built-in on source, not in target URL database)"
+                }
+            } elseif ($script:DEP_PROBE_ENDPOINTS.ContainsKey($ref.Type) -or $ref.Type -eq "waf_policy") {
+                $res = Resolve-DepObject -Type $ref.Type -Path $ref.Path
+                $label = Get-DepDisplayType $res.Type
+                $found = $res.Found
+            } else {
+                $found = (Invoke-F5Get -Endpoint "$($ref.Endpoint)$(ConvertTo-RestName -Path $ref.Path)").Success
+            }
+            
+            if ($found) {
+                if (-not $quiet) { Write-Host "    ${label}: $($ref.Path)${detail}" -ForegroundColor White }
+                continue
+            }
+            
+            Write-Host "    ${label}: $($ref.Path)" -NoNewline -ForegroundColor White
+            $record = @{ Label = $label; Path = $ref.Path; RequiredBy = $depName }
+            if ($ref.Advisory) {
+                Write-Host " - not found (SSLO may create it)" -ForegroundColor Yellow
+                $warnings += $record
+            } else {
+                Write-Host " - $problem" -ForegroundColor Red
+                $missing += $record
+            }
+        }
+    }
+    
+    return @{ Missing = $missing; Warnings = $warnings; Checked = $checked.Count }
 }
 
 # Apply a security policy from a snapshot to an existing topology on the target
@@ -3116,6 +3376,18 @@ function Invoke-PolicySwap {
     Write-Host "  [WARN]" -NoNewline -ForegroundColor Yellow
     Write-Host "  topology $($selectedTopo.Name)" -NoNewline -ForegroundColor White
     Write-Host " (will be modified)" -ForegroundColor Yellow
+    
+    # External prerequisites of everything this plan creates or overwrites
+    Write-Host ""
+    Write-LogStep "Validating prerequisites on target..."
+    $prereq = Test-EntryPrerequisites -Entries @($planItems | ForEach-Object { $_.Entry })
+    foreach ($m in $prereq.Missing) {
+        $blockers += "$($m.Label) $($m.Path) - missing on target (required by $($m.RequiredBy))"
+    }
+    if ($prereq.Warnings.Count -gt 0) {
+        Write-Host ""
+        Write-LogWarn "$($prereq.Warnings.Count) object(s) with an SSLO-style name were not found. Confirm SSLO creates them."
+    }
     
     # Stop on blockers
     if ($blockers.Count -gt 0) {
@@ -3648,126 +3920,10 @@ function Invoke-SsloReplay {
     Write-LogStep "Validating prerequisites on target..."
     Write-Host ""
     
-    $script:missingPrereqs = @()
-    $script:checkedPrereqs = @{}
-    
-    # Helper: check a single object exists on target
-    function Test-PrereqExists {
-        param([string]$Endpoint, [string]$ObjPath, [string]$Label, [string]$RequiredBy)
-        
-        if ([string]::IsNullOrWhiteSpace($ObjPath) -or $ObjPath -eq "none") { return }
-        # Skip SSLO-generated objects - these are created by the gc processor
-        if ($ObjPath -match "\.app/" -or $ObjPath -match "/Common/sslo" -or $ObjPath -match "/Common/f5-ssl-orchestrator") { return }
-        $checkKey = "${Endpoint}:${ObjPath}"
-        if ($script:checkedPrereqs.ContainsKey($checkKey)) { return }
-        $script:checkedPrereqs[$checkKey] = $true
-        
-        $objName = $ObjPath -replace "^/Common/", ""
-        $result = Invoke-F5Get -Endpoint "${Endpoint}~Common~${objName}"
-        if ($result.Success) {
-            Write-Host "    ${Label}: ${ObjPath}" -ForegroundColor White
-        } else {
-            Write-Host "    ${Label}: ${ObjPath}" -NoNewline -ForegroundColor White
-            Write-Host " - MISSING" -ForegroundColor Red
-            $script:missingPrereqs += @{ Label = $Label; Path = $ObjPath; RequiredBy = $RequiredBy }
-        }
-    }
-    
-    # Helper: check a datagroup exists on target, optionally asserting its type.
-    # Type is asserted only for subnet conditions (internal type "ip"); all other
-    # datagroup references are checked for existence only
-    function Test-DatagroupPrereq {
-        param([string]$DgPath, [string]$RequiredBy, [string]$ExpectedType = "")
-        
-        $checkKey = "datagroup:${DgPath}:${ExpectedType}"
-        if ($script:checkedPrereqs.ContainsKey($checkKey)) { return }
-        $script:checkedPrereqs[$checkKey] = $true
-        
-        $dgName = $DgPath -replace "^/Common/", ""
-        $dgResult = Invoke-F5Get -Endpoint "/mgmt/tm/ltm/data-group/internal/~Common~${dgName}"
-        if ($dgResult.Success) {
-            $actualType = $dgResult.Response.type
-            if ($ExpectedType -and $actualType -ne $ExpectedType) {
-                Write-Host "    Datagroup: $DgPath" -NoNewline -ForegroundColor White
-                Write-Host " - WRONG TYPE (is $actualType, policy expects $ExpectedType)" -ForegroundColor Red
-                $script:missingPrereqs += @{ Label = "Datagroup (type mismatch)"; Path = $DgPath; RequiredBy = $RequiredBy }
-            } else {
-                Write-Host "    Datagroup: $DgPath ($actualType)" -ForegroundColor White
-            }
-        } else {
-            Write-Host "    Datagroup: $DgPath" -NoNewline -ForegroundColor White
-            Write-Host " - MISSING" -ForegroundColor Red
-            $script:missingPrereqs += @{ Label = "Datagroup"; Path = $DgPath; RequiredBy = $RequiredBy }
-        }
-    }
-    
-    # Helper: check a URL category exists on target. With the target URL
-    # database loaded, every category is checked by name and display name, so
-    # built-ins renamed between TMOS versions are caught. Without it, built-ins
-    # are assumed present and custom categories are looked up individually
-    function Test-UrlCategoryPrereq {
-        param([string]$CatName, [string]$RequiredBy)
-        
-        $checkKey = "urlcat:${CatName}"
-        if ($script:checkedPrereqs.ContainsKey($checkKey)) { return }
-        $script:checkedPrereqs[$checkKey] = $true
-        
-        $isBuiltin = $script:BUILTIN_URL_CATEGORIES.ContainsKey($CatName)
-        if ($null -ne $script:TargetUrlCategories) {
-            $found = $script:TargetUrlCategories.ContainsKey($CatName)
-        } elseif ($isBuiltin) {
-            return
-        } else {
-            $catEncoded = $CatName -replace " ", "%20"
-            $found = (Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category/~Common~${catEncoded}").Success
-        }
-        
-        if ($found) {
-            if (-not $isBuiltin) { Write-Host "    URL category: $CatName" -ForegroundColor White }
-            return
-        }
-        $label = if ($isBuiltin) { "URL category (built-in on source, not in target URL database)" } else { "URL category" }
-        Write-Host "    ${label}: $CatName" -NoNewline -ForegroundColor White
-        Write-Host " - MISSING" -ForegroundColor Red
-        $script:missingPrereqs += @{ Label = $label; Path = $CatName; RequiredBy = $RequiredBy }
-    }
-    
-    # Helper: check an object whose endpoint is found by probing (Resolve-DepObject)
-    function Test-ResolvedPrereq {
-        param([string]$Type, [string]$ObjPath, [string]$RequiredBy)
-        
-        if (Test-IsSsloGenerated -ObjPath $ObjPath) { return }
-        $checkKey = "resolve:${Type}:${ObjPath}"
-        if ($script:checkedPrereqs.ContainsKey($checkKey)) { return }
-        $script:checkedPrereqs[$checkKey] = $true
-        
-        $res = Resolve-DepObject -Type $Type -Path $ObjPath
-        $label = Get-DepDisplayType $res.Type
-        if ($res.Found) {
-            Write-Host "    ${label}: ${ObjPath}" -ForegroundColor White
-        } else {
-            Write-Host "    ${label}: ${ObjPath}" -NoNewline -ForegroundColor White
-            Write-Host " - MISSING" -ForegroundColor Red
-            $script:missingPrereqs += @{ Label = $label; Path = $ObjPath; RequiredBy = $RequiredBy }
-        }
-    }
-    
-    # Target URL database, name and display name, read once. $null when it
-    # cannot be read (URL filtering not provisioned, or request failed)
-    $script:TargetUrlCategories = $null
-    $catListResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/url-db/url-category?`$select=name,displayName"
-    if ($catListResult.Success -and $catListResult.Response.items) {
-        $script:TargetUrlCategories = @{}
-        foreach ($cat in $catListResult.Response.items) {
-            if ($cat.name) { $script:TargetUrlCategories[[string]$cat.name] = $true }
-            if ($cat.displayName) { $script:TargetUrlCategories[[string]$cat.displayName] = $true }
-        }
-    }
-    
     # SSLO General Settings must exist on the target - early gate
     Write-Host "  SSLO General Settings" -ForegroundColor White
-    $gsResult = Invoke-F5Get -Endpoint "/mgmt/tm/sys/folder/~Common~ssloGS_global.app"
-    if (-not $gsResult.Success) {
+    $gsCheck = Get-TargetBlockConfig -BlockName "ssloGS_global" -PropertyId "f5-ssl-orchestrator-general-settings"
+    if (-not $gsCheck.Found) {
         Write-Host ""
         Write-LogError "SSLO General Settings (ssloGS_global) not found on target."
         Write-LogError "Configure General Settings via the SSLO GUI before replay."
@@ -3775,54 +3931,16 @@ function Invoke-SsloReplay {
         return
     }
     
-    foreach ($entry in $snapshot.blocks) {
-        if ($entry.deploymentType -eq "GENERAL_SETTINGS") { continue }
-        $depName = $entry.deploymentName
-        $block = $entry.block
-        $typeLabel = Get-TypeLabel $entry.deploymentType
-        
-        # Extract the type-specific config data from the state block
-        $dataPropertyId = $script:TYPE_PROPERTY_MAP[$entry.deploymentType]
-        $configData = $null
-        if ($dataPropertyId) {
-            foreach ($prop in $block.inputProperties) {
-                if ($prop.id -eq $dataPropertyId) {
-                    $configData = $prop.value
-                    break
-                }
-            }
-        }
-        if ($null -eq $configData) { continue }
-        
-        # Same reference walk as record (Get-BlockDependencyRefs), so capture
-        # and validation cannot drift apart
-        Write-Host ""
-        Write-Host "  $typeLabel $depName" -ForegroundColor White
-        $refs = Get-BlockDependencyRefs -DeploymentType $entry.deploymentType -ConfigData $configData
-        foreach ($ref in $refs) {
-            if ($ref.Type -eq "monitor") {
-                # Validated by the gc processor at deploy time
-                continue
-            } elseif ($ref.Type -eq "datagroup") {
-                Test-DatagroupPrereq -DgPath $ref.Path -RequiredBy $depName -ExpectedType ([string]$ref.ExpectedType)
-            } elseif ($ref.Type -eq "url_category") {
-                Test-UrlCategoryPrereq -CatName $ref.Path -RequiredBy $depName
-            } elseif ($script:DEP_PROBE_ENDPOINTS.ContainsKey($ref.Type) -or $ref.Type -eq "waf_policy") {
-                Test-ResolvedPrereq -Type $ref.Type -ObjPath $ref.Path -RequiredBy $depName
-            } else {
-                Test-PrereqExists $ref.Endpoint $ref.Path (Get-DepDisplayType $ref.Type) $depName
-            }
-        }
-    }
+    $prereq = Test-EntryPrerequisites -Entries @($snapshot.blocks)
     
     # -------------------------------------------------------------------------
     # Step 5a: Check for missing prerequisites
     # -------------------------------------------------------------------------
-    if ($script:missingPrereqs.Count -gt 0) {
+    if ($prereq.Missing.Count -gt 0) {
         Write-Host ""
-        Write-LogError "$($script:missingPrereqs.Count) missing prerequisite(s). Install them on the target before replaying."
+        Write-LogError "$($prereq.Missing.Count) missing prerequisite(s). Install them on the target before replaying."
         Write-Host ""
-        foreach ($missing in $script:missingPrereqs) {
+        foreach ($missing in $prereq.Missing) {
             Write-Host "    $($missing.Label): $($missing.Path)" -NoNewline -ForegroundColor Red
             Write-Host " (required by $($missing.RequiredBy))" -ForegroundColor DarkGray
         }
@@ -3833,7 +3951,17 @@ function Invoke-SsloReplay {
         return
     }
     
-    Write-LogOk "All prerequisites verified ($($script:checkedPrereqs.Count) objects checked)"
+    Write-Host ""
+    Write-LogOk "All prerequisites verified ($($prereq.Checked) objects checked)"
+    if ($prereq.Warnings.Count -gt 0) {
+        Write-LogWarn "$($prereq.Warnings.Count) object(s) with an SSLO-style name were not found. Confirm SSLO creates them."
+        $contWarn = Read-Host "  Continue? [y/N]"
+        if ($contWarn -notin @("y", "Y", "yes", "YES")) {
+            Write-LogInfo "Replay cancelled. No changes were made."
+            Wait-EnterKey
+            return
+        }
+    }
     
     Start-Sleep -Seconds 2
     
@@ -3873,11 +4001,6 @@ function Invoke-SsloReplay {
         $status = "pending"
         $reason = ""
         
-        # General settings are environment-specific and not replayed by this tool
-        if ($entry.deploymentType -eq "GENERAL_SETTINGS") {
-            continue
-        }
-        
         # Check if deployment name exists on target
         $targetMatch = $targetBlocks[$entry.deploymentName]
         
@@ -3893,7 +4016,6 @@ function Invoke-SsloReplay {
         $replayPlan += @{
             DeploymentType = $entry.deploymentType
             DeploymentName = $entry.deploymentName
-            CaptureType     = $entry.captureType
             Block          = $entry.block
             Status         = $status
             Reason         = $reason
@@ -3902,8 +4024,8 @@ function Invoke-SsloReplay {
     }
     
     # Display replay plan
-    $pendingCount = ($replayPlan | Where-Object { $_.Status -eq "pending" }).Count
-    $skipExistCount = ($replayPlan | Where-Object { $_.Status -eq "skip_exists" }).Count
+    $pendingCount = @($replayPlan | Where-Object { $_.Status -eq "pending" }).Count
+    $skipExistCount = @($replayPlan | Where-Object { $_.Status -eq "skip_exists" }).Count
     $actionCount = $pendingCount
     
     Write-Host ""
@@ -3968,6 +4090,8 @@ function Invoke-SsloReplay {
     $failed = @()
     $skipped = @()
     $unverified = @()
+    $blocked = @()
+    $failedNames = @{}
     $script:ConsecutiveFailures = 0
     $script:PfIdRegenerated = 0
     $script:PassphraseCache = @{}
@@ -3994,48 +4118,40 @@ function Invoke-SsloReplay {
             $lastDeploymentType = $item.DeploymentType
         }
         
+        # An object whose SSLO dependency failed in this run is not posted:
+        # the gc processor would deploy it against a missing or broken object.
+        # Not counted toward the circuit breaker - the root failure already was
+        $itemConfig = $null
+        foreach ($prop in $item.Block.inputProperties) {
+            if ($prop.id -eq $script:TYPE_PROPERTY_MAP[$item.DeploymentType]) { $itemConfig = $prop.value; break }
+        }
+        $itemRefs = Get-SsloReferences -DeploymentType $item.DeploymentType -ConfigData $itemConfig
+        $failedDep = $itemRefs | Where-Object { $failedNames.ContainsKey($_) } | Select-Object -First 1
+        if ($failedDep) {
+            Write-LogWarn "$($item.DeploymentName) not attempted - depends on $failedDep, which failed"
+            $blocked += "$($item.DeploymentName) (depends on $failedDep)"
+            $failedNames[$item.DeploymentName] = $true
+            continue
+        }
+        
         Write-LogStep "Creating $(Get-TypeLabel $item.DeploymentType) $($item.DeploymentName)..."
         
-        # Prepare the block for POST
-        $postBlock = $null
+        # Every block goes through CREATE conversion, whatever its captureType.
+        # A replayable block is the source's own CREATE request: it carries the
+        # source SSLO version and pfId tokens, and a topology request embeds
+        # dependent objects that would duplicate the standalone blocks. The
+        # conversion rebuilds the request from the config data alone
+        $postBlock = Convert-StateBlockToCreate `
+            -StateBlock $item.Block `
+            -DeploymentType $item.DeploymentType `
+            -DeploymentName $item.DeploymentName
         
-        # Topology and SSL settings blocks always go through CREATE conversion
-        # regardless of captureType. Replayable topology blocks contain embedded
-        # dependent objects (policy, service chains, SSL settings) that would cause
-        # the gc processor to create duplicate component blocks when standalone
-        # blocks for those objects already exist. Replayable SSL settings blocks
-        # carry the source's pfId tokens; only the conversion regenerates them
-        # and prompts for key passphrases
-        if ($item.CaptureType -eq $script:CAT_STATE -or $item.DeploymentType -in @("TOPOLOGY", "SSL_SETTINGS")) {
-            $postBlock = Convert-StateBlockToCreate `
-                -StateBlock $item.Block `
-                -DeploymentType $item.DeploymentType `
-                -DeploymentName $item.DeploymentName
-            
-            if (-not $postBlock) {
-                Write-LogError "$($item.DeploymentName) failed - could not prepare block"
-                $failed += $item.DeploymentName
-                if (-not (Test-ReplayCircuitBreaker)) { break }
-                continue
-            }
-        } else {
-            $postBlock = $item.Block | ConvertTo-Json -Depth $script:JSON_DEPTH | ConvertFrom-Json
-            
-            if ($postBlock.PSObject.Properties["state"]) {
-                $postBlock.state = "BINDING"
-            } else {
-                $postBlock | Add-Member -NotePropertyName "state" -NotePropertyValue "BINDING"
-            }
-            
-            foreach ($prop in $postBlock.inputProperties) {
-                if ($prop.id -eq "f5-ssl-orchestrator-operation-context") {
-                    $prop.value.operationType = "CREATE"
-                    if ($prop.value.PSObject.Properties["deploymentReference"]) {
-                        $prop.value.deploymentReference = ""
-                    }
-                    break
-                }
-            }
+        if (-not $postBlock) {
+            Write-LogError "$($item.DeploymentName) failed - could not prepare block"
+            $failed += $item.DeploymentName
+            $failedNames[$item.DeploymentName] = $true
+            if (-not (Test-ReplayCircuitBreaker)) { break }
+            continue
         }
         
         # POST and poll. Topologies take longer - APM profiles, VPE, access
@@ -4060,6 +4176,7 @@ function Invoke-SsloReplay {
             }
             default {
                 $failed += $item.DeploymentName
+                $failedNames[$item.DeploymentName] = $true
             }
         }
         # Circuit breaker outside the switch: break inside a switch only exits the switch
@@ -4125,6 +4242,15 @@ function Invoke-SsloReplay {
         Write-Host "  Failed $($failed.Count) objects:" -ForegroundColor Red
         Write-Host ""
         foreach ($name in $failed) {
+            Write-Host "    $name" -ForegroundColor White
+        }
+    }
+    
+    if ($blocked.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  Not attempted $($blocked.Count) objects (a dependency failed):" -ForegroundColor Red
+        Write-Host ""
+        foreach ($name in $blocked) {
             Write-Host "    $name" -ForegroundColor White
         }
     }
@@ -4519,7 +4645,9 @@ function Show-MainMenu {
 # Deletes the topology and any SSL settings, policy, chains, and services that
 # no surviving object references. Shared objects are retained
 function Invoke-TopologyDelete {
+    Clear-Host
     Write-LogSection "Delete SSLO Topology"
+    Write-Host ""
     
     # Repoll - live state is the only valid input for a destructive operation.
     # A failed read MUST abort: deleting against a stale or partial graph
@@ -4755,9 +4883,15 @@ function Invoke-TopologyDelete {
             break
         }
         
-        # Verify the state block is actually gone
+        # Verify the state block is actually gone. A failed read proves
+        # nothing, so it stops the teardown like any other failure
         $check = Invoke-F5Get -Endpoint "/mgmt/shared/iapp/blocks?`$filter=name+eq+'$($obj.Name)'"
-        if ($check.Success -and $check.Response.items -and @($check.Response.items).Count -gt 0) {
+        if (-not $check.Success) {
+            Write-LogWarn "$($obj.Name) operation completed but the block could not be re-read (HTTP $($check.StatusCode)). Stopping - verify on the device."
+            $deleteFailed = $true
+            break
+        }
+        if ($check.Response.items -and @($check.Response.items).Count -gt 0) {
             Write-LogWarn "$($obj.Name) operation completed but the block is still present. Stopping."
             $deleteFailed = $true
             break
