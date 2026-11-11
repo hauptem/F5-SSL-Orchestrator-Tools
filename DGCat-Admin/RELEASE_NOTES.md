@@ -11,7 +11,7 @@
 
 - Bash: interactive prompts use readline. Line editing was left to the tty driver, so a client whose Backspace sends ^H against an erase character of ^? (the SecureCRT default) echoed the control character and stored it in the input; at the password prompt a corrected typo was sent to the BIG-IP as part of the password and failed as a plain 401. Backspace, Delete, and the arrow keys now edit correctly from any client, and Tab completes file paths at the CSV and export prompts
 
-# DGCat-Admin v5.8 Release Notes
+# DGCat-Admin v5.8 Release Notes (October 2026)
 - A failed or timed-out record read no longer feeds a full-replace write. The record reads were consumed as if a failure were an empty object (PowerShell helpers returned an empty set on a failed GET; bash read them through process substitutions, whose exit status is not observable), and three writers trusted that: CSV Merge into an existing datagroup or URL category replaced the object with the CSV contents alone; the editor opened on "Loaded 0 entries" and Full Replace, current-device deploy, and fleet Replace then pushed that empty-plus-edits state. Every consumer now checks the read and aborts with "No changes have been made" on failure.
 - Fleet Merge for datagroups reads the target before the tmsh passthrough and reduces the delta to what the target actually lacks or holds. A target that already held one of the added keys rejected the whole records add chunk, the deletions then ran against a half-applied set, and the host reported FAIL. Additions already present are skipped with a count; deletions of keys the target does not hold are dropped; a failed target read aborts the host before anything is written
 - Search excludes a host whose read failed instead of counting it as pulled with zero entries, which reported every entry as missing on that host. The separate existence GET is gone; one read settles both cases
@@ -23,7 +23,7 @@
 - Bash: the BIG-IP credential is no longer passed to curl as a -u argument, where it was readable in the process list by every user on the management host for the duration of each request. It is passed as a curl config on a private file descriptor. Relevant when the tool runs on a shared jump host or on the BIG-IP itself
 - Bash: a failed datagroup type read during CSV import, delete, or editor open no longer trips errexit and exits the tool; the operation reports the failure and returns to the menu
 
-# DGCat-Admin v5.7 Release Notes
+# DGCat-Admin v5.7 Release Notes (September 2026)
 
 - tmsh Modify and fleet Merge now send datagroup records in batches. The record list rides in the request URI, and a change set of a few thousand records produced a URI long enough to be rejected with a generic HTTP error. New TMSH_CHUNK_SIZE configuration (default: 500) sets the batch size; each batch that reports an error is read back and verified independently
 - Datagroup export verifies the read succeeded before writing. A failed or timed-out GET produced a header-only file reporting 0 records in PowerShell; in bash the failed pipeline inside the redirected block tripped errexit and exited the tool mid-export. The tool now reports the HTTP error and writes nothing. URL category export was already protected by its count check
@@ -36,7 +36,7 @@
 - PowerShell: editor row numbers resolve to the record directly instead of splitting the displayed key|value text, so a string key containing '|' is no longer mis-selected by number. In bash the '|' delimiter is structural to the record list and this remains a limitation
 - README and User Guide corrected: the PowerShell version requires Windows PowerShell 5.1 (Desktop edition), not "5.1 or later", since PowerShell 7 has been rejected at startup since v5.4
 
-# DGCat-Admin v5.6 Release Notes
+# DGCat-Admin v5.6 Release Notes (August 2026)
 
 - Datagroups in TMOS folders are now fully supported. REST paths previously omitted the folder segment, so a datagroup like /Common/dashboard/mygroup listed normally but read as empty and could not be edited; folder objects now work across listing, selection, the editor, create, delete, export, backup, Search, Fleet Backup, and deploy. Listings show folder-qualified names (dashboard/mygroup); a bare name that exists in exactly one folder resolves to it, and an ambiguous name lists the candidates. New datagroups can be created into a folder as folder/name. The folder itself must already exist, as this tool creates objects, not folders
 - Backups of folder datagroups fold the folder into the filename so same-named datagroups in different folders keep separate files and rotation pools, and record the location in a # Folder: header
@@ -53,7 +53,7 @@
 - Housekeeping: datagroup key and URL entry validation is shared between the editor's add and edit commands (PowerShell also shares it with CSV import validation)
 - The bash version returns to full feature parity with this release. Everything above is in both versions unless marked PowerShell
 
-# DGCat-Admin v5.5 Release Notes
+# DGCat-Admin v5.5 Release Notes (July 2026)
 
 - Search drift detection now also compares datagroup values, not just keys. Entries present on every host but holding different values are flagged as a value mismatch, with per-host values shown in both Diff and Search results; previously the same key with different data on two hosts reported as consistent. Each entry is classified once after the fleet pull, so Diff and Search always agree. Search patterns still match keys only. URL categories are unaffected, as they have no values
 - PowerShell: section headers now reach the session log. Write-LogSection wrote its banner to the console only, so LOGGING_ENABLED audit logs were a flat stream of status lines with no record of which operation produced them
@@ -94,7 +94,7 @@
 - MAX_BACKUPS reduced from 30 to 10
 - bootstrap.conf boilerplate reformatted with updated examples
 
-# DGCat-Admin v5.0 Release Notes
+# DGCat-Admin v5.0 Release Notes (June 2026)
 
 - New Bootstrap (option 8) creates datagroups and URL categories across the entire fleet from bootstrap.conf entries, for multi-site initial configuration. Selecting Bootstrap, then Create bootstrap.conf, writes the file to the dgcat-admin-backups folder
 - Editor: the w) write and D) deploy commands gain a second mode. The tool previously applied every edit atomically: pull the whole datagroup, edit in memory, and PATCH the complete record set back (a replace-all REST action). TMOS also accepts tmsh commands in an options parameter, which leaves the datagroup contents alone and adds or replaces individual entries. The editor now supports both: Full Replace (REST PATCH) and tmsh Modify (options parameter). Background: https://community.f5.com/discussions/technicalforum/update-an-internal-data-group-via-api/306520 and https://community.f5.com/discussions/technicalforum/add-new-key-into-data-group-without-updating-entire-list-using-the-api/272699
@@ -152,6 +152,6 @@
 - PowerShell: fixed single-result array unwrapping across all pipelines
 - PowerShell: fixed a duplicate deploy header and carriage return display artifacts
 
-# DGCat-Admin v4.0 Release Notes
+# DGCat-Admin v4.0 Release Notes (May 2026)
 
 - Initial public release
