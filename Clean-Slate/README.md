@@ -16,7 +16,7 @@ Based on Kevin Stewart's [sslo-nuke-delete](https://github.com/f5devcentral/sslo
 
 - BIG-IP running TMOS 17.x, 21.x or greater 
 - SSL Orchestrator 12.x or greater
-- 
+
 ## What It Does
 
 1. Backs up the installed SSLO RPM to `/var/tmp/`
